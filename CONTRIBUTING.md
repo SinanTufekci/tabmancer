@@ -28,8 +28,10 @@ uv run ruff check .
   should do the same (see `tests/conftest.py`).
 - tabmancer is read-only by design: it reads the transcripts the agents keep and writes under
   `~/.claude` only when you ask it to clean up. Please keep it that way.
-- The README pictures come from made-up sessions: `uv run python scripts/screenshots.py`,
-  `scripts/demo.py` and `scripts/banner.py` draw them again.
+- The README pictures are of a real Windows Terminal window over made-up sessions
+  (`scripts/demo_data.py`): `scripts/window_shots.py` takes them, `scripts/readme_media.py` makes
+  the PNGs and the moving demo, `scripts/promo.py` draws the banner. The usage line at the top of
+  each says how to run it.
 - Words on screen are short, plain English that says what happens ("Opened 3 sessions in new
   tabs"), not what the code does.
 

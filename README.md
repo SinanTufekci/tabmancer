@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="tabmancer: Bit beside a few coding-agent sessions, one called back after it was cut off" width="100%">
+  <img src="docs/banner.webp" alt="Coding agents at work in their tabs, Windows restarts and they are gone, Bit calls them back, and the tabmancer dashboard shows them all" width="100%">
 </p>
 
 <p align="center">
@@ -19,7 +19,7 @@ sessions you had open, each in its own tab and folder; the ones cut off mid-repl
 by themselves.
 
 <p align="center">
-  <img src="docs/demo.svg" alt="tabmancer in use: a cut-off session, a card filter, a team, the team view and the keys" width="100%">
+  <img src="docs/demo.webp" alt="tabmancer in use: a cut-off session, a card filter, a team, the team view and the keys" width="100%">
 </p>
 
 ## Quick start
@@ -39,7 +39,7 @@ they do on the row you are on. On Windows, `tabmancer shortcut` adds a desktop s
 
 ## What it does
 
-![The dashboard: live counters, projects, recent sessions, how each one ended, and a preview with an AI summary](docs/picker.svg)
+![The dashboard: live counters, projects, recent sessions, how each one ended, and a preview with an AI summary](docs/picker.png)
 
 - **A dashboard in your terminal.** Live counters for open sessions, sessions waiting
   for you and sessions to continue, a project sidebar with a 14-day token chart,
@@ -222,7 +222,7 @@ are ticked as pills that a narrow window never cuts off.
 
 ## Teams
 
-![A team at work: the orchestrator, three members and a message on its way](docs/team.svg)
+![A team at work: the orchestrator, three members and a message on its way](docs/team.png)
 
 A team is several sessions on one project, each with a focus of its own (the API, the
 screens, the tests), and one of them the orchestrator that splits the goal into tasks and
@@ -251,7 +251,7 @@ without asking you (`--allowedTools=...,Bash(tabmancer team add:*)`). Each membe
 its own tab (or, with `Ctrl+B`, in the background) and introduces itself to the lead, and the
 team view shows them join.
 
-![A team heading OPEN NOW as one row: each member a name with a sign of what it is doing, and its preview with each member's wire and the messages along it](docs/team-rows.svg)
+![A team heading OPEN NOW as one row: each member a name with a sign of what it is doing, and its preview with each member's wire and the messages along it](docs/team-rows.png)
 
 While any of its members is open, the team heads OPEN NOW in the dashboard's own list, as
 one row: the team's name, then each member's name with a sign of what it is doing (red `●`
@@ -595,14 +595,14 @@ the five tabs, and `x` saves everything as JSON and CSV in your Downloads folder
 **Tokens.** Today, this week and the whole period; this week against the last (tokens,
 output, time at work, sessions); then by day, project, session and model.
 
-![Tokens by day, project, session and model](docs/stats-tokens.svg)
+![Tokens by day, project, session and model](docs/stats-tokens.png)
 
 **When you work.** Time at work over the period and per day, a map of the hours of the
 week, how long sessions run, and the longest ones. Time at work counts the minutes in
 which the agent replied; a gap of more than five minutes is a break, and sessions running
 side by side count once on the clock.
 
-![Hours of the week, time at work per day, longest sessions](docs/stats-work.svg)
+![Hours of the week, time at work per day, longest sessions](docs/stats-work.png)
 
 **Tools and files.** Which tools were called most (MCP tools count per server), the
 files edited most, and lines added and removed per project.
@@ -612,7 +612,7 @@ keeps each reading. This tab charts the session limit over the last day and the 
 one over the last week, and says how fast each one fills: "At 0.7% an hour it is full
 around Sat 07:54, before it resets", or where it will stand at the reset.
 
-![Plan limits: history and forecast](docs/stats-limits.svg)
+![Plan limits: history and forecast](docs/stats-limits.png)
 
 **Report.** Press `r` and Claude writes a report of the period to share with your team:
 a few sentences on the period, then what got done and what is still open in each
@@ -621,7 +621,7 @@ time at work, tokens per project) come from the stats; the model only translates
 table's header, and if it changes a number its table is replaced with tabmancer's own.
 The report is saved as Markdown in your Downloads folder, and `c` copies it.
 
-![A written report of the period](docs/stats-report.svg)
+![A written report of the period](docs/stats-report.png)
 
 The report is one `claude -p --model sonnet` call on your plan, with no tools. Only what
 the session list shows is sent: titles, first and last prompts, last replies or AI
@@ -665,7 +665,7 @@ count stays current every minute at next to no cost.
 
 ## Live view
 
-![Live view: open sessions sorted by what needs you first](docs/live.svg)
+![Live view: open sessions sorted by what needs you first](docs/live.png)
 
 `tabmancer live`, or `l` in the picker, lists only the sessions that are open right now.
 It refreshes every few seconds and sorts them by what needs you first:
@@ -727,8 +727,10 @@ On macOS and Linux it has not been used day to day yet. What is known:
 
 Reports are welcome.
 
-To refresh the screenshots, run `uv run python scripts/screenshots.py`. It builds them
-from made-up sessions in a temporary folder.
+The pictures are of a real Windows Terminal window over made-up sessions:
+`uv run --with pillow python scripts/window_shots.py <folder>` takes them and
+`scripts/readme_media.py <folder>` turns them into the PNGs and `docs/demo.webp`;
+`uv run --with pillow --with websockets python scripts/promo.py` draws the banner.
 
 ## Privacy
 

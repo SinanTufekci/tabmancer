@@ -1,24 +1,19 @@
-"""Render the README screenshots from made-up sessions.
-
-    uv run python scripts/screenshots.py
-
-Everything lives in a temporary folder that stands in for ~/.claude; your real
-sessions are never read, so nothing private can end up in docs/.
+"""The made-up sessions the README's pictures show: build_home() writes them into a folder that
+stands in for ~/.claude, build_team() adds a team at work. scripts/window_shots.py and
+scripts/demo_window.py use them; your real sessions are never read, so nothing private can end up
+in docs/.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import random
 import sys
-import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-DOCS = Path(__file__).resolve().parent.parent / "docs"
 NOW = time.time()
 SHUTDOWN = datetime.now() - timedelta(hours=9)
 ROOT = "C:\\dev" if sys.platform == "win32" else "/home/dev/code"
@@ -166,74 +161,6 @@ def build_home(home: Path) -> None:
         os.utime(path, (ended, ended))
 
 
-async def render(home: Path) -> None:
-    """The dashboard with a team at work, the stats, the live view and the team view."""
-    from tabmancer import app as app_module
-    from tabmancer import sessions, summarize, teams
-    from tabmancer.app import TEAM_ROW, SessionPicker
-    from tabmancer.teamview import TeamScreen
-
-    team, team_live = build_team(home)
-    sessions._agents_json = lambda include_finished=False: LIVE + team_live
-    app_module.recent_shutdowns = lambda: [SHUTDOWN]
-    pcb = next(home.glob("projects/*/pcb-router.jsonl"))
-    summarize._store("pcb-router", {"summary": SUMMARY, "size": pcb.stat().st_size, "model": "haiku"})
-    made_up_limits()
-
-    app = SessionPicker(days=14)
-    async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if app.token_report and app.team_states and any(s.live_state for s in app.sessions.values()):
-                break
-        await pilot.pause(1.2)  # let the cards count up and the list fade in
-        app.table.move_cursor(row=app.table.get_row_index("pcb-router"))
-        await pilot.pause(0.5)
-        DOCS.mkdir(exist_ok=True)
-        app.save_screenshot(str(DOCS / "picker.svg"))
-        # The team's row: who talks to whom, with a message on its way down a wire.
-        app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
-        flying = teams.Message(datetime.now(), "lead", "tests", "Mock the webhook meanwhile")
-        app.team_flights["shop"] = [(flying, time.monotonic() - 0.4)]  # half way once the preview is in
-        await pilot.pause(0.5)  # the preview fades in as the cursor lands
-        app.save_screenshot(str(DOCS / "team-rows.svg"))
-        app.team_flights.clear()
-        app.table.move_cursor(row=app.table.get_row_index("pcb-router"))
-        await pilot.press("u")
-        await pilot.pause(0.5)
-        for name in ("tokens", "work", "tools", "limits"):  # the tabs of the stats
-            if name != "tools":  # the README shows three of them
-                app.save_screenshot(str(DOCS / f"stats-{name}.svg"))
-            await pilot.press("right")
-            await pilot.pause(0.3)
-        # The report tab, with a made-up report: no model call, nothing saved to Downloads.
-        from tabmancer import report
-
-        summarize.ask = lambda prompt, model, timeout=180: DEMO_REPORT
-        report.save = lambda entry, folder=None: home / "report.md"
-        await pilot.press("r")
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if not app.screen.writing:
-                break
-        await pilot.pause(0.3)
-        app.save_screenshot(str(DOCS / "stats-report.svg"))
-        await pilot.press("escape")
-        await pilot.press("l")
-        await pilot.pause(0.8)
-        app.save_screenshot(str(DOCS / "live.svg"))
-        await pilot.press("l")
-        # The team view, with one message caught in flight.
-        app.push_screen(TeamScreen(team, "#d97757"))
-        await pilot.pause(0.6)
-        flying = teams.Message(datetime.now(), "lead", "tests", "Asked the user for a Stripe test key; "
-                               "meanwhile mock the webhook and test the rest", "Mock the webhook meanwhile")
-        app.screen.graph.launch_flight(flying)
-        await pilot.pause(0.9)
-        app.save_screenshot(str(DOCS / "team.svg"))
-    print(f"wrote picker.svg, team-rows.svg, stats-*.svg, live.svg and team.svg to {DOCS}")
-
-
 def made_up_limits() -> None:
     """Four days of plan-limit readings, as the dashboard would have taken them: the week
     fills during working hours, the five-hour session limit rises and resets."""
@@ -306,25 +233,3 @@ def build_team(home: Path):
 
 def _ago(minutes: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z")
-
-
-def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="tabmancer-demo-") as tmp:
-        home = Path(tmp)
-        os.environ["CLAUDE_CONFIG_DIR"] = str(home / "claude")
-        os.environ["TABMANCER_CONFIG_DIR"] = str(home / "config")
-        # Half blocks for Bit: SVG viewers' fonts rarely have the block octants.
-        os.environ["TABMANCER_MASCOT_BLOCKS"] = "half"
-        os.environ.pop("NO_COLOR", None)  # Textual would render everything in grey
-        from tabmancer import app as app_module
-        from tabmancer import usage
-
-        app_module.open_tabs = lambda launches: []  # whatever is pressed, no real tabs
-        usage.read_usage = list  # the readings are made up (made_up_limits), the CLI is not asked
-
-        build_home(home / "claude")
-        asyncio.run(render(home / "claude"))
-
-
-if __name__ == "__main__":
-    main()
