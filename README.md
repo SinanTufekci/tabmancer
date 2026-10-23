@@ -67,8 +67,8 @@ they do on the row you are on. On Windows, `tabmancer shortcut` adds a desktop s
 - **A short preview.** First and last prompt, Claude's last reply, files edited, git
   branch, lines changed.
 - **No more typing "continue".** A session that was cut off mid-task reopens and is
-  told to carry on right away. Sessions stopped at a usage limit show when it lifts,
-  and `c` continues them then.
+  told to carry on right away. Sessions stopped at a usage limit show when it lifts;
+  `c` continues them then, or right away once you have signed in with another account.
 - **Resume, fork or start fresh.** Choose per session.
 - **Fresh sessions in several projects at once.** `n` lists the projects you worked in
   lately: tick a few, add a first message if you like, and each opens a clean session
@@ -142,7 +142,7 @@ the highlighted session the preview says what `Enter` will do with it, as it sta
 | `n` | start fresh sessions in several projects at once |
 | `T` | teams: several sessions on one project with an orchestrator, talking to each other; on a team's row or a member, that team's view |
 | `h` | hand a session over to a fresh one; an open one is closed |
-| `c` | continue every session stopped at a usage limit when the limit lifts; again cancels (in the footer only while one is) |
+| `c` | the sessions stopped at a usage limit: continue them now (signed in with another account) or when the limit lifts (in the footer only while one is) |
 | `r` | rename the highlighted session (see below) |
 | `x` | hide the ticked sessions, or the highlighted one (in the sidebar: the whole project); nothing is deleted. On an open team's row, twice: close its members' tabs |
 | `X` | show the hidden ones too (`x` on one brings it back) |
@@ -196,10 +196,17 @@ above the rest. Both are kept in `marks.json` in tabmancer's own folder.
 | × connection lost | the connection to the API dropped, so the reply never came |
 
 A session stopped at a usage limit says when the limit lifts, whether it is still open or
-not, and does not count as waiting for you. `c` continues every such session when its limit
-lifts (now, if it has): a closed one opens in a new tab, and an open one is closed and
-resumed, each told what stopped it. The dashboard has to be open at that time; the plan is
-kept if you restart it. Auto-continue tells Claude what stopped the session (a shutdown, a
+not, and does not count as waiting for you. `c` asks what to do with all of them:
+
+- **Continue them now.** For when you have signed in with another account (`/login`), or the
+  limit has lifted. An open one is closed and resumed, so that it starts on the account you
+  are signed in with now.
+- **Continue them when the limit lifts.** The dashboard has to be open at that time; the plan
+  is kept if you restart it. `c` again can call it off.
+
+Either way a closed session opens in a new tab and an open one is closed and resumed, each
+told what stopped it. When the top bar's last reading shows room on your plan, continuing now
+is offered first. Auto-continue tells Claude what stopped the session (a shutdown, a
 usage limit or a dropped connection), unless you set a prompt of your own.
 
 The list keeps the open sessions under **OPEN NOW** and the rest under **EARLIER**. For an

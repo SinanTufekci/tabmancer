@@ -56,8 +56,9 @@ KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("j", "next_waiting", "go to the next open session waiting for you, round and round"),
         ("h", "handover", ("hand it over to a fresh session that starts from a full handover. An open session "
                            "is closed on the way; a working one as soon as it finishes (h again cancels)")),
-        ("c", "continue_at_reset", ("continue every session stopped at a usage limit when the limit lifts "
-                                    "(an open one is closed and resumed); again cancels")),
+        ("c", "continue_at_reset", ("the sessions stopped at a usage limit: continue them now (after you sign "
+                                    "in with another account) or when the limit lifts; an open one is closed "
+                                    "and resumed")),
         ("r", "rename", "rename it, in Claude Code's own /resume list too"),
         ("s", "summarize", ("a short AI summary of it (one claude -p call, on your plan). On a team's row: start "
                             "every member not open")),

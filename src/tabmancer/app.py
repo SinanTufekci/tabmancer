@@ -251,6 +251,48 @@ class PromptDialog(ModalScreen[tuple[str, str] | None]):
         self.dismiss(None)
 
 
+class LimitDialog(ModalScreen[str | None]):
+    """c: what becomes of the sessions stopped at a usage limit. Now, for when you have signed in
+    with another account (or the limit has lifted); when the limit lifts; or no longer by themselves."""
+
+    DEFAULT_CSS = frame("LimitDialog") + """
+    LimitDialog OptionList { height: auto; margin-top: 1; background: $surface; border: none; }
+    LimitDialog .plan { color: $text-muted; margin-top: 1; }
+    """
+    BINDINGS: ClassVar[list[Binding]] = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, count: int, when: str, armed: bool, plan: str, room: bool) -> None:
+        super().__init__()
+        self.count, self.when, self.armed, self.plan, self.room = count, when, armed, plan, room
+
+    def compose(self) -> ComposeResult:
+        them = "it" if self.count == 1 else "them"
+        now = Option(Text.assemble(
+            (f"Continue {them} now", f"bold {TEXT}"), ("  you signed in with another account, or the limit has lifted\n", MUTED),
+            (("  each goes on where it stopped; an open one is closed and resumed, on the account you are signed in "
+             "with now"), MUTED)), id="now")
+        later = Option(Text.assemble(
+            (f"Continue {them} when the limit lifts", f"bold {TEXT}"), (f"  {self.when}\n", MUTED),
+            ("  leave the dashboard open; each goes on by itself then", MUTED)), id="lift")
+        options = [now, later] if self.room else [later, now]
+        if self.armed:
+            options.append(Option(Text.assemble((f"Do not continue {them} by themselves", f"bold {TEXT}"),
+                                                ("  they wait for you", MUTED)), id="off"))
+        sessions_ = f"{self.count} session{'' if self.count == 1 else 's'}"
+        with Vertical():
+            yield Label(title("Stopped at a usage limit", sessions_, f"it lifts {self.when}"))
+            if self.plan:
+                yield Label(self.plan, classes="plan")
+            yield OptionList(*options)
+            yield Label(keys(("Enter", "choose"), ("↑↓", "the other ways"), ("Esc", "cancel")), classes="hint")
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 def home_short(path: str) -> str:
     """A folder with the home folder written ~, so it fits beside the preview."""
     home = str(Path.home())
@@ -2270,25 +2312,56 @@ class SessionPicker(App[list[str]]):
     # --- usage limits ---------------------------------------------------------------
 
     def action_continue_at_reset(self) -> None:
-        """Every session stopped at a usage limit continues when its limit lifts (now if it has);
-        again, and none does."""
+        """c: the sessions stopped at a usage limit continue now (after you have signed in with another
+        account), or by themselves when the limit lifts, or no longer by themselves."""
         stopped = [s for s in self.sessions.values() if at_limit(s) and s.status is not Status.BACKGROUND]
         if not stopped:
             self.notify("No session is stopped at a usage limit.", timeout=4)
             return
-        if all(s.session_id in self.armed for s in stopped):
-            self.armed.clear()
-            self.notify("Sessions at a limit will not continue by themselves.", timeout=5)
-        else:
-            self.armed = {s.session_id: s.resets or datetime.now() for s in stopped}
-            soon = min(self.armed.values())
-            when = "now" if soon <= datetime.now() else f"at {lifts(soon)}"
-            self.notify(f"{len(stopped)} {'session continues' if len(stopped) == 1 else 'sessions continue'} "
-                        f"{when}, when the limit lifts. Leave the dashboard open; c again cancels.", timeout=8)
-        self.save_armed()
+        soon = min(s.resets or datetime.now() for s in stopped)
+        when = "now" if soon <= datetime.now() else f"at {lifts(soon)}"
+        # The plan as last read (/usage, every few minutes): room on it means the limit no longer stands
+        # in the way (another account, or it lifted), and continuing now comes first.
+        session_limit = next((limit for limit in self.limits if limit.label == "session"), None)
+        plan = ("Your plan now: " + " · ".join(f"{limit.label} {limit.percent}%" for limit in self.limits
+                                                 if limit.label in ("session", "week"))) if self.limits else ""
+        room = session_limit is not None and session_limit.percent < 95
+
+        def chosen(answer: str | None) -> None:
+            if answer == "now":
+                self.armed = {sid: moment for sid, moment in self.armed.items() if sid not in {s.session_id for s in stopped}}
+                self.save_armed()
+                self.continue_these(stopped)
+                return
+            if answer == "lift":
+                self.armed = {s.session_id: s.resets or datetime.now() for s in stopped}
+                self.notify(f"{len(stopped)} {'session continues' if len(stopped) == 1 else 'sessions continue'} "
+                            f"{when}, when the limit lifts. Leave the dashboard open.", timeout=8)
+            elif answer == "off":
+                self.armed.clear()
+                self.notify("Sessions at a limit will not continue by themselves.", timeout=5)
+            else:
+                return
+            self.save_armed()
+            for session in stopped:
+                self.update_row(session)
+            self.update_detail()
+
+        self.push_screen(LimitDialog(len(stopped), when, all(s.session_id in self.armed for s in stopped), plan,
+                                     room), chosen)
+
+    def continue_these(self, stopped: list[Session]) -> None:
+        """Each goes on where it stopped: a closed one in a new tab, an open one by closing its tab and
+        resuming it, which starts it on the account signed in now."""
+        closed = []
         for session in stopped:
-            self.update_row(session)
-        self.update_detail()
+            if session.exit is Exit.RUNNING:
+                self.continue_open(session)
+            else:
+                closed.append(replace(self.launch_for(session), mode=Mode.AUTO, prompt=continue_prompt(Status.LIMIT)))
+        if closed:
+            self.open_sessions(closed)
+        self.mascot.say(f"{len(stopped)} back at work", self.accent(), seconds=6)
 
     def save_armed(self) -> None:
         saved = read_json("config.json")
@@ -2306,21 +2379,15 @@ class SessionPicker(App[list[str]]):
         due = [sid for sid, moment in self.armed.items() if moment + LIMIT_MARGIN <= now]
         if not due:
             return
-        closed = []
+        lifted = []
         for sid in due:
             del self.armed[sid]
             session = self.sessions.get(sid)
-            if session is None or not at_limit(session):
-                continue
-            if session.exit is Exit.RUNNING:
-                self.continue_open(session)
-            else:
-                closed.append(replace(self.launch_for(session), mode=Mode.AUTO,
-                                      prompt=continue_prompt(Status.LIMIT)))
+            if session is not None and at_limit(session):
+                lifted.append(session)
         self.save_armed()
-        if closed:
-            self.open_sessions(closed)
-            self.mascot.say(f"The limit lifted: {len(closed)} back at work", self.accent(), seconds=6)
+        if lifted:
+            self.continue_these(lifted)
 
     @work(thread=True, group="limits")
     def continue_open(self, session: Session) -> None:

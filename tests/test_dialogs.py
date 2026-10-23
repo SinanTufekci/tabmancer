@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 
-from tabmancer.app import NamePrompt, PromptDialog, WorkspaceList
+from tabmancer.app import LimitDialog, NamePrompt, PromptDialog, WorkspaceList
 from tabmancer.background import BackgroundDialog
 from tabmancer.cleanup import Confirm
 from tabmancer.clisettings import CliSettings
@@ -16,8 +16,8 @@ from tabmancer.newsessions import NewSessions
 from tabmancer.statsview import StatsScreen
 from tabmancer.teamview import LineDialog, NewTeamDialog, TeamsDialog
 
-DIALOGS = [NamePrompt, PromptDialog, WorkspaceList, BackgroundDialog, Confirm, CliSettings, HandoverDialog,
-           KeysScreen, NewSessions, StatsScreen, LineDialog, TeamsDialog, NewTeamDialog]
+DIALOGS = [NamePrompt, PromptDialog, WorkspaceList, LimitDialog, BackgroundDialog, Confirm, CliSettings,
+           HandoverDialog, KeysScreen, NewSessions, StatsScreen, LineDialog, TeamsDialog, NewTeamDialog]
 
 
 def test_every_dialog_is_one_of_three_widths_and_as_tall_at_most():

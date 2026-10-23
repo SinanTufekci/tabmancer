@@ -1,5 +1,6 @@
 """Sessions stopped at a usage limit: told apart from other errors, shown with the time the
-limit lifts, and continued then with c (a closed one in a new tab, an open one closed and resumed)."""
+limit lifts, and continued with c: now (after signing in with another account) or when the limit lifts;
+a closed one in a new tab, an open one closed and resumed."""
 
 from __future__ import annotations
 
@@ -8,10 +9,11 @@ from datetime import datetime, timedelta, timezone
 
 from tabmancer import app as app_module
 from tabmancer import handover, sessions
-from tabmancer.app import SessionPicker
+from tabmancer.app import LimitDialog, SessionPicker
 from tabmancer.config import read_json, write_json
 from tabmancer.launch import CONTINUE_BECAUSE, Mode, continue_prompt, default_mode
 from tabmancer.sessions import Status, _from_cache, _limit_resets, _to_cache, read_session
+from tabmancer.usage import Limit
 
 CWD = "C:/work/demo"
 
@@ -97,6 +99,20 @@ async def test_a_limit_shows_when_it_lifts_and_is_not_counted_as_waiting_for_you
         assert str(app.status_cell(closed)) == "◐ limit lifted"
 
 
+async def choose(pilot, app, answer: str) -> list[str]:
+    """c, then one of the dialog's ways: now, lift or off. Returns the ways it offered, in order."""
+    from textual.widgets import OptionList
+
+    await pilot.press("c")
+    await wait_for(pilot, lambda: isinstance(app.screen, LimitDialog))
+    options = app.screen.query_one(OptionList)
+    ways = [options.get_option_at_index(i).id for i in range(options.option_count)]
+    options.highlighted = ways.index(answer)
+    await pilot.press("enter")
+    await pilot.pause(0.1)
+    return ways
+
+
 async def test_c_continues_them_when_the_limit_lifts(fake_home, monkeypatch):
     write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
     write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
@@ -108,14 +124,14 @@ async def test_c_continues_them_when_the_limit_lifts(fake_home, monkeypatch):
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
-        await pilot.press("c")
+        assert await choose(pilot, app, "lift") == ["lift", "now"]  # no reading of the plan: waiting comes first
         assert set(app.armed) == {"lim", "open"}
         cell = str(app.mode_cell(app.sessions["lim"]))
         assert cell.startswith("▶ at ") and cell.endswith("23:59")
         assert set(read_json("config.json")["continue_at_reset"]) == {"lim", "open"}  # kept over a restart
-        await pilot.press("c")  # again: off
+        assert await choose(pilot, app, "off") == ["lift", "now", "off"]
         assert not app.armed and read_json("config.json")["continue_at_reset"] == {}
-        await pilot.press("c")
+        await choose(pilot, app, "lift")
         app.continue_due()  # not yet: nothing opens
         assert not opened and app.armed
         app.armed = dict.fromkeys(app.armed, datetime.now() - timedelta(minutes=2))  # the limit has lifted
@@ -134,10 +150,47 @@ async def test_a_session_gone_on_by_hand_is_left_alone(fake_home, monkeypatch):
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: "lim" in app.sessions)
-        await pilot.press("c")
+        await choose(pilot, app, "lift")
         app.sessions["lim"].status = Status.DONE  # continued by hand meanwhile
         app.sessions["lim"].resets = None
         app.armed["lim"] = datetime.now() - timedelta(minutes=2)
         app.continue_due()
         assert not opened and not app.armed
         assert app.check_action("continue_at_reset", ()) is False  # nothing to continue: not in the footer
+
+
+async def test_c_continues_them_now_after_signing_in_with_another_account(fake_home, monkeypatch):
+    # The limit stands until 23:59 on the account that hit it; signed in with another, the plan has room.
+    write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
+    write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
+        {"sessionId": "open", "kind": "interactive", "status": "idle"}])
+    opened, closed_tabs = [], []
+    monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
+    monkeypatch.setattr(handover, "close", lambda session, open_ones, again="": closed_tabs.append(session.session_id))
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
+        app.limits = [Limit("session", 12, None, ""), Limit("week", 40, None, "")]
+        assert await choose(pilot, app, "now") == ["now", "lift"]  # room on the plan: now comes first
+        await wait_for(pilot, lambda: len(opened) == 2)
+        assert closed_tabs == ["open"]  # the open one is closed and resumed: a new process, the new account
+        assert {launch.session_id for launch in opened} == {"lim", "open"}
+        assert all(launch.mode is Mode.AUTO and launch.argv[-1] == continue_prompt(Status.LIMIT) for launch in opened)
+        assert not app.armed
+
+
+async def test_the_limit_dialog_says_how_full_the_plan_is(fake_home, monkeypatch):
+    from textual.widgets import Label
+
+    write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: "lim" in app.sessions)
+        app.limits = [Limit("session", 100, None, ""), Limit("week", 60, None, "")]
+        await pilot.press("c")
+        await wait_for(pilot, lambda: isinstance(app.screen, LimitDialog))
+        assert "Your plan now: session 100% · week 60%" in str(app.screen.query_one(".plan", Label).render())
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, LimitDialog) and not app.armed  # Esc: nothing changes
