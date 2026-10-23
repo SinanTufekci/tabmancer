@@ -25,7 +25,7 @@ async def box_has_focus(pilot, app, tries: int = 150) -> None:
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
     """Keep tests off the real CLI (`claude agents --json`, `claude -p /usage`) and config folder."""
-    from tabmancer import cli, focus, handover, rename, summarize, toast, usage
+    from tabmancer import cli, focus, handover, rename, summarize, toast, typein, usage
 
     def no_background(launch):
         raise OSError("no background sessions in tests")
@@ -47,6 +47,7 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(usage, "read_codex", lambda now=None: [])  # never the real ~/.codex
     monkeypatch.setattr(focus, "focus_tab", lambda title: False)  # never switch the real tabs
     monkeypatch.setattr(focus, "close_tab", lambda title: False)  # nor close them
+    monkeypatch.setattr(typein, "write_keys", lambda pid, text: False)  # nor type into a real console
     # Never real tabs or windows, whatever a test presses: a test that wants to see what would
     # open puts its own recorder in their place.
     monkeypatch.setattr(app_module, "open_tabs", lambda launches: [])

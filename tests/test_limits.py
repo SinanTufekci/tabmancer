@@ -1,6 +1,7 @@
 """Sessions stopped at a usage limit: told apart from other errors, shown with the time the
 limit lifts, and continued with c: now (after signing in with another account) or when the limit lifts;
-a closed one in a new tab, an open one closed and resumed."""
+a closed one in a new tab, an open one with the prompt typed into its own (closed and resumed if it
+cannot be)."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from tabmancer import app as app_module
-from tabmancer import handover, sessions
+from tabmancer import handover, sessions, typein
 from tabmancer.app import LimitDialog, SessionPicker
 from tabmancer.config import read_json, write_json
 from tabmancer.launch import CONTINUE_BECAUSE, Mode, continue_prompt, default_mode
@@ -118,9 +119,10 @@ async def test_c_continues_them_when_the_limit_lifts(fake_home, monkeypatch):
     write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
     monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
         {"sessionId": "open", "kind": "interactive", "status": "idle"}])
-    opened, closed_tabs = [], []
+    opened, closed_tabs, typed = [], [], []
     monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
     monkeypatch.setattr(handover, "close", lambda session, open_ones, again="": closed_tabs.append(session.session_id))
+    monkeypatch.setattr(typein, "type_into", lambda session_id, text: typed.append((session_id, text)) or True)
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
@@ -136,10 +138,10 @@ async def test_c_continues_them_when_the_limit_lifts(fake_home, monkeypatch):
         assert not opened and app.armed
         app.armed = dict.fromkeys(app.armed, datetime.now() - timedelta(minutes=2))  # the limit has lifted
         app.continue_due()
-        await wait_for(pilot, lambda: len(opened) == 2)
-        assert closed_tabs == ["open"]  # the open one was closed first, then resumed
-        assert {launch.session_id for launch in opened} == {"lim", "open"}
-        assert all(launch.mode is Mode.AUTO and launch.argv[-1] == continue_prompt(Status.LIMIT) for launch in opened)
+        await wait_for(pilot, lambda: opened and typed)
+        assert typed == [("open", continue_prompt(Status.LIMIT))] and not closed_tabs  # in its own tab
+        assert [launch.session_id for launch in opened] == ["lim"]
+        assert opened[0].mode is Mode.AUTO and opened[0].argv[-1] == continue_prompt(Status.LIMIT)
         assert not app.armed
 
 
@@ -165,19 +167,37 @@ async def test_c_continues_them_now_after_signing_in_with_another_account(fake_h
     write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
     monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
         {"sessionId": "open", "kind": "interactive", "status": "idle"}])
-    opened, closed_tabs = [], []
+    opened, closed_tabs, typed = [], [], []
     monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
     monkeypatch.setattr(handover, "close", lambda session, open_ones, again="": closed_tabs.append(session.session_id))
+    monkeypatch.setattr(typein, "type_into", lambda session_id, text: typed.append((session_id, text)) or True)
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
         app.limits = [Limit("session", 12, None, ""), Limit("week", 40, None, "")]
         assert await choose(pilot, app, "now") == ["now", "lift"]  # room on the plan: now comes first
-        await wait_for(pilot, lambda: len(opened) == 2)
-        assert closed_tabs == ["open"]  # the open one is closed and resumed: a new process, the new account
-        assert {launch.session_id for launch in opened} == {"lim", "open"}
-        assert all(launch.mode is Mode.AUTO and launch.argv[-1] == continue_prompt(Status.LIMIT) for launch in opened)
+        await wait_for(pilot, lambda: opened and typed)
+        # The open one goes on in its own tab: a prompt is all it needs to carry on, on the new account.
+        assert typed == [("open", continue_prompt(Status.LIMIT))] and not closed_tabs
+        assert [launch.session_id for launch in opened] == ["lim"]
         assert not app.armed
+
+
+async def test_an_open_one_that_cannot_be_typed_into_is_closed_and_resumed(fake_home, monkeypatch):
+    write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
+        {"sessionId": "open", "kind": "interactive", "status": "idle"}])
+    opened, closed_tabs = [], []
+    monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
+    monkeypatch.setattr(handover, "close", lambda session, open_ones, again="": closed_tabs.append(session.session_id))
+    monkeypatch.setattr(typein, "type_into", lambda session_id, text: False)  # e.g. not on Windows
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
+        await choose(pilot, app, "now")
+        await wait_for(pilot, lambda: opened)
+        assert closed_tabs == ["open"]  # closed first, then resumed
+        assert opened[0].session_id == "open" and opened[0].argv[-1] == continue_prompt(Status.LIMIT)
 
 
 async def test_the_limit_dialog_says_how_full_the_plan_is(fake_home, monkeypatch):

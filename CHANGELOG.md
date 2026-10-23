@@ -13,7 +13,8 @@ The first release.
   ticked; `Enter` opens each in its own tab and folder, and the ones cut off mid-reply carry on
   by themselves. Resume, auto-continue, fork or start fresh, per session (`m`).
 - **Past a usage limit.** Sessions stopped at a limit say when it lifts; `c` continues them all
-  then, or right away once you have signed in with another account.
+  then, or right away once you have signed in with another account. An open one gets the
+  prompt in its own tab.
 - **Teams.** Several sessions on one project with an orchestrator, talking through Claude Code's
   own messaging between sessions: one row in the list with each member's state, a team view with
   the conversation as a sequence diagram, members in tabs or in the background, a lead that picks

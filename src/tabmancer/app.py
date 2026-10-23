@@ -40,6 +40,7 @@ from . import (
     teamtree,
     toast,
     tokens,
+    typein,
     usage,
     workspaces,
 )
@@ -269,8 +270,7 @@ class LimitDialog(ModalScreen[str | None]):
         them = "it" if self.count == 1 else "them"
         now = Option(Text.assemble(
             (f"Continue {them} now", f"bold {TEXT}"), ("  you signed in with another account, or the limit has lifted\n", MUTED),
-            (("  each goes on where it stopped; an open one is closed and resumed, on the account you are signed in "
-             "with now"), MUTED)), id="now")
+            ("  an open one gets the prompt in its tab, a closed one opens in a new tab", MUTED)), id="now")
         later = Option(Text.assemble(
             (f"Continue {them} when the limit lifts", f"bold {TEXT}"), (f"  {self.when}\n", MUTED),
             ("  leave the dashboard open; each goes on by itself then", MUTED)), id="lift")
@@ -2351,8 +2351,8 @@ class SessionPicker(App[list[str]]):
                                      room), chosen)
 
     def continue_these(self, stopped: list[Session]) -> None:
-        """Each goes on where it stopped: a closed one in a new tab, an open one by closing its tab and
-        resuming it, which starts it on the account signed in now."""
+        """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt
+        typed into its own tab."""
         closed = []
         for session in stopped:
             if session.exit is Exit.RUNNING:
@@ -2391,6 +2391,11 @@ class SessionPicker(App[list[str]]):
 
     @work(thread=True, group="limits")
     def continue_open(self, session: Session) -> None:
+        """The continue prompt goes into its tab, as if you typed it; where that cannot be done,
+        the tab is closed and the session resumed with it."""
+        if session.live_state in handover.IDLE and typein.type_into(session.session_id,
+                                                                     continue_prompt(Status.LIMIT)):
+            return
         open_ones = self.call_from_thread(self.open_ones)
         try:
             handover.close(session, open_ones, again="Type “continue” in it yourself")

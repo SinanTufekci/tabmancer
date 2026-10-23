@@ -199,14 +199,15 @@ A session stopped at a usage limit says when the limit lifts, whether it is stil
 not, and does not count as waiting for you. `c` asks what to do with all of them:
 
 - **Continue them now.** For when you have signed in with another account (`/login`), or the
-  limit has lifted. An open one is closed and resumed, so that it starts on the account you
-  are signed in with now.
+  limit has lifted.
 - **Continue them when the limit lifts.** The dashboard has to be open at that time; the plan
   is kept if you restart it. `c` again can call it off.
 
-Either way a closed session opens in a new tab and an open one is closed and resumed, each
-told what stopped it. When the top bar's last reading shows room on your plan, continuing now
-is offered first. Auto-continue tells Claude what stopped the session (a shutdown, a
+Either way a closed session opens in a new tab, and an open one gets the prompt in its own
+tab, as if you had typed it there: on Windows it goes into that tab's console, and no window
+comes to the front. Only the process Claude Code lists for that session gets it. Where that
+cannot be done, the session is closed and resumed instead. The prompt tells it what stopped
+it. When the top bar's last reading shows room on your plan, continuing now is offered first. Auto-continue tells Claude what stopped the session (a shutdown, a
 usage limit or a dropped connection), unless you set a prompt of your own.
 
 The list keeps the open sessions under **OPEN NOW** and the rest under **EARLIER**. For an
@@ -745,8 +746,9 @@ tabmancer runs on your machine and talks to no server of its own. It reads the t
 the agents already keep (`~/.claude`, `~/.codex`, `~/.gemini`) and asks the `claude` CLI
 which sessions are open and how full your plan limits are (`/usage`, a local command). A model
 is called only when you ask for one, through your own CLI
-and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats). Nothing is
-sent anywhere else, and there is no telemetry.
+and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats). It types into
+an open session only when you have it continue the ones stopped at a usage limit (`c`).
+Nothing is sent anywhere else, and there is no telemetry.
 
 ## Trademarks
 
