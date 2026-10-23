@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tabmancer"
+dynamic = ["version"]
+description = "A terminal dashboard for coding-agent sessions (Claude Code, Codex, Antigravity): see what they are doing, run them as teams, call them back after a reboot"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Sinan Tüfekci" }]
+requires-python = ">=3.10"
+dependencies = [
+    "send2trash>=1.8",
+    "textual>=8.0",
+]
+keywords = ["claude-code", "codex", "coding-agents", "sessions", "dashboard", "resume", "windows-terminal", "tui", "textual"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/SinanTufekci/tabmancer"
+Issues = "https://github.com/SinanTufekci/tabmancer/issues"
+Changelog = "https://github.com/SinanTufekci/tabmancer/blob/main/CHANGELOG.md"
+
+[project.scripts]
+tabmancer = "tabmancer.cli:main"
+
+[project.gui-scripts]
+# Windowless launcher for the login shortcut: no console flashes up when there is
+# nothing to restore.
+tabmancer-startup = "tabmancer.cli:startup_main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff"]
+
+[tool.hatch.version]
+path = "src/tabmancer/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+# The README shows its pictures from GitHub; the source package needs neither them nor the workflows.
+exclude = ["/docs/**", "/.github"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110

@@ -1,0 +1,143 @@
+"""Sessions stopped at a usage limit: told apart from other errors, shown with the time the
+limit lifts, and continued then with c (a closed one in a new tab, an open one closed and resumed)."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+
+from tabmancer import app as app_module
+from tabmancer import handover, sessions
+from tabmancer.app import SessionPicker
+from tabmancer.config import read_json, write_json
+from tabmancer.launch import CONTINUE_BECAUSE, Mode, continue_prompt, default_mode
+from tabmancer.sessions import Status, _from_cache, _limit_resets, _to_cache, read_session
+
+CWD = "C:/work/demo"
+
+
+def utc(moment: datetime) -> str:
+    """A local clock time as a transcript writes it."""
+    return moment.astimezone().astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def stopped_at(text: str, error: str = "rate_limit", at: datetime | None = None) -> dict:
+    return {"type": "assistant", "cwd": CWD, "timestamp": utc(at or datetime.now()), "error": error,
+            "isApiErrorMessage": True, "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def write(home, sid: str, last: dict) -> None:
+    folder = home / "projects" / "C--work-demo"
+    folder.mkdir(parents=True, exist_ok=True)
+    records = [{"type": "user", "cwd": CWD, "entrypoint": "cli", "message": {"content": f"do {sid}"}},
+               last, {"type": "ai-title", "aiTitle": f"Task {sid}"}]
+    (folder / f"{sid}.jsonl").write_text("\n".join(json.dumps(r, separators=(",", ":")) for r in records) + "\n",
+                                         encoding="utf-8")
+
+
+async def wait_for(pilot, condition, tries=80):
+    for _ in range(tries):
+        await pilot.pause(0.05)
+        if condition():
+            return
+    raise AssertionError("condition never became true")
+
+
+def test_the_reset_time_is_read_from_the_reply():
+    afternoon = datetime(2026, 10, 20, 14, 30)
+    assert _limit_resets(stopped_at("You've hit your session limit · resets 4pm", at=afternoon)) == \
+        datetime(2026, 10, 20, 16, 0)
+    assert _limit_resets(stopped_at("You've hit your session limit · resets 4:10pm", at=afternoon)) == \
+        datetime(2026, 10, 20, 16, 10)
+    late = datetime(2026, 10, 20, 23, 30)  # a time already past today is tomorrow's
+    assert _limit_resets(stopped_at("You've hit your session limit · resets 2am", at=late)) == \
+        datetime(2026, 10, 21, 2, 0)
+    weekly = stopped_at("You've hit your weekly limit · resets Oct 6, 6am", at=datetime(2026, 10, 3, 9, 0))
+    assert _limit_resets(weekly) == datetime(2026, 10, 6, 6, 0)
+    unknown = stopped_at("Claude AI usage limit reached", at=afternoon)  # an older wording: five hours on
+    assert _limit_resets(unknown) == afternoon + timedelta(hours=5)
+
+
+def test_a_limit_and_a_dropped_connection_are_told_apart_from_other_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    write(tmp_path, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
+    write(tmp_path, "net", stopped_at("API Error: Connection dropped (ECONNRESET)", "server_error"))
+    write(tmp_path, "err", stopped_at("API Error: 400 bad request", "invalid_request"))
+    found = {sid: read_session(tmp_path / "projects" / "C--work-demo" / f"{sid}.jsonl") for sid in ("lim", "net", "err")}
+    assert found["lim"].status is Status.LIMIT and found["lim"].resets > datetime.now()
+    assert found["net"].status is Status.DROPPED and found["net"].resets is None
+    assert found["err"].status is Status.ERROR
+    assert _from_cache(json.loads(json.dumps(_to_cache(found["lim"])))) == found["lim"]  # the cache keeps it
+
+
+def test_each_reason_continues_with_its_own_words(fake_home):
+    assert default_mode(Status.LIMIT) is Mode.AUTO and default_mode(Status.DROPPED) is Mode.AUTO
+    assert continue_prompt(Status.LIMIT) == CONTINUE_BECAUSE[Status.LIMIT]
+    assert "shut down" not in continue_prompt(Status.LIMIT)
+    write_json("config.json", {"continue_prompt": "Go on."})  # a prompt of your own wins
+    assert continue_prompt(Status.LIMIT) == "Go on."
+
+
+async def test_a_limit_shows_when_it_lifts_and_is_not_counted_as_waiting_for_you(fake_home, monkeypatch):
+    write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
+    write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
+        {"sessionId": "open", "kind": "interactive", "status": "idle"}])
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
+        await pilot.pause(0.3)
+        closed, opened = app.sessions["lim"], app.sessions["open"]
+        assert str(app.status_cell(closed)).startswith("◐ limit · ") and "23:59" in str(app.status_cell(closed))
+        assert str(app.status_cell(opened)).startswith("◐ limit · ")  # open, but waiting for the limit
+        assert not app.cards["card-waiting"].has_class("alert")  # NEED YOU: nobody
+        assert "1 at the limit" in str(app.cards["card-open"].beside.content)
+        assert app.check_action("continue_at_reset", ()) is True  # c is in the footer now
+        closed.resets = datetime.now() - timedelta(minutes=1)
+        assert str(app.status_cell(closed)) == "◐ limit lifted"
+
+
+async def test_c_continues_them_when_the_limit_lifts(fake_home, monkeypatch):
+    write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
+    write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
+        {"sessionId": "open", "kind": "interactive", "status": "idle"}])
+    opened, closed_tabs = [], []
+    monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
+    monkeypatch.setattr(handover, "close", lambda session, open_ones, again="": closed_tabs.append(session.session_id))
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
+        await pilot.press("c")
+        assert set(app.armed) == {"lim", "open"}
+        cell = str(app.mode_cell(app.sessions["lim"]))
+        assert cell.startswith("▶ at ") and cell.endswith("23:59")
+        assert set(read_json("config.json")["continue_at_reset"]) == {"lim", "open"}  # kept over a restart
+        await pilot.press("c")  # again: off
+        assert not app.armed and read_json("config.json")["continue_at_reset"] == {}
+        await pilot.press("c")
+        app.continue_due()  # not yet: nothing opens
+        assert not opened and app.armed
+        app.armed = dict.fromkeys(app.armed, datetime.now() - timedelta(minutes=2))  # the limit has lifted
+        app.continue_due()
+        await wait_for(pilot, lambda: len(opened) == 2)
+        assert closed_tabs == ["open"]  # the open one was closed first, then resumed
+        assert {launch.session_id for launch in opened} == {"lim", "open"}
+        assert all(launch.mode is Mode.AUTO and launch.argv[-1] == continue_prompt(Status.LIMIT) for launch in opened)
+        assert not app.armed
+
+
+async def test_a_session_gone_on_by_hand_is_left_alone(fake_home, monkeypatch):
+    write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
+    opened = []
+    monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: "lim" in app.sessions)
+        await pilot.press("c")
+        app.sessions["lim"].status = Status.DONE  # continued by hand meanwhile
+        app.sessions["lim"].resets = None
+        app.armed["lim"] = datetime.now() - timedelta(minutes=2)
+        app.continue_due()
+        assert not opened and not app.armed
+        assert app.check_action("continue_at_reset", ()) is False  # nothing to continue: not in the footer

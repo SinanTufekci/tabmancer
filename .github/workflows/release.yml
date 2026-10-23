@@ -1,0 +1,32 @@
+name: release
+
+# Publishes to PyPI when a version tag such as v0.1.0 is pushed. PyPI trusts this
+# workflow (trusted publishing), so no token is stored anywhere. One-time setup on
+# pypi.org: add a publisher for project tabmancer, repository SinanTufekci/tabmancer,
+# workflow release.yml, environment pypi.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read  # the checkout, while the repository is private
+      id-token: write  # proves to PyPI that this workflow is the one it trusts
+    steps:
+      # Pinned to commits: this job can publish, so what it runs must not change underneath it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          enable-cache: false
+      - name: The tag matches the version
+        run: test "${GITHUB_REF_NAME#v}" = "$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/tabmancer/__init__.py)"
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+      - run: uv build
+      - run: uv publish --trusted-publishing always
