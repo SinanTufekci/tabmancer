@@ -77,6 +77,7 @@ async def test_the_keys_keep_to_their_groups(fake_home):
             if app.sessions:
                 break
         await pilot.pause(0.2)
+        await whole_footer(pilot, app)  # not in the middle of making it (seen on the Windows runner)
         starts = [key.action for key in app.query(FooterKey) if key.has_class("-group-start")]
         assert starts == ["prompt", "hide", "toggle_live", "quit"]  # after pick: work, tidy, views, the rest
 
