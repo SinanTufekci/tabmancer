@@ -205,9 +205,9 @@ not, and does not count as waiting for you. `c` asks what to do with all of them
 
 Either way a closed session opens in a new tab, and an open one gets the prompt in its own
 tab, as if you had typed it there: on Windows it goes into that tab's console, and no window
-comes to the front. Only the process Claude Code lists for that session gets it. Where that
-cannot be done, the session is closed and resumed instead. The prompt tells it what stopped
-it. When the top bar's last reading shows room on your plan, continuing now is offered first. Auto-continue tells Claude what stopped the session (a shutdown, a
+comes to the front. Only the process Claude Code lists for that session gets it, and its tab
+is never closed. Where the prompt cannot be typed in (not on Windows, say), Bit says which
+sessions to continue by hand. The prompt tells it what stopped it. When the top bar's last reading shows room on your plan, continuing now is offered first. Auto-continue tells Claude what stopped the session (a shutdown, a
 usage limit or a dropped connection), unless you set a prompt of your own.
 
 The list keeps the open sessions under **OPEN NOW** and the rest under **EARLIER**. For an

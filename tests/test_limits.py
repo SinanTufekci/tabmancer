@@ -1,7 +1,6 @@
 """Sessions stopped at a usage limit: told apart from other errors, shown with the time the
 limit lifts, and continued with c: now (after signing in with another account) or when the limit lifts;
-a closed one in a new tab, an open one with the prompt typed into its own (closed and resumed if it
-cannot be)."""
+a closed one in a new tab, an open one with the prompt typed into its own, which is never closed."""
 
 from __future__ import annotations
 
@@ -183,21 +182,22 @@ async def test_c_continues_them_now_after_signing_in_with_another_account(fake_h
         assert not app.armed
 
 
-async def test_an_open_one_that_cannot_be_typed_into_is_closed_and_resumed(fake_home, monkeypatch):
+async def test_an_open_one_that_cannot_be_typed_into_is_left_as_it_is(fake_home, monkeypatch):
     write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
     monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
         {"sessionId": "open", "kind": "interactive", "status": "idle"}])
-    opened, closed_tabs = [], []
+    opened, closed_tabs, told = [], [], []
     monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
     monkeypatch.setattr(handover, "close", lambda session, open_ones, again="": closed_tabs.append(session.session_id))
     monkeypatch.setattr(typein, "type_into", lambda session_id, text: False)  # e.g. not on Windows
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
+        monkeypatch.setattr(app, "notify", lambda message, **how: told.append(message))
         await choose(pilot, app, "now")
-        await wait_for(pilot, lambda: opened)
-        assert closed_tabs == ["open"]  # closed first, then resumed
-        assert opened[0].session_id == "open" and opened[0].argv[-1] == continue_prompt(Status.LIMIT)
+        await wait_for(pilot, lambda: told)
+        assert not closed_tabs and not opened  # its tab is never closed, nor a second one opened
+        assert told == ["Could not write in the tab of demo: type “continue” there yourself."]
 
 
 async def test_the_limit_dialog_says_how_full_the_plan_is(fake_home, monkeypatch):

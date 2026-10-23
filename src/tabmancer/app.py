@@ -2353,15 +2353,15 @@ class SessionPicker(App[list[str]]):
     def continue_these(self, stopped: list[Session]) -> None:
         """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt
         typed into its own tab."""
-        closed = []
-        for session in stopped:
-            if session.exit is Exit.RUNNING:
-                self.continue_open(session)
-            else:
-                closed.append(replace(self.launch_for(session), mode=Mode.AUTO, prompt=continue_prompt(Status.LIMIT)))
+        closed = [replace(self.launch_for(s), mode=Mode.AUTO, prompt=continue_prompt(Status.LIMIT))
+                  for s in stopped if s.exit is not Exit.RUNNING]
         if closed:
             self.open_sessions(closed)
-        self.mascot.say(f"{len(stopped)} back at work", self.accent(), seconds=6)
+        still_open = [s for s in stopped if s.exit is Exit.RUNNING]
+        if still_open:
+            self.continue_open(still_open, len(closed))
+        else:
+            self.mascot.say(f"{len(closed)} back at work", self.accent(), seconds=6)
 
     def save_armed(self) -> None:
         saved = read_json("config.json")
@@ -2390,21 +2390,19 @@ class SessionPicker(App[list[str]]):
             self.continue_these(lifted)
 
     @work(thread=True, group="limits")
-    def continue_open(self, session: Session) -> None:
-        """The continue prompt goes into its tab, as if you typed it; where that cannot be done,
-        the tab is closed and the session resumed with it."""
-        if session.live_state in handover.IDLE and typein.type_into(session.session_id,
-                                                                     continue_prompt(Status.LIMIT)):
-            return
-        open_ones = self.call_from_thread(self.open_ones)
-        try:
-            handover.close(session, open_ones, again="Type “continue” in it yourself")
-        except handover.HandoverError as error:
-            self.call_from_thread(self.notify, f"{session.project} did not continue by itself: {error}.",
-                                  severity="warning", timeout=15)
-            return
-        launch = replace(self.launch_for(session), mode=Mode.AUTO, prompt=continue_prompt(Status.LIMIT))
-        self.call_from_thread(self.open_sessions, [launch])
+    def continue_open(self, still_open: list[Session], opened: int) -> None:
+        """The continue prompt goes into each one's tab, as if you typed it. Its tab is never closed:
+        one that will not take the prompt is left as it is, and Bit says which."""
+        prompt = continue_prompt(Status.LIMIT)
+        missed = [s for s in still_open
+                  if not (s.live_state in handover.IDLE and typein.type_into(s.session_id, prompt))]
+        back = opened + len(still_open) - len(missed)
+        if back:
+            self.call_from_thread(self.mascot.say, f"{back} back at work", self.accent(), seconds=6)
+        if missed:
+            names = ", ".join(dict.fromkeys(s.project for s in missed))
+            self.call_from_thread(self.notify, f"Could not write in the tab of {names}: type “continue” there "
+                                  "yourself.", severity="warning", timeout=15)
 
     def check_limits(self) -> None:
         """Forget the sessions gone on from a limit; once per session, Bit says which ones a
