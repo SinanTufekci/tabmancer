@@ -58,6 +58,62 @@ def test_replies_without_token_counts_warn(tmp_path, monkeypatch):
     assert any(level == "warn" and "token" in message for level, message in results)
 
 
+HELP = """Usage: claude [options] [command] [prompt]
+
+Options:
+  -r, --resume [value]            Resume a conversation by session ID
+  --fork-session                  When resuming, create a new session ID
+  -c, --continue                  Continue the most recent conversation
+  --bg, --background              Start the session in the background
+  -p, --print                     Print response and exit; works with --settings and --bg
+  --model <model>                 Model for the current session
+  --tools <tools...>              Specify the list of available tools
+  --no-session-persistence        Disable session persistence
+  -n, --name <name>               Set a display name for this session
+  --append-system-prompt <prompt> Append a system prompt
+  --settings <file-or-json>       Path to a settings JSON file or a JSON string
+  --allowedTools, --allowed-tools <tools...>  Tools to allow
+
+Commands:
+  agents [options]                Manage background agents
+  attach <id|name>                Open a background session in this terminal
+  stop|kill <id>                  Stop a background session
+  rm <id>                         Delete a background session
+"""
+AGENTS_HELP = """Usage: claude agents [options]
+
+Options:
+  --all                           With --json: also include completed background sessions
+  --json                          Print active sessions
+"""
+
+
+def test_a_flag_or_command_gone_from_claude_is_named_with_what_it_is_for(monkeypatch):
+    helps = {"": HELP, "agents": AGENTS_HELP}
+    monkeypatch.setattr(doctor, "_help", lambda claude, command: helps[command])
+    assert doctor.missing_from_cli("claude") == []
+    # Still named in -p's words, but no longer a flag of its own: gone.
+    helps[""] = HELP.replace("  --bg, --background              Start the session in the background\n", "")
+    helps[""] = helps[""].replace("  stop|kill <id>                  Stop a background session\n", "")
+    helps["agents"] = AGENTS_HELP.replace("  --json                          Print active sessions\n", "")
+    assert doctor.missing_from_cli("claude") == [
+        "claude --bg (background sessions)", "claude stop (background sessions)",
+        "claude agents --json (which sessions are open)"]
+
+
+def test_a_help_that_cannot_be_read_says_nothing(monkeypatch):
+    monkeypatch.setattr(doctor, "_help", lambda claude, command: None)
+    assert doctor.missing_from_cli("claude") is None
+
+
+def test_a_newer_claude_code_than_last_checked_gets_a_word():
+    major, minor, patch = (int(part) for part in doctor.TESTED_WITH.split("."))
+    assert doctor.version_check(f"{major}.{minor}.{patch + 40} (Claude Code)")[0] == "ok"
+    assert doctor.version_check(f"{major}.{minor + 1}.0 (Claude Code)")[0] == "warn"
+    assert doctor.version_check(f"{major + 1}.0.0 (Claude Code)")[0] == "warn"
+    assert doctor.version_check("claude")[0] == "ok"  # no version to read: just the path
+
+
 def test_run_exit_code(monkeypatch, capsys):
     monkeypatch.setattr(doctor, "checks", lambda: [("ok", "fine"), ("fail", "broken")])
     assert doctor.run() == 1

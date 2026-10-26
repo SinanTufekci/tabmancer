@@ -1,0 +1,31 @@
+name: claude-cli
+
+# tabmancer leans on Claude Code's flags, commands and formats, which change between releases.
+# Every week this installs the latest Claude Code and checks that everything tabmancer runs it with
+# is still there, so a change shows up here (a failed run mails the owner) before a user reports it.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"  # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6
+        with:
+          python-version: "3.13"
+      # Unpinned on purpose: the point is the latest release.
+      - run: npm install --global @anthropic-ai/claude-code@latest  # zizmor: ignore[adhoc-packages]
+      - run: claude --version
+      - run: uv sync --locked
+      - run: uv run pytest -q tests/test_claude_cli.py
+        env:
+          TABMANCER_REAL_CLAUDE: "1"

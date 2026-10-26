@@ -42,6 +42,8 @@ PyPI trusts the release workflow (trusted publishing), so no token is kept anywh
 1. Once: on pypi.org, under *Publishing*, add a pending publisher with project `tabmancer`,
    owner `SinanTufekci`, repository `tabmancer`, workflow `release.yml` and environment `pypi`.
    In the repository's settings, add an environment called `pypi`.
-2. Set the version in `src/tabmancer/__init__.py`, add it to `CHANGELOG.md`, commit.
+2. Set the version in `src/tabmancer/__init__.py`, add it to `CHANGELOG.md`, and set
+   `TESTED_WITH` in `src/tabmancer/doctor.py` to the Claude Code version you checked the release
+   with (`claude --version`; `tabmancer doctor` then says so). Commit.
 3. `git tag v0.1.0 && git push --tags`. The workflow checks that the tag matches the version,
    runs the tests, builds and publishes.
