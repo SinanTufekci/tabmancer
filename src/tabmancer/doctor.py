@@ -30,6 +30,8 @@ from .shutdowns import recent_shutdowns
 SAMPLE = 30
 MARKS = {"ok": "✓", "warn": "!", "fail": "✗"}
 Result = tuple[str, str]  # (level, message); level is ok, warn or fail
+SHUTDOWN_RECORDS = {"win32": "the System event log", "darwin": "`last shutdown`",
+                    "linux": "the systemd journal or wtmp (`last -x`)"}
 # The Claude Code tabmancer was last checked with: see CONTRIBUTING.md, "Releasing".
 TESTED_WITH = "2.1.310"
 # What tabmancer runs claude with, by subcommand ("" for claude itself), and what each is for.
@@ -123,8 +125,9 @@ def checks() -> list[Result]:
 
     terminal = terminal_kind()
     if terminal == "none":
-        found.append(("warn", ("No supported terminal found (Windows Terminal or tmux): tabmancer "
-                               "prints the commands instead of opening tabs.")))
+        found.append(("warn", ("No terminal tabmancer can open tabs in (Windows Terminal, tmux, WezTerm, kitty, "
+                               "iTerm2, Terminal.app, GNOME Terminal, Konsole): it prints the commands "
+                               "instead.")))
     else:
         found.append(("ok", f"Tabs open in: {terminal}"))
 
@@ -141,13 +144,13 @@ def checks() -> list[Result]:
             found.append(("warn", (f"{clis.label(name)} is on but not on PATH: its {listed} sessions are "
                                    "listed but cannot be opened.")))
 
-    if sys.platform == "win32":
-        shutdowns = recent_shutdowns()
-        if shutdowns:
-            found.append(("ok", f"Shutdown records readable (latest {shutdowns[0]:%d %b %H:%M})."))
-        else:
-            found.append(("warn", ("No shutdown records in the System event log: sessions open at the "
-                                   "last shutdown cannot be ticked automatically.")))
+    shutdowns = recent_shutdowns()
+    if shutdowns:
+        found.append(("ok", f"Shutdown records readable (latest {shutdowns[0]:%d %b %H:%M})."))
+    else:
+        found.append(("warn", (f"No shutdown records in {SHUTDOWN_RECORDS.get(sys.platform, SHUTDOWN_RECORDS['linux'])}: "
+                               "sessions that ended together are ticked as open at the last shutdown "
+                               "instead.")))
 
     cache = read_json(CACHE_FILE)
     cached = len(cache.get("entries", {})) if isinstance(cache, dict) else 0

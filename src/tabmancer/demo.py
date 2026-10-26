@@ -346,6 +346,7 @@ def picker(days: float = 14):
     """The dashboard, saying all along that it is the demo; its tell() is for stand_ins()."""
     from textual.widgets import Static
 
+    from . import app as app_module
     from .app import SessionPicker
 
     class Demo(SessionPicker):
@@ -353,6 +354,13 @@ def picker(days: float = 14):
             super().on_mount()
             self.query_one("#brand", Static).update("◆ tabmancer demo")
             self.notify(NOTE, title="Demo", timeout=12)
+
+        def open_sessions(self, launches: list) -> None:
+            app_module.open_tabs(launches)  # the stand-in, which says what would have opened
+
+        def notify(self, message, *args, **kwargs) -> None:
+            if not str(message).startswith("Opened "):  # nothing did: tell() said what would have
+                super().notify(message, *args, **kwargs)
 
         def tell(self, text: str) -> None:
             try:

@@ -1,4 +1,5 @@
 import json
+import sys
 from datetime import datetime, timezone
 
 from tabmancer import doctor, sessions
@@ -112,6 +113,15 @@ def test_a_newer_claude_code_than_last_checked_gets_a_word():
     assert doctor.version_check(f"{major}.{minor + 1}.0 (Claude Code)")[0] == "warn"
     assert doctor.version_check(f"{major + 1}.0.0 (Claude Code)")[0] == "warn"
     assert doctor.version_check("claude")[0] == "ok"  # no version to read: just the path
+
+
+def test_shutdown_records_are_checked_on_every_platform(monkeypatch):
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)  # no claude, no terminal
+    monkeypatch.setattr(doctor, "recent_shutdowns", list)
+    results = doctor.checks()
+    told = [message for level, message in results if level == "warn" and "No shutdown records in" in message]
+    assert told and doctor.SHUTDOWN_RECORDS.get(sys.platform, doctor.SHUTDOWN_RECORDS["linux"]) in told[0]
+    assert any("WezTerm" in message for _, message in results)  # every terminal it can open tabs in
 
 
 def test_run_exit_code(monkeypatch, capsys):

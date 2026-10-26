@@ -1,6 +1,7 @@
 """`tabmancer --demo`: the made-up sessions in the dashboard, and nothing real within reach."""
 
 import pytest
+from conftest import box_has_focus
 
 from tabmancer import cli, demo
 
@@ -42,13 +43,41 @@ async def test_the_demo_lists_the_made_up_sessions_says_so_and_opens_nothing(in_
         assert {"pcb-router", "web-app"} <= app.preselected  # open at the made-up shutdown
         assert "demo" in str(app.query_one("#brand").render())
         assert demo.NOTE in told(app)
+        # On a session's row: on the team's, which may come in first, Enter unfolds the team.
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if "pcb-router" in app.table.rows:
+                break
+        app.table.move_cursor(row=app.table.get_row_index("pcb-router"))
         await pilot.press("enter")
-        for _ in range(50):
+        for _ in range(100):
             await pilot.pause(0.05)
             if any("Nothing opens in the demo" in note for note in told(app)):
                 break
         opening = [note for note in told(app) if "Nothing opens in the demo" in note]
         assert opening and "claude --resume" in opening[0]
+        await pilot.pause(0.3)
+        assert not [note for note in told(app) if note.startswith("Opened")]  # it did not
+        assert app.selected  # still ticked: nothing was opened
+
+
+async def test_a_prompt_written_in_the_demo_opens_nothing_and_says_so(in_demo):
+    app = in_demo
+    async with app.run_test(size=(150, 40)) as pilot:
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if "mobile" in app.table.rows:
+                break
+        app.table.move_cursor(row=app.table.get_row_index("mobile"))
+        await pilot.press("p")
+        await box_has_focus(pilot, app)
+        await pilot.press(*"go on", "enter")
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if any("Nothing opens in the demo" in note for note in told(app)):
+                break
+        assert any("claude --resume mobile" in note for note in told(app))
+        assert not [note for note in told(app) if note.startswith("Opened")]
 
 
 def test_the_made_up_answers_stand_in_for_the_models(in_demo):
