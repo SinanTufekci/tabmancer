@@ -13,16 +13,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
 HOME, SIGNALS = Path(sys.argv[1]), Path(sys.argv[2])
 os.environ["CLAUDE_CONFIG_DIR"] = str(HOME / "claude")
 os.environ["TABMANCER_CONFIG_DIR"] = str(HOME / "config")
 os.environ.pop("NO_COLOR", None)  # a window started from a test shell may have it: every colour grey
-sys.path.insert(0, str(HERE))
-
-import demo_data  # the made-up sessions
 
 from tabmancer import app as app_module
+from tabmancer import demo as demo_data  # the made-up sessions
 from tabmancer import focus, report, sessions, summarize, teams, toast, usage
 from tabmancer.app import TEAM_ROW, SessionPicker
 from tabmancer.teamview import TeamScreen

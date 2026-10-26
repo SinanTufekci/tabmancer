@@ -1,7 +1,10 @@
-"""The made-up sessions the README's pictures show: build_home() writes them into a folder that
-stands in for ~/.claude, build_team() adds a team at work. scripts/window_shots.py and
-scripts/demo_window.py use them; your real sessions are never read, so nothing private can end up
-in docs/.
+"""`tabmancer --demo`: the dashboard over made-up sessions, to see what it does before you have any.
+
+build_home() writes the sessions into a folder that stands in for ~/.claude, and build_team() adds
+a team at work. The README's pictures show them too (scripts/window_shots.py and
+scripts/demo_window.py), so your real sessions are never read and nothing private can end up in
+docs/. In the demo nothing real is read or touched: no tabs open, no model is asked, nothing is
+typed, renamed, stopped or saved outside a folder of its own, which goes when the demo closes.
 """
 
 from __future__ import annotations
@@ -9,8 +12,11 @@ from __future__ import annotations
 import json
 import os
 import random
+import shutil
 import sys
+import tempfile
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -164,7 +170,7 @@ def build_home(home: Path) -> None:
 def made_up_limits() -> None:
     """Four days of plan-limit readings, as the dashboard would have taken them: the week
     fills during working hours, the five-hour session limit rises and resets."""
-    from tabmancer import usage
+    from . import usage
 
     now = datetime.now().replace(second=0, microsecond=0)
     week_resets = now + timedelta(days=2, hours=5)
@@ -198,7 +204,7 @@ TALK = [  # (minutes ago, sender, receiver, summary)
 def build_team(home: Path):
     """A made-up team at work, "shop": each member's transcript with the messages between them,
     saved as tabmancer's team. Returns the team and its members' live states."""
-    from tabmancer import teams
+    from . import teams
 
     folder = f"{ROOT}{os.sep}shop"  # only named: nothing is read from it
     team = teams.new_team("shop", folder, "Add Stripe checkout with an end-to-end test",
@@ -233,3 +239,138 @@ def build_team(home: Path):
 
 def _ago(minutes: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z")
+
+
+# --- tabmancer --demo ---------------------------------------------------------------------------
+
+NOTE = ("These sessions are made up. Try any key: in the demo nothing opens, no model is asked, and "
+        "nothing of yours is read or changed. q quits.")
+SUMMARY_ANSWER = ("Made up for the demo. For real, Claude Code reads the session and says in a few "
+                  "sentences what it was about and where it stopped, on your own plan.")
+HANDOVER_ANSWER = ("A made-up handover. For real it holds the goal, the decisions and why, what is done, "
+                   "what is open or broken, and the next steps.")
+GIT = {  # project -> (changed, to push): what the sidebar's ± and ↑ show
+    "pcb-router": (3, 0), "web-app": (0, 2), "docs-site": (1, 0),
+}
+
+
+def prepare(home: Path) -> list[dict]:
+    """Write the made-up sessions, a team, plan limits and a summary under home, which stands in for
+    ~/.claude and tabmancer's own folder from now on. Returns what `claude agents --json` would say."""
+    from . import summarize
+
+    os.environ["CLAUDE_CONFIG_DIR"] = str(home / "claude")
+    os.environ["TABMANCER_CONFIG_DIR"] = str(home / "config")
+    os.environ["CODEX_HOME"] = str(home / "codex")  # should Codex be turned on (,): no sessions
+    build_home(home / "claude")
+    _, team_live = build_team(home / "claude")
+    made_up_limits()
+    pcb = next((home / "claude").glob("projects/*/pcb-router.jsonl"))
+    summarize._store("pcb-router", {"summary": SUMMARY, "size": pcb.stat().st_size, "model": "haiku"})
+    return LIVE + team_live
+
+
+def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list[tuple[object, str, object]]:
+    """What the demo puts in place of everything that reaches outside it, as (module, name, value):
+    tabs, background sessions, tab focus, toasts, typing into consoles, renames, models, plan
+    limits, git, the shutdown log, and saves to your Downloads. tell() says what would have happened."""
+    from . import (
+        agy,
+        background,
+        focus,
+        gitstate,
+        handover,
+        rename,
+        report,
+        sessions,
+        stats,
+        summarize,
+        toast,
+        typein,
+        usage,
+    )
+    from . import app as app_module
+    from .launch import shell_line
+
+    def opened(launches: list) -> list[str]:
+        line = shell_line(launches[0])
+        line = line if len(line) <= 160 else line[:159] + "…"
+        more = f" (and {len(launches) - 1} more)" if len(launches) > 1 else ""
+        tell(f"Nothing opens in the demo. For real, a new tab would run: {line}{more}")
+        return []
+
+    def refused(what: str) -> Callable:
+        def refuse(*args, **kwargs):
+            raise OSError(f"Nothing {what} in the demo.")
+        return refuse
+
+    def no_handover(session):
+        raise handover.HandoverError("In the demo no session is resumed to write its handover.")
+
+    def answer(prompt: str, model: str, timeout: float = 180) -> str:
+        if prompt.startswith(report.INSTRUCTIONS):
+            return DEMO_REPORT
+        return HANDOVER_ANSWER if prompt.startswith(handover.INSTRUCTIONS) else SUMMARY_ANSWER
+
+    def git(folder: str):
+        changed, ahead = GIT.get(Path(folder).name, (0, 0))
+        return gitstate.GitState(branch="main", changed=changed, ahead=ahead, upstream=True)
+
+    now = datetime.now()
+    limits = [usage.Limit("session", 34, now + timedelta(hours=2, minutes=10), ""),
+              usage.Limit("week", 61, now + timedelta(days=2, hours=5), "")]
+    save_report, save_stats = report.save, stats.write_files
+    return [
+        (sessions, "_agents_json", lambda include_finished=False: live),
+        (app_module, "recent_shutdowns", lambda: [SHUTDOWN]),
+        (app_module, "open_tabs", opened),
+        (app_module, "run_in_background", refused("starts in the background")),
+        (background, "_run", refused("is stopped or removed")),
+        (focus, "focus_tab", lambda title: False),
+        (focus, "close_tab", lambda title: False),
+        (toast, "show", lambda title, body, dashboard: toast.FAILED),
+        (typein, "write_keys", lambda pid, text: False),
+        (rename, "rename", refused("is renamed")),
+        (handover, "write_itself", no_handover),
+        (summarize, "ask", answer),
+        (usage, "read_usage", lambda: list(limits)),
+        (usage, "read_codex", lambda now=None: []),
+        (agy, "home", lambda: home / "gemini"),
+        (gitstate, "read", git),
+        (report, "save", lambda entry, folder=None: save_report(entry, home)),
+        (stats, "write_files", lambda numbers, listed, folder=None: save_stats(numbers, listed, home)),
+    ]
+
+
+def picker(days: float = 14):
+    """The dashboard, saying all along that it is the demo; its tell() is for stand_ins()."""
+    from textual.widgets import Static
+
+    from .app import SessionPicker
+
+    class Demo(SessionPicker):
+        def on_mount(self) -> None:
+            super().on_mount()
+            self.query_one("#brand", Static).update("◆ tabmancer demo")
+            self.notify(NOTE, title="Demo", timeout=12)
+
+        def tell(self, text: str) -> None:
+            try:
+                self.call_from_thread(self.notify, text, title="Demo", timeout=10)
+            except RuntimeError:  # already on the app's own thread
+                self.notify(text, title="Demo", timeout=10)
+
+    return Demo(days=days)
+
+
+def run(days: float = 14) -> None:
+    """The dashboard over the made-up sessions, in a folder of its own that goes when it closes."""
+    home = Path(tempfile.mkdtemp(prefix="tabmancer-demo-"))
+    try:
+        live = prepare(home)
+        demo = picker(days)
+        for module, name, value in stand_ins(home, live, demo.tell):
+            setattr(module, name, value)
+        demo.run()
+    finally:
+        shutil.rmtree(home, ignore_errors=True)

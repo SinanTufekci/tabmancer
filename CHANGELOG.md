@@ -27,6 +27,8 @@ The first release.
 - **Stats** (`u`): tokens, when you work, tools and files, plan limits with a forecast, and a
   written report of a period.
 - **Codex and Antigravity** sessions in the same list, if you turn them on (`,`).
+- **A demo** (`tabmancer --demo`): the dashboard over made-up sessions, to try every key before
+  you have sessions of your own. Nothing of yours is read or changed.
 - **Windows first**: Windows Terminal tabs, start at login, desktop notifications, a desktop
   shortcut. macOS and Linux: tmux, WezTerm, kitty, iTerm2, Terminal.app, GNOME Terminal and
   Konsole tabs, and their own ways to start at login.

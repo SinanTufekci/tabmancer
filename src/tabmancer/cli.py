@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> None:
         target.add_argument("--days", type=float, help="how far back to look (default 14)")
         target.add_argument("--all", action="store_true",
                             help="include non-terminal sessions (claude -p, desktop app, IDE)")
+    parser.add_argument("--demo", action="store_true",
+                        help="the dashboard over made-up sessions, to try it: nothing of yours is read or changed")
     parser.set_defaults(days=None, all=False)  # 14, or a week for report: see below
     sub = parser.add_subparsers(dest="command", metavar="command")
     listing = sub.add_parser("list", parents=[filters],
@@ -90,7 +92,13 @@ def main(argv: list[str] | None = None) -> None:
     if args.days is None:
         args.days = 7 if args.command == "report" else 14
 
-    if args.command == "list":
+    if args.demo:
+        if args.command:
+            parser.error("--demo opens the dashboard: leave out the command")
+        from .demo import run
+
+        run(args.days)
+    elif args.command == "list":
         print_sessions(args.days, args.all, args.json)
     elif args.command == "tokens":
         print_tokens(args.days, args.json)

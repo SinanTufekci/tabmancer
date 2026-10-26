@@ -86,13 +86,12 @@ def wait_for(condition, seconds: float, what: str):
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "frames").mkdir(exist_ok=True)
-    sys.path.insert(0, str(HERE))
-    import demo_data
+    from tabmancer import demo  # the made-up sessions
 
     with tempfile.TemporaryDirectory(prefix="tabmancer-window-") as tmp:
         home, signals = Path(tmp), Path(tmp) / "signals"
         os.environ["TABMANCER_CONFIG_DIR"] = str(home / "config")
-        demo_data.build_home(home / "claude")
+        demo.build_home(home / "claude")
         before = terminal_windows()
         python = Path(sys.executable)
         venv_python = HERE.parent / ".venv" / "Scripts" / "python.exe"  # the project's, with textual
