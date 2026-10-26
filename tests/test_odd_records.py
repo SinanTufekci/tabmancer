@@ -79,7 +79,9 @@ async def test_the_dashboard_opens_over_odd_records_and_says_what_it_left_out(fa
     async with app.run_test() as pilot:
         for _ in range(200):
             await pilot.pause(0.05)
-            if len(app.sessions) == 2 + len(ODD) and app._notifications:
+            # notify() only posts a message: the note is in the list a moment after the sessions are
+            if len(app.sessions) == 2 + len(ODD) and any("could not be read" in note.message
+                                                         for note in app._notifications):
                 break
         assert app.is_running and len(app.sessions) == 2 + len(ODD), sorted(app.sessions)
         notes = [note.message for note in app._notifications]
