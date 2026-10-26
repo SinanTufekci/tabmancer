@@ -24,8 +24,11 @@ Parsed results are cached by file size and modification time, so the list opens
 instantly. The first run reads each recent transcript once.
 
 The transcript format is internal to Claude Code and can change between releases.
-tabmancer reads it defensively: a field it cannot read shows up empty instead of
-crashing the picker. `tabmancer doctor` notices when too many fields come up empty.
+tabmancer reads it defensively: a field of a type it does not expect is left out and shows up
+empty, a transcript it cannot read at all is left out of the list (the dashboard says how many,
+`tabmancer doctor` says why), and an error in the background is told in a notification and
+written to `errors.log` in tabmancer's own folder instead of closing the dashboard.
+`tabmancer doctor` also notices when too many fields come up empty.
 
 ## Status
 
