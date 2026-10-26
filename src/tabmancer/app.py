@@ -926,11 +926,20 @@ class SessionPicker(App[list[str]]):
                 self.table.update_cell(key, "title", self.team_chips(state))
         for session in self.visible():
             sid = session.session_id
-            animated = session.exit is Exit.RUNNING or sid in self.flash
-            if animated and sid in self.table.rows:
+            if self.animates(session) and sid in self.table.rows:
                 self.table.update_cell(sid, "status", self.status_cell(session))
             if self.flash.get(sid, now) < now:
                 del self.flash[sid]  # drawn one last time without the highlight
+
+    def animates(self, session: Session) -> bool:
+        """Whether its status cell changes from one frame to the next: a turning star, the red
+        pulse, a fading flash. Only those are touched: the table draws itself anew for every cell
+        that changes, so an open session waiting quietly would redraw it twelve times a second."""
+        if session.session_id in self.flash:
+            return True
+        if at_limit(session) or session.exit is not Exit.RUNNING:
+            return False
+        return session.live_state.lower() in SPINNING or state_of(session)[2] == 0
 
     def update_dashboard(self) -> None:
         sessions = self.in_sight()  # what is hidden is not counted either

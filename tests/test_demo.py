@@ -10,7 +10,9 @@ from tabmancer import cli, demo
 def in_demo(tmp_path, monkeypatch):
     """The demo's dashboard, folder and stand-ins, all put back after the test."""
     monkeypatch.setenv("CODEX_HOME", "restored after the test")  # prepare() sets it too
-    live = demo.prepare(tmp_path)
+    # Every open session waits quietly: sessions at work redraw the table twelve times a second,
+    # which the Windows runner could not keep up with (these tests took minutes there).
+    live = [dict(entry, status="idle", state="idle") for entry in demo.prepare(tmp_path)]
     app = demo.picker()
     for module, name, value in demo.stand_ins(tmp_path, live, app.tell):
         monkeypatch.setattr(module, name, value)
