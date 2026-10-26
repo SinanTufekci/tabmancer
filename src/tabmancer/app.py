@@ -372,6 +372,12 @@ class WorkspaceList(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+def resumes(launch: Launch) -> bool:
+    """Whether it takes up a Claude Code session as it is (resume, auto-continue), where a second
+    process would write to the same transcript. A fork or a fresh session gets one of its own."""
+    return launch.cli == "claude" and launch.mode in (Mode.RESUME, Mode.AUTO) and bool(launch.session_id)
+
+
 class SessionPicker(App[list[str]]):
     """The dashboard. It stays open while sessions open in tabs beside it; it exits with
     shell commands only when no supported terminal can open the tabs itself."""
@@ -484,6 +490,7 @@ class SessionPicker(App[list[str]]):
         self.found: tuple[str, int, set[str]] = ("", -1, set())  # filter, version, sessions
         self.queued: dict[str, str] = {}  # h on a busy session: id -> how, handed over once it finishes
         self.full_poll_due = False  # a full live poll is on its way: quick ones wait (poll_live)
+        self.full_polls = 0  # full live polls come back so far: open_elsewhere asks the CLI itself before the first
         self.marks = marks.Marks.load()  # hidden and pinned sessions
         self.git: dict[str, gitstate.GitState] = {}  # folder key -> where it stands in git
         self.show_hidden = False  # X: the hidden ones are listed too
@@ -1492,6 +1499,11 @@ class SessionPicker(App[list[str]]):
                 self.notify(f"{clis.label(session.cli)} has no background sessions: opening a tab instead.",
                             severity="warning")
                 how = "tab"
+            if self.open_elsewhere([launch]):  # opened since the list last looked: write it there
+                self.notify(f"{session.project} is open in another tab now: write to it there.", severity="warning",
+                            timeout=10)
+                self.poll_live()
+                return
             if how == "tab":
                 leftover = open_tabs([launch])
                 if leftover:
@@ -2598,6 +2610,7 @@ class SessionPicker(App[list[str]]):
     def apply_live_updates(self, updates: dict[str, Session], full: bool = False) -> None:
         if full:
             self.full_poll_due = False
+            self.full_polls += 1
         self.warn_crowded(updates.values())
         turned: list[Session] = []  # were working and now wait for you, or stopped at a limit
         for sid, fresh in updates.items():
@@ -2745,7 +2758,18 @@ class SessionPicker(App[list[str]]):
         self.open_sessions([self.launch_for(s, saved) for s in teams.lead_last(chosen, saved)])
 
     def open_sessions(self, launches: list[Launch]) -> None:
-        """Open sessions in new tabs beside the dashboard, which stays open."""
+        """Open sessions in new tabs beside the dashboard, which stays open. One that a Claude
+        process has open right now, in another tab or in the background, is not opened again."""
+        taken = self.open_elsewhere(launches)
+        if taken:
+            again = [launch for launch in launches if resumes(launch) and launch.session_id in taken]
+            self.notify(f"Open already, so not opened again: {', '.join(launch.title for launch in again)}.",
+                        severity="warning", timeout=10)
+            self.selected -= taken
+            self.poll_live()  # show them as open
+            launches = [launch for launch in launches if launch not in again]
+            if not launches:
+                return
         leftover = open_tabs(launches)
         if leftover:
             # No terminal that can open tabs: close, and leave the commands to run by hand.
@@ -2760,6 +2784,20 @@ class SessionPicker(App[list[str]]):
         what = launches[0].title if len(launches) == 1 else f"{len(launches)} sessions"
         self.notify(f"Opened {what} in {'a new tab' if len(launches) == 1 else 'new tabs'}.", timeout=4)
         self.set_timer(5, lambda: self.poll_live(full=True))  # show them as open once started
+
+    def open_elsewhere(self, launches: list[Launch]) -> set[str]:
+        """Which of these sessions to resume a Claude process has open right now. Two processes on
+        one transcript would both write to it, so this is asked afresh, not taken from the list:
+        the pid files, and the background sessions of the last full poll (they have no pid file),
+        or before the first full poll has come back, `claude agents --json` itself (half a second)."""
+        wanted = {launch.session_id for launch in launches if resumes(launch)}
+        if not wanted:
+            return set()
+        if self.full_polls:
+            live = {entry["sessionId"] for entry in _registry_sessions()} | set(self.background_live)
+        else:
+            live = set(live_sessions())
+        return wanted & live
 
     @work(thread=True, exclusive=True, group="focus")
     def go_to_tab(self, session: Session) -> None:

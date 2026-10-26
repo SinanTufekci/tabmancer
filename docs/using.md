@@ -96,6 +96,9 @@ Claude to carry on with the interrupted work, so you do not have to type "contin
 every tab. It is the default for sessions that were cut off, left unanswered or ended
 on an error. **fork** runs `claude --resume <id> --fork-session`, a new session that
 starts from a copy of the history. **new** runs a fresh `claude` in that session's folder.
+A session that is open right now, in another tab or in the background, is never resumed a
+second time: just before it opens anything, tabmancer asks again which sessions are open,
+since the list can be a moment behind.
 To move a session's work to a fresh one, press `h` (see
 [Crowded sessions and handing over](handover.md#crowded-sessions-and-handing-over)).
 

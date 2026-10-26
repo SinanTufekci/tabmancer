@@ -77,12 +77,13 @@ async def test_the_dashboard_opens_over_odd_records_and_says_what_it_left_out(fa
     sessions.UNREADABLE["TypeError: made up"] += 2  # as if two could not be read
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
-        for _ in range(60):
+        for _ in range(200):
             await pilot.pause(0.05)
-            if app.sessions:
+            if len(app.sessions) == 2 + len(ODD) and app._notifications:
                 break
-        assert app.is_running and len(app.sessions) == 2 + len(ODD)
-        assert any("2 transcripts could not be read" in note.message for note in app._notifications)
+        assert app.is_running and len(app.sessions) == 2 + len(ODD), sorted(app.sessions)
+        notes = [note.message for note in app._notifications]
+        assert any("2 transcripts could not be read" in note for note in notes), notes
     sessions.UNREADABLE.clear()
 
 
