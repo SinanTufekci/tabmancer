@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import subprocess
 import sys
 import textwrap
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -136,6 +138,7 @@ def badge(style: str) -> str:
 LIVE_REFRESH_SECONDS = 2  # quick poll of the pid files
 FULL_POLL_EVERY = 8        # every 8th poll asks `claude agents --json` (background sessions too)
 SPIN_SECONDS = 0.08
+TIMER_THREADS = 64  # Windows: a thread for every timer at once, the team view's and dialogs' too
 USAGE_SECONDS = 300  # plan limits change slowly; `claude -p /usage` is cheap but not free
 TOKENS_SECONDS = 60  # token counts: only what transcripts gained since the last count is read
 GIT_SECONDS = 60  # where each project's folder stands in git (git status: local, no network)
@@ -535,6 +538,15 @@ class SessionPicker(App[list[str]]):
         if self.screen.styles.background.a == 1:
             return []
         return super()._background_screens
+
+    def on_load(self) -> None:
+        # On Windows Textual sleeps out every timer in a thread of asyncio's default pool, which
+        # has as many threads as cores + 4. The dashboard runs a dozen timers, some sleeping for
+        # minutes: on a 4-core machine they took every thread, the rest (the screen's own updates
+        # among them) waited their turn, and the dashboard froze for seconds at a time.
+        if sys.platform == "win32":
+            asyncio.get_running_loop().set_default_executor(
+                ThreadPoolExecutor(max_workers=TIMER_THREADS, thread_name_prefix="timers"))
 
     def on_mount(self) -> None:
         # Keep references: App.query_one searches the active screen, which is a

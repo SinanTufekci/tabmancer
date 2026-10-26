@@ -351,7 +351,6 @@ def picker(days: float = 14):
 
     class Demo(SessionPicker):
         def on_mount(self) -> None:
-            super().on_mount()
             self.query_one("#brand", Static).update("◆ tabmancer demo")
             self.notify(NOTE, title="Demo", timeout=12)
 

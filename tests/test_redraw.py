@@ -1,8 +1,23 @@
 """The table draws itself anew for every cell that changes, so each frame touches only the cells
 that animate: an open session waiting quietly would otherwise redraw it twelve times a second."""
 
+import asyncio
+import sys
+
+import pytest
+
 from tabmancer import sessions
-from tabmancer.app import SessionPicker
+from tabmancer.app import TIMER_THREADS, SessionPicker
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Textual sleeps in threads on Windows only")
+async def test_on_windows_every_timer_gets_a_thread_of_its_own(fake_home):
+    # Textual sleeps out each timer in a thread of asyncio's default pool, cores + 4 threads: on a
+    # 2-core machine the dashboard's timers outnumbered them and these tests ran 2.7 times slower.
+    app = SessionPicker(days=14)
+    async with app.run_test() as pilot:
+        await pilot.pause(0.2)
+        assert asyncio.get_running_loop()._default_executor._max_workers == TIMER_THREADS
 
 
 async def test_each_frame_touches_only_the_cells_that_animate(fake_home, monkeypatch):

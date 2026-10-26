@@ -35,7 +35,6 @@ class Demo(SessionPicker):
     """The scenes, one after another, each held until its picture is taken."""
 
     def on_mount(self) -> None:
-        super().on_mount()
         self.started = time.monotonic()
         self.scene = 0
         self.steps = [self.first, self.card, self.card_off_team_row, self.unfold, self.team_view, self.back_live,

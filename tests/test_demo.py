@@ -4,15 +4,14 @@ import pytest
 from conftest import box_has_focus
 
 from tabmancer import cli, demo
+from tabmancer.app import SessionPicker
 
 
 @pytest.fixture
 def in_demo(tmp_path, monkeypatch):
     """The demo's dashboard, folder and stand-ins, all put back after the test."""
     monkeypatch.setenv("CODEX_HOME", "restored after the test")  # prepare() sets it too
-    # Every open session waits quietly: sessions at work redraw the table twelve times a second,
-    # which the Windows runner could not keep up with (these tests took minutes there).
-    live = [dict(entry, status="idle", state="idle") for entry in demo.prepare(tmp_path)]
+    live = demo.prepare(tmp_path)
     app = demo.picker()
     for module, name, value in demo.stand_ins(tmp_path, live, app.tell):
         monkeypatch.setattr(module, name, value)
@@ -32,6 +31,17 @@ def test_everything_that_reaches_outside_has_a_stand_in(tmp_path):
         "usage.read_usage", "usage.read_codex", "background._run", "report.save", "stats.write_files",
         "app.recent_shutdowns", "gitstate.read", "agy.home",
     }
+
+
+async def test_the_demo_sets_the_dashboard_up_once(in_demo, monkeypatch):
+    # Textual calls on_mount on every class that has one: a super() call made it twice, every timer
+    # twice, and the Windows runner could not keep up with the timers (the tests took minutes).
+    mounted = []
+    mount = SessionPicker.on_mount
+    monkeypatch.setattr(SessionPicker, "on_mount", lambda self: mounted.append(1) or mount(self))
+    async with in_demo.run_test(size=(150, 40)) as pilot:
+        await pilot.pause(0.3)
+    assert len(mounted) == 1
 
 
 async def test_the_demo_lists_the_made_up_sessions_says_so_and_opens_nothing(in_demo):
