@@ -18,9 +18,14 @@ from .sessions import Exit, Session
 # User32 1074: shutdown/restart requested. EventLog 6006: log service stopped.
 # Kernel-General 13: OS shutting down. All three are written during a normal
 # shutdown, including one with Fast Startup (which leaves the boot time stale).
+# A crash or a power cut writes none of them; the boot after it writes EventLog 6008 (the last
+# shutdown was unexpected) and Kernel-Power 41 (rebooted without shutting down cleanly), whose
+# times stand for it: later than anything the sessions wrote before it.
 _QUERY = ("*[System[(Provider[@Name='User32'] and EventID=1074)"
           " or (Provider[@Name='EventLog'] and EventID=6006)"
-          " or (Provider[@Name='Microsoft-Windows-Kernel-General'] and EventID=13)]]")
+          " or (Provider[@Name='Microsoft-Windows-Kernel-General'] and EventID=13)"
+          " or (Provider[@Name='EventLog'] and EventID=6008)"
+          " or (Provider[@Name='Microsoft-Windows-Kernel-Power'] and EventID=41)]]")
 BEFORE = timedelta(minutes=3)
 AFTER = timedelta(minutes=1)
 LOOKBACK = timedelta(hours=24)
@@ -133,11 +138,19 @@ def open_at_shutdown(sessions: list[Session], shutdowns: list[datetime]) -> set[
                 break
     else:
         picked = _newest_cluster(ended)
-    # A process that died without cleaning up (crash, power loss) recently.
-    now = datetime.now()
-    picked |= {s.session_id for s in sessions
-               if s.exit is Exit.KILLED and now - s.last_active < timedelta(hours=24)}
+    picked |= {s.session_id for s in sessions if went_down_with_the_machine(s, shutdowns)}
     return picked
+
+
+def went_down_with_the_machine(session: Session, shutdowns: list[datetime]) -> bool:
+    """A session whose process died without cleaning up, lately, and with the machine: a shutdown
+    gave it no time, or a crash or power cut took it. One killed while the machine ran on (from
+    Task Manager, or with a terminal that crashed) was ended on purpose, or can be ticked by hand,
+    so it is not, and not told to carry on by itself. Where no shutdown can be read, every
+    session killed lately counts."""
+    if session.exit is not Exit.KILLED or datetime.now() - session.last_active >= LOOKBACK:
+        return False
+    return not shutdowns or shutdowns[0] + AFTER >= session.last_active
 
 
 def _newest_cluster(ended: list[Session], gap: timedelta = timedelta(seconds=90)) -> set[str]:

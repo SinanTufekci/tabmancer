@@ -19,6 +19,10 @@ tabmancer reads the start and end of each recent transcript:
   earlier boot's last entry) or else wtmp on Linux, and from `last` on macOS. A session
   whose last write lands moments before a shutdown counts as open at that shutdown. Where
   none can be read, sessions that ended within the same minute or two count instead.
+- A session whose process died without cleaning up counts too, within a day, if the machine
+  went down after it: a shutdown that gave it no time, or a crash or a power cut (which
+  Windows notes when it starts again). One killed while the machine ran on, from Task Manager
+  say, shows as `killed` but is not ticked, so it does not carry on by itself.
 
 Parsed results are cached by file size and modification time, so the list opens
 instantly. The first run reads each recent transcript once.

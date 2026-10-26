@@ -156,12 +156,32 @@ def test_open_at_shutdown_matches_window(home):
         session("at-shutdown", shutdown - timedelta(seconds=40)),
         session("also", shutdown - timedelta(seconds=5)),
         session("closed-earlier", shutdown - timedelta(hours=2)),
-        session("crashed", now - timedelta(hours=1), Exit.KILLED),
         session("running", now, Exit.RUNNING),
     ]
-    assert open_at_shutdown(sessions, [shutdown]) == {"at-shutdown", "also", "crashed"}
+    assert open_at_shutdown(sessions, [shutdown]) == {"at-shutdown", "also"}
     # Without shutdown records: sessions that ended together.
-    assert open_at_shutdown(sessions, []) == {"at-shutdown", "also", "crashed"}
+    assert open_at_shutdown(sessions, []) == {"at-shutdown", "also"}
+
+
+def test_a_killed_session_is_ticked_only_when_the_machine_went_down_after_it(home):
+    now = datetime.now()
+
+    def killed(name, ended):
+        s = S.Session(session_id=name, path=Path(name), last_active=ended)
+        s.exit = Exit.KILLED
+        return s
+
+    shutdown = now - timedelta(hours=10)
+    by_shutdown = killed("by-shutdown", shutdown + timedelta(seconds=20))  # written to while it went down
+    by_hand = killed("by-hand", now - timedelta(hours=1))  # Task Manager, with the machine running on
+    long_ago = killed("long-ago", now - timedelta(days=3))
+    sessions = [by_shutdown, by_hand, long_ago]
+    assert open_at_shutdown(sessions, [shutdown]) == {"by-shutdown"}
+    # A crash or a power cut since: the boot after it (Kernel-Power 41, EventLog 6008) stands for it.
+    crash_boot = now - timedelta(minutes=30)
+    assert open_at_shutdown(sessions, [crash_boot, shutdown]) == {"by-shutdown", "by-hand"}
+    # No shutdown can be read at all: every session killed lately.
+    assert open_at_shutdown(sessions, []) == {"by-shutdown", "by-hand"}
 
 
 def test_files_outside_the_project_are_left_out(home):
