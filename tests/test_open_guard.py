@@ -65,3 +65,32 @@ async def test_a_prompt_for_a_session_opened_elsewhere_meanwhile_is_not_sent(fak
         await pilot.pause(0.2)
         assert opened == []
         assert any("open in another tab now" in note for note in told(app))
+
+
+async def test_a_session_that_never_comes_up_is_named(fake_home, opened, monkeypatch):
+    monkeypatch.setattr(app_module, "CAME_UP_SECONDS", 0.5)
+    app = SessionPicker(days=14)
+    async with app.run_test() as pilot:
+        await loaded(pilot, app)
+        app.table.move_cursor(row=app.table.get_row_index("one"))
+        await pilot.press("enter")  # Claude Code would not resume it: no process ever shows up
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if any("did not come up" in note for note in told(app)):
+                break
+        assert [launch.session_id for launch in opened] == ["one"]
+        assert any("demo did not come up: its tab says why" in note for note in told(app))
+
+
+async def test_a_session_that_comes_up_is_not_named(fake_home, opened, monkeypatch):
+    monkeypatch.setattr(app_module, "CAME_UP_SECONDS", 1.0)
+    app = SessionPicker(days=14)
+    async with app.run_test() as pilot:
+        await loaded(pilot, app)
+        app.table.move_cursor(row=app.table.get_row_index("one"))
+        await pilot.press("enter")
+        monkeypatch.setattr(app_module, "_registry_sessions", lambda: [{"sessionId": "one", "pid": 1}])
+        app.poll_live(full=False)  # its pid file is there: it came up
+        await pilot.pause(1.5)
+        assert "one" in app.came_up
+        assert not any("did not come up" in note for note in told(app))

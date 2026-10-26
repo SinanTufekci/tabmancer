@@ -98,7 +98,8 @@ on an error. **fork** runs `claude --resume <id> --fork-session`, a new session 
 starts from a copy of the history. **new** runs a fresh `claude` in that session's folder.
 A session that is open right now, in another tab or in the background, is never resumed a
 second time: just before it opens anything, tabmancer asks again which sessions are open,
-since the list can be a moment behind.
+since the list can be a moment behind. And if one it opened has not come up after a while
+(Claude Code would not resume it, its folder gone say), the dashboard names it; its tab says why.
 To move a session's work to a fresh one, press `h` (see
 [Crowded sessions and handing over](handover.md#crowded-sessions-and-handing-over)).
 

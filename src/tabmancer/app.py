@@ -148,6 +148,7 @@ CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
 FLASH_SECONDS = 1.6  # how long a row stays lit after its state changes
 OPENING_SECONDS = 30  # a session just opened is not opened again while it starts up
+CAME_UP_SECONDS = 45  # by then a session opened from here has shown up open, or it is said that it did not
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
 QUIET_SECONDS = 5 * 60
 PICKER_ONLY = {"toggle", "cycle_mode", "toggle_all", "save_workspace", "open", "hide", "toggle_hidden"}
@@ -466,6 +467,7 @@ class SessionPicker(App[list[str]]):
         self.sessions: dict[str, Session] = {}
         self.selected: set[str] = set()
         self.opening: dict[str, float] = {}  # session id -> when it was opened from here
+        self.came_up: set[str] = set()  # opened from here and seen open since
         self.modes: dict[str, Mode] = {}
         self.preselected: set[str] = set()  # ticked automatically: open at the last shutdown
         self.filter_text = ""
@@ -2413,8 +2415,9 @@ class SessionPicker(App[list[str]]):
             pass
 
     def continue_due(self) -> None:
-        """Continue the sessions whose limit has lifted: a closed one in a new tab, an open one by
-        closing its tab and resuming it. One gone on by hand meanwhile is left alone."""
+        """Continue the sessions whose limit has lifted: a closed one in a new tab, an open one with
+        the prompt typed into its own tab, which is never closed. One gone on by hand meanwhile is
+        left alone."""
         now = datetime.now()
         due = [sid for sid, moment in self.armed.items() if moment + LIMIT_MARGIN <= now]
         if not due:
@@ -2644,6 +2647,7 @@ class SessionPicker(App[list[str]]):
                     fresh.live_state, fresh.exit, fresh.status):
                 self.flash[sid] = until
         self.sessions.update(updates)
+        self.came_up |= {sid for sid, s in updates.items() if s.exit is Exit.RUNNING and sid in self.opening}
         # A session that turns out to be open was not left open at shutdown: untick it if
         # it was ticked automatically. Terminal sessions that are open can never be ticked.
         now_open = {sid for sid, s in updates.items() if s.exit is Exit.RUNNING}
@@ -2777,6 +2781,9 @@ class SessionPicker(App[list[str]]):
             return
         ids = {launch.session_id for launch in launches}
         self.opening.update(dict.fromkeys(ids, time.monotonic()))
+        resumed = {launch.session_id for launch in launches if resumes(launch)}
+        self.came_up -= resumed
+        self.set_timer(CAME_UP_SECONDS, lambda: self.check_came_up(resumed))
         self.selected -= ids
         for sid in ids & self.sessions.keys():
             self.update_row(self.sessions[sid])
@@ -2784,6 +2791,17 @@ class SessionPicker(App[list[str]]):
         what = launches[0].title if len(launches) == 1 else f"{len(launches)} sessions"
         self.notify(f"Opened {what} in {'a new tab' if len(launches) == 1 else 'new tabs'}.", timeout=4)
         self.set_timer(5, lambda: self.poll_live(full=True))  # show them as open once started
+
+    def check_came_up(self, ids: set[str]) -> None:
+        """Say which of the sessions opened a while ago never showed up open: Claude Code would not
+        resume one (its folder gone, say), and its tab says why. After a reboot, with a dozen tabs
+        opening at once, one of them is easy to miss."""
+        missing = [self.sessions[sid] for sid in ids if sid not in self.came_up and sid in self.sessions
+                   and self.sessions[sid].exit is not Exit.RUNNING]
+        if missing:
+            names = ", ".join(dict.fromkeys(s.project for s in missing))
+            where = "its tab says" if len(missing) == 1 else "their tabs say"
+            self.notify(f"{names} did not come up: {where} why.", severity="warning", timeout=15)
 
     def open_elsewhere(self, launches: list[Launch]) -> set[str]:
         """Which of these sessions to resume a Claude process has open right now. Two processes on
