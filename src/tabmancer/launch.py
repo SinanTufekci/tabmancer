@@ -164,6 +164,14 @@ def _escape_quotes(command: str) -> str:
     return re.sub(r'(\\*)"', lambda m: m.group(1) * 2 + '\\"', command)
 
 
+def _for_windows_powershell(arg: str) -> str:
+    """Windows PowerShell 5.1 hands an argument to claude inside double quotes when it has a space,
+    escaping nothing: a " in it travels as a single quote, and backslashes at its end are doubled,
+    or the last one would escape the closing quote. PowerShell 7 passes arguments on intact."""
+    arg = arg.replace('"', "'")
+    return re.sub(r"(\\+)$", r"\1\1", arg) if re.search(r"\s", arg) else arg
+
+
 def windows_terminal_command(launches: list[Launch], window: str) -> list[str]:
     pwsh = shutil.which("pwsh")
     shell = "pwsh.exe" if pwsh else "powershell.exe"
@@ -171,9 +179,7 @@ def windows_terminal_command(launches: list[Launch], window: str) -> list[str]:
     for launch in launches:
         if len(args) > 3:
             args.append(";")
-        # Windows PowerShell 5.1 passes a " inside an argument to claude unescaped, so there
-        # it travels as a single quote. PowerShell 7 passes it on intact.
-        argv = launch.argv if pwsh else [arg.replace('"', "'") for arg in launch.argv]
+        argv = launch.argv if pwsh else [_for_windows_powershell(arg) for arg in launch.argv]
         args += [
             "new-tab",
             "--title", _wt_escape(launch.title),
