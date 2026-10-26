@@ -23,7 +23,16 @@ from pathlib import Path
 
 from .config import config_dir, read_json, write_json
 from .launch import Launch, Mode
-from .sessions import Exit, Session, _is_real_prompt, _registry_sessions, _shorten, _text, folder_key
+from .sessions import (
+    Exit,
+    Session,
+    _is_real_prompt,
+    _registry_sessions,
+    _shorten,
+    _text,
+    folder_key,
+    sanitize,
+)
 
 FILE = "teams.json"
 SETTINGS_FILE = "team-settings.json"
@@ -432,6 +441,7 @@ def _events(path: Path) -> list[dict]:
             continue
         if not isinstance(record, dict) or record.get("isSidechain"):
             continue
+        record = sanitize(record)
         at = _moment(record.get("timestamp"))
         origin = record.get("origin") if isinstance(record.get("origin"), dict) else {}
         attached = record.get("attachment") if isinstance(record.get("attachment"), dict) else {}

@@ -16,7 +16,7 @@ import threading
 from datetime import datetime
 
 from .config import read_json, write_json
-from .sessions import Session, _is_real_prompt, _shorten, _text
+from .sessions import Session, _is_real_prompt, _shorten, _text, sanitize
 
 FILE = "summaries.json"
 
@@ -52,8 +52,9 @@ def digest(session: Session, max_prompts: int = MAX_PROMPTS, keep_replies: int =
                 record = json.loads(line)
             except ValueError:
                 continue
-            if record.get("isSidechain"):
+            if not isinstance(record, dict) or record.get("isSidechain"):
                 continue
+            record = sanitize(record)
             content = (record.get("message") or {}).get("content")
             if record.get("type") == "user" and _is_real_prompt(record):
                 prompts.append(_shorten(_text(content), 300))

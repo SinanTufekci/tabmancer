@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import focus, summarize, teams
 from .launch import Launch, Mode, clean_env
-from .sessions import Session, _registry_sessions, _shorten
+from .sessions import Session, _registry_sessions, _shorten, sanitize
 
 MODEL = os.environ.get("TABMANCER_HANDOVER_MODEL", "sonnet")
 WRITE_SECONDS = 900  # a crowded session reads its whole context back before it writes
@@ -86,9 +86,11 @@ def commits(path: Path | None) -> list[str]:
                     record = json.loads(raw)
                 except ValueError:
                     continue
-                content = (record.get("message") or {}).get("content")
+                if not isinstance(record, dict):
+                    continue
+                content = (sanitize(record).get("message") or {}).get("content")
                 for block in content if isinstance(content, list) else []:
-                    command = (block.get("input") or {}).get("command") if isinstance(block, dict) else None
+                    command = (block.get("input") or {}).get("command")
                     if block.get("type") == "tool_use" and isinstance(command, str):
                         found += [next(g for g in match.groups() if g).strip()
                                   for match in COMMIT.finditer(command)]

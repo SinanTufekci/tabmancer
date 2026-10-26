@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -27,6 +26,7 @@ from textual.widgets import DataTable, Label
 from . import sessions
 from .dialogs import frame, title
 from .launch import clean_env
+from .safework import work
 from .theme import AMBER, GREEN, MUTED, RED, TEXT, keys
 
 CONFIRM_SECONDS = 4  # a second press within this long confirms

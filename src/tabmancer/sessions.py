@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
@@ -124,6 +125,55 @@ def _glob(folder: Path, pattern: str) -> list[Path]:
         return []
 
 
+# The fields tabmancer reads from a record, by the type they must have. A field of another type, a
+# shape some later Claude Code may write, is dropped, so the record reads as if it were not there.
+TEXT_FIELDS = ("type", "cwd", "gitBranch", "timestamp", "entrypoint", "aiTitle", "customTitle", "lastPrompt",
+               "sessionId", "error", "requestId")
+DICT_FIELDS = ("origin", "attachment")
+BLOCK_TEXT_FIELDS = ("type", "text", "name", "id")
+# Transcripts that could not be read at all, by what went wrong: the list goes on without them,
+# the dashboard says so, and doctor reports it.
+UNREADABLE: Counter[str] = Counter()
+
+
+def sanitize(record: dict) -> dict:
+    """The record with every field tabmancer reads of the type it expects, or gone."""
+    for key in TEXT_FIELDS:
+        if key in record and not isinstance(record[key], str):
+            del record[key]
+    for key in DICT_FIELDS:
+        if key in record and not isinstance(record[key], dict):
+            del record[key]
+    message = record.get("message")
+    if message is None:
+        return record
+    if not isinstance(message, dict):
+        del record["message"]
+        return record
+    for key in ("model", "id", "stop_reason"):
+        if message.get(key) is not None and not isinstance(message[key], str):
+            del message[key]
+    if "usage" in message and not isinstance(message["usage"], dict):
+        del message["usage"]
+    content = message.get("content")
+    if isinstance(content, list):
+        blocks = [block for block in content if isinstance(block, dict)]
+        for block in blocks:
+            for key in BLOCK_TEXT_FIELDS:
+                if key in block and not isinstance(block[key], str):
+                    del block[key]
+            if "input" in block and not isinstance(block["input"], dict):
+                del block["input"]
+        message["content"] = blocks
+    elif content is not None and not isinstance(content, str):
+        del message["content"]
+    return record
+
+
+def unreadable(error: Exception) -> None:
+    UNREADABLE[f"{type(error).__name__}: {error}"[:160]] += 1
+
+
 def _parse_lines(chunk: bytes, drop_first: bool, drop_last: bool) -> list[dict]:
     lines = chunk.split(b"\n")
     if drop_first:
@@ -140,7 +190,7 @@ def _parse_lines(chunk: bytes, drop_first: bool, drop_last: bool) -> list[dict]:
         except ValueError:
             continue
         if isinstance(record, dict):
-            records.append(record)
+            records.append(sanitize(record))
     return records
 
 
@@ -161,9 +211,11 @@ def _rfind_record(f, size: int, needle: bytes) -> dict | None:
                 break  # line begins in the previous block
             raw = data[line_start:] if line_end == -1 else data[line_start:line_end]
             try:
-                return json.loads(raw)
+                record = json.loads(raw)
             except ValueError:
                 pos = data.rfind(needle, 0, line_start)
+                continue
+            return sanitize(record) if isinstance(record, dict) else None
         first_nl = data.find(b"\n")
         carry = data[:first_nl] if first_nl != -1 and start > 0 else b""
         if start == 0:
@@ -275,6 +327,9 @@ def read_session(path: Path) -> Session | None:
                 return None
             _read_tail(f, stat.st_size, session)
     except OSError:
+        return None
+    except Exception as error:  # noqa: BLE001 - a shape this version cannot read: this transcript goes, never the list
+        unreadable(error)
         return None
     return session
 
@@ -552,7 +607,11 @@ def _read_cached(paths: list[Path], reader=None) -> list[Session]:
             except (KeyError, TypeError, ValueError):
                 pass  # an entry from an older layout: parse again
         if not reused:
-            session = (reader or read_session)(path)
+            try:
+                session = (reader or read_session)(path)
+            except Exception as error:  # noqa: BLE001 - another CLI's reader, say: this file goes, never the list
+                unreadable(error)
+                session = None
             stored = _to_cache(session)
         fresh[str(path)] = {"size": stat.st_size, "mtime": stat.st_mtime_ns, "session": stored}
         if session is not None:

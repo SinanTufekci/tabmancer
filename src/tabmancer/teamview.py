@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -22,6 +21,7 @@ from textual.widgets.option_list import Option
 
 from . import background, context, focus, teams, teamtree
 from .dialogs import frame, title
+from .safework import work
 from .sessions import Exit, Session, Status
 from .statsview import copy_text
 from .theme import AMBER, BLUE, CYAN, GREEN, MUTED, ORANGE, RED, TEXT, keys, mix

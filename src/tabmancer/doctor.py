@@ -17,6 +17,7 @@ from .config import config_dir, read_json
 from .launch import clean_env, terminal_kind
 from .sessions import (
     CACHE_FILE,
+    UNREADABLE,
     Exit,
     Status,
     _agents_json,
@@ -173,11 +174,19 @@ def _transcript_checks(open_ids: set[str]) -> list[Result]:
         if mtime >= cutoff:
             recent.append((mtime, path))
     recent.sort(reverse=True)
+    UNREADABLE.clear()
     sessions = [s for s in (read_session(p) for _, p in recent[:SAMPLE]) if s is not None]
+    found: list[Result] = []
+    if UNREADABLE:
+        reason, _ = UNREADABLE.most_common(1)[0]
+        found.append(("fail", (f"{sum(UNREADABLE.values())} of the {min(len(recent), SAMPLE)} newest transcripts "
+                               f"could not be read ({reason}), so the list leaves them out: Claude Code's "
+                               "transcript format may have changed. Please report it with your Claude Code "
+                               f"version (tabmancer {__version__}).")))
     if not sessions:
-        return [("warn", f"No readable sessions in the last 30 days under {projects}.")]
+        return [*found, ("warn", f"No readable sessions in the last 30 days under {projects}.")]
 
-    found: list[Result] = [("ok", f"Read {len(sessions)} of the {min(len(recent), SAMPLE)} newest transcripts.")]
+    found.append(("ok", f"Read {len(sessions)} of the {min(len(recent), SAMPLE)} newest transcripts."))
     unknown = sum(s.status is Status.UNKNOWN for s in sessions)
     no_reply = sum(not s.last_reply for s in sessions)
     if unknown > len(sessions) * 0.3 or no_reply > len(sessions) * 0.5:

@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 
 from .config import read_json, write_json
-from .sessions import Session, _is_real_prompt, _text
+from .sessions import Session, _is_real_prompt, _text, sanitize
 
 CACHE_FILE = "search.json"
 CACHE_FORMAT = 1
@@ -126,6 +126,7 @@ def _read(path: Path, entry: dict) -> None:
             continue
         if not isinstance(record, dict) or record.get("isSidechain"):
             continue
+        record = sanitize(record)
         if record.get("type") == "user" and _is_real_prompt(record):
             words.append(_text(record["message"]["content"]))
         elif record.get("type") == "assistant":

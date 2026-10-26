@@ -17,7 +17,7 @@ from typing import ClassVar
 from rich.console import Group
 from rich.table import Table
 from rich.text import Text
-from textual import events, work
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -54,7 +54,9 @@ from .handoverview import HandoverDialog, fill
 from .keysview import KEYS, KeysScreen
 from .launch import Launch, Mode, continue_prompt, default_mode, open_tabs, run_in_background
 from .mascot import Mascot
+from .safework import work
 from .sessions import (
+    UNREADABLE,
     Exit,
     Session,
     Status,
@@ -665,6 +667,9 @@ class SessionPicker(App[list[str]]):
 
     def show_sessions(self, sessions: list[Session], preselected: set[str]) -> None:
         self.sessions = {s.session_id: s for s in sessions}
+        if UNREADABLE:
+            self.notify(f"{sum(UNREADABLE.values())} transcripts could not be read and are left out of the list: "
+                        "tabmancer doctor says more.", severity="warning", timeout=15)
         preselected = {sid for sid in preselected if sid in self.sessions and not self.marks.is_hidden(self.sessions[sid])}
         self.selected = set(preselected)
         self.preselected = set(preselected)

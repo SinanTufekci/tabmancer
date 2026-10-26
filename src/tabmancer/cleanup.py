@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
-from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -25,6 +24,7 @@ from textual.widgets import DataTable, Footer, Label, Static
 
 from . import summarize
 from .dialogs import frame, title
+from .safework import work
 from .sessions import (
     Exit,
     Session,

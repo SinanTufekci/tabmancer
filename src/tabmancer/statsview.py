@@ -14,7 +14,6 @@ from rich.console import Group
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
-from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
@@ -24,6 +23,7 @@ from textual.widgets import Label, Static, TabbedContent, TabPane
 from . import report as reports
 from . import stats, summarize, tokens, usage
 from .dialogs import frame
+from .safework import work
 from .sessions import Session
 from .theme import AMBER, GREEN, MUTED, RED, TEXT, keys, mix
 from .tokens import Report, Tokens, duration, human
