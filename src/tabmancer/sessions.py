@@ -101,6 +101,21 @@ def claude_dir() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
+def nothing_found(days: float, include_all: bool, dashboard: bool = False) -> str:
+    """Why the list is empty and what to do: a first run should not just show nothing."""
+    where = claude_dir() / "projects"
+    if not where.is_dir():
+        start = "press n" if dashboard else "run `tabmancer --demo` to see made-up ones"
+        return (f"No Claude Code sessions yet: there is no {where}. Start one with `claude` in a project "
+                f"folder, or {start}.")
+    more = [f"--days {max(60, round(days * 2))} looks further back"]
+    if not include_all:
+        more.append("--all adds claude -p, desktop app and IDE sessions")
+    if dashboard:
+        return f"No sessions in the last {days:g} days. n starts fresh ones; tabmancer " + " and ".join(more) + "."
+    return f"No sessions in the last {days:g} days in {where}. " + "; ".join(more) + "."
+
+
 def _glob(folder: Path, pattern: str) -> list[Path]:
     """Path.glob that tolerates a missing folder (before Python 3.13 it raises)."""
     try:

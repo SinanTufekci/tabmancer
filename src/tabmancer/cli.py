@@ -12,7 +12,7 @@ from datetime import timedelta
 from . import clis, shortcuts, workspaces
 from .config import read_json, write_json
 from .launch import Launch, continue_prompt, open_tabs
-from .sessions import find_sessions
+from .sessions import find_sessions, nothing_found
 from .shutdowns import open_at_shutdown, recent_shutdowns
 
 PROG = shortcuts.PROG
@@ -20,10 +20,14 @@ PROG = shortcuts.PROG
 
 def main(argv: list[str] | None = None) -> None:
     for stream in (sys.stdout, sys.stderr):
-        # Piped on Windows, output is in the ANSI code page: a title or a bar it cannot
-        # show should come out as ? rather than stop the command.
+        # Piped on Windows, Python writes in the ANSI code page, which jq and the like cannot read
+        # and which drops what it cannot show: piped or saved, the output is UTF-8. In a console a
+        # title or a bar the console cannot show still comes out as ? rather than stop the command.
         if hasattr(stream, "reconfigure"):
-            stream.reconfigure(errors="replace")
+            if stream.isatty():
+                stream.reconfigure(errors="replace")
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         prog=PROG,
         description="A terminal dashboard for Claude Code sessions: see what they are doing, write to them, "
@@ -253,6 +257,9 @@ def print_sessions(days: float, include_all: bool, as_json: bool) -> None:
                      open_at_shutdown=s.session_id in preselected) for s in sessions]
         json.dump(rows, sys.stdout, ensure_ascii=False, indent=2)
         print()
+        return
+    if not sessions:
+        print(nothing_found(days, include_all), file=sys.stderr)
         return
     for s in sessions:
         mark = "*" if s.session_id in preselected else " "

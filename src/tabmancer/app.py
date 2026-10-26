@@ -60,6 +60,7 @@ from .sessions import (
     find_sessions,
     live_sessions,
     mark_live,
+    nothing_found,
     other_sessions,
     read_session,
     transcript_path,
@@ -670,10 +671,11 @@ class SessionPicker(App[list[str]]):
         self.body.styles.animate("opacity", 1.0, duration=0.5, easing="out_cubic",
                                  on_complete=lambda: self.refresh_css(animate=False))
         if not sessions:
-            self.detail.update(
-                f"No Claude Code sessions in the last {self.days:g} days.")
+            self.detail.update(nothing_found(self.days, self.include_all, dashboard=True))
         if self.preselected:
             self.mascot.say(f"Hi! {len(self.preselected)} were open when you shut down.", seconds=6)
+        elif not sessions:
+            self.mascot.say("Hi! No sessions here yet: n starts some.", seconds=6)
         else:
             self.mascot.say("Hi! Press Enter to open a session.", seconds=5)
         self.check_limits()
