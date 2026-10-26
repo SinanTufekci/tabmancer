@@ -53,7 +53,12 @@ content-type = "text/markdown"
 path = "README.md"
 
 # On GitHub the README's pictures and links are relative to the repository, which works whether it
-# is private or public; on PyPI they need the whole address.
+# is private or public; on PyPI they need the whole address: GitHub's page for a document, the
+# raw file for a picture.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\(docs/([\w-]+\.md)'
+replacement = '](https://github.com/SinanTufekci/tabmancer/blob/main/docs/\1'
+
 [[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
 pattern = '(\]\(|src=")docs/'
 replacement = '\1https://raw.githubusercontent.com/SinanTufekci/tabmancer/main/docs/'

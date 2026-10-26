@@ -1,0 +1,94 @@
+# Stats, reports and summaries
+
+[← tabmancer](../README.md)
+
+## Stats
+
+Press `u` for the stats. `1` to `4` look back 7, 14, 30 or 90 days, `←` `→` move between
+the five tabs, and `x` saves everything as JSON and CSV in your Downloads folder.
+
+**Tokens.** Today, this week and the whole period; this week against the last (tokens,
+output, time at work, sessions); then by day, project, session and model.
+
+![Tokens by day, project, session and model](stats-tokens.png)
+
+**When you work.** Time at work over the period and per day, a map of the hours of the
+week, how long sessions run, and the longest ones. Time at work counts the minutes in
+which the agent replied; a gap of more than five minutes is a break, and sessions running
+side by side count once on the clock.
+
+![Hours of the week, time at work per day, longest sessions](stats-work.png)
+
+**Tools and files.** Which tools were called most (MCP tools count per server), the
+files edited most, and lines added and removed per project.
+
+**Plan limits.** While the dashboard is open it reads your limits every five minutes and
+keeps each reading. This tab charts the session limit over the last day and the weekly
+one over the last week, and says how fast each one fills: "At 0.7% an hour it is full
+around Sat 07:54, before it resets", or where it will stand at the reset.
+
+![Plan limits: history and forecast](stats-limits.png)
+
+**Report.** Press `r` and Claude writes a report of the period to share with your team:
+a few sentences on the period, then what got done and what is still open in each
+project, in the language you write your prompts in. The numbers at the end (sessions,
+time at work, tokens per project) come from the stats; the model only translates the
+table's header, and if it changes a number its table is replaced with tabmancer's own.
+The report is saved as Markdown in your Downloads folder, and `c` copies it.
+
+![A written report of the period](stats-report.png)
+
+The report is one `claude -p --model sonnet` call on your plan, with no tools. Only what
+the session list shows is sent: titles, first and last prompts, last replies or AI
+summaries, file names and line counts. It is cached until those change. Set
+`TABMANCER_REPORT_MODEL` to use another model. It reads everything the sessions were
+about, so look it over before it goes beyond your team.
+
+From a shell:
+
+```sh
+tabmancer report                # the last 7 days, as Markdown (--days 14, --save)
+tabmancer stats                 # all four, as text
+tabmancer stats --days 30 --json
+tabmancer stats --csv > days.csv   # one row per day: sessions, minutes, tokens
+tabmancer tokens                # only the tokens
+```
+
+### How tokens are counted
+
+The **TOKENS TODAY** card counts what every session used today, with a bar for each hour
+beside the number (the hour now in white), and the chart under the
+project list shows the last 14 days, for the project you pick there. The preview shows
+each session's total.
+
+The counts come from the usage figures Claude Code writes into each transcript with
+every reply, subagents included (and from Codex's running totals, if Codex is on). A
+reply that a forked session copied from its parent is counted once. They cover all four
+kinds of tokens:
+
+- **cache reads**: the conversation so far, read back on every turn. Long sessions
+  are mostly this.
+- **cache writes**: new context, written to the cache for the next turn.
+- **fresh input**: input sent without the cache.
+- **output**: what Claude wrote, its thinking included.
+
+The totals show where the work went. How much of your plan's limits that used is what
+the top bar and the Plan limits tab show.
+
+Each session file is read once. After that, only what was added since is read, so the
+count stays current every minute at next to no cost.
+
+## AI summaries
+
+Press `s` on a session. tabmancer sends a digest of it to Claude and shows what comes back.
+The digest holds your messages, Claude's last three replies and the names of edited files.
+It is sent with:
+
+```sh
+claude -p --model haiku --tools "" --no-session-persistence
+```
+
+That uses whatever Claude Code is logged in with: your plan's usage, or your API key.
+It takes no tools and leaves no transcript behind. Each summary is cached until the
+session changes, so viewing it again costs nothing. Set `TABMANCER_SUMMARY_MODEL` to use
+another model.
