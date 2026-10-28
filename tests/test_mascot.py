@@ -295,3 +295,32 @@ async def test_the_dashboard_tells_bit_where_the_pointer_is(fake_home):
         await pilot.hover("#table", offset=(10, 2))
         await pilot.pause(0.1)
         assert app.mascot.pointer_seen > before
+
+
+async def test_without_the_focus_bit_is_drawn_less_often_and_lives_on(fake_home, monkeypatch):
+    from textual import events
+
+    from tabmancer.app import SessionPicker
+
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 40)) as pilot:
+        await pilot.pause(0.3)
+        bit = app.mascot
+        drawn = []
+        lines = bit.lines
+        monkeypatch.setattr(bit, "lines", lambda width: drawn.append(bit.frame) or lines(width))
+
+        async def share(seconds: float) -> tuple[float, int]:
+            drawn.clear()
+            start = bit.frame
+            await pilot.pause(seconds)
+            return len(drawn) / max(1, bit.frame - start), bit.frame - start
+
+        assert (await share(0.8))[0] > 0.9  # in front: every frame
+        app.post_message(events.AppBlur())
+        await pilot.pause(0.1)
+        part, frames = await share(1.0)
+        assert part <= M.UNFOCUSED_FPS / M.FPS + 0.1 and frames >= 8  # a few times a second; it goes on all the same
+        app.post_message(events.AppFocus())
+        await pilot.pause(0.1)
+        assert (await share(0.8))[0] > 0.9
