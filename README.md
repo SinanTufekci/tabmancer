@@ -6,7 +6,7 @@
   <a href="https://github.com/SinanTufekci/tabmancer/actions/workflows/tests.yml"><img src="https://github.com/SinanTufekci/tabmancer/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
   <a href="https://pypi.org/project/tabmancer/"><img src="https://img.shields.io/pypi/v/tabmancer" alt="PyPI"></a>
   <img src="https://img.shields.io/pypi/pyversions/tabmancer" alt="Python 3.10+">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT licence"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="Apache 2.0 licence"></a>
 </p>
 
 # tabmancer
@@ -115,4 +115,4 @@ trademarks; they are named here only to say what tabmancer works with.
 
 ## License
 
-MIT. Not affiliated with Anthropic.
+The code is licensed under the [Apache License 2.0](LICENSE): keep the [NOTICE](NOTICE) with it and credit "tabmancer by Sinan Tüfekci". Bit, the robot, is licensed under [CC BY 4.0](LICENSE-BIT): wherever you use it, credit "Bit by Sinan Tüfekci". Not affiliated with Anthropic.

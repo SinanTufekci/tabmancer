@@ -6,8 +6,8 @@ build-backend = "hatchling.build"
 name = "tabmancer"
 dynamic = ["version", "readme"]
 description = "A terminal dashboard for coding-agent sessions (Claude Code, Codex, Antigravity): see what they are doing, run them as teams, call them back after a reboot"
-license = "MIT"
-license-files = ["LICENSE"]
+license = "Apache-2.0 AND CC-BY-4.0"
+license-files = ["LICENSE", "LICENSE-BIT", "NOTICE"]
 authors = [{ name = "Sinan Tüfekci" }]
 requires-python = ">=3.10"
 dependencies = [
