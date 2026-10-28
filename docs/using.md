@@ -76,7 +76,7 @@ the highlighted session the preview says what `Enter` will do with it, as it sta
 | `e`, click | open the row to see how the session ended (again to close); on a team's row, its members under it (again to fold) |
 | `p` | write a prompt to the highlighted session |
 | `n` | start fresh sessions in several projects at once |
-| `T` | teams: several sessions on one project with an orchestrator, talking to each other; on a team's row or a member, that team's view |
+| `T` | teams: several sessions on one project with an orchestrator, talking to each other; the list of them, and a new one (a team's own view: `Enter` on its row) |
 | `h` | hand a session over to a fresh one; an open one is closed |
 | `c` | the sessions stopped at a usage limit: continue them now (signed in with another account) or when the limit lifts (in the footer only while one is) |
 | `r` | rename the highlighted session (see below) |

@@ -1703,15 +1703,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.notify(f"Renamed to “{session.title}”.", timeout=5)
 
     def action_teams(self) -> None:
-        """T: on a team's row or one of its members, that team's view; elsewhere the list of teams
-        (to pick one, or make a new one)."""
+        """T: the list of teams, to open one's view or make a new one; on a team's row or one of its
+        members, with that team picked. A team's own view opens with Enter on its row."""
         here = self.team_at()
         session = self.current()
         if here is None and session is not None and session.session_id in self.member_rows:
             here = self.team_states.get(self.member_rows[session.session_id][0])
-        if here is not None:
-            self.push_screen(TeamScreen(here.team, self.accent()))
-            return
         saved = teams.load()
         if not saved:
             self.new_team()
@@ -1727,7 +1724,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             elif team is not None:
                 self.push_screen(TeamScreen(team, self.accent()))
 
-        self.push_screen(TeamsDialog(saved), chosen)
+        self.push_screen(TeamsDialog(saved, here.team.name if here is not None else None), chosen)
 
     def new_team(self) -> None:
         here = self.current()
@@ -1887,11 +1884,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """The keys of a team's row as it stands: closed, folded or unfolded."""
         name = state.team.name
         if not self.team_open(name):
-            return keys(("Enter", "start the team"), ("e", "members"), ("Space", "tick"), ("a", "add"),
-                        ("x", "hide"), ("T", "team view"))
+            return keys(("Enter", "team view"), ("s", "start the team"), ("e", "members"), ("Space", "tick"),
+                        ("a", "add"), ("x", "hide"), ("T", "teams"))
         unfolded = name in self.unfolded
-        return keys(("Enter", "team view" if unfolded else "members"), ("e", "fold" if unfolded else "unfold"),
-                    ("s", "start the rest"), ("a", "add"), ("x", "close"), ("T", "team view"))
+        return keys(("Enter", "team view"), ("e", "fold" if unfolded else "unfold"),
+                    ("s", "start the rest"), ("a", "add"), ("x", "close"), ("T", "teams"))
 
     def member_messages(self, session: Session, room: int) -> Text:
         """'3 in · 2 out · ← lead 2m: Heads-up…' for a member's own preview."""
@@ -2286,11 +2283,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def footer_words(self, action: str) -> str | None:
         """What a key does on the row at hand, where it is not what its own name says."""
-        kind, unfolded, _ = self.footer_context()
+        kind, _, _ = self.footer_context()
         if action == "open":
             if self.selected:
                 return f"Open {len(self.selected)}"
-            return {"team": "Team view" if unfolded else "Members", "team-closed": "Start team",
+            return {"team": "Team view", "team-closed": "Team view",
                     "open": "Its tab", "member-open": "Its tab"}.get(kind)
         if action == "summarize":
             return {"team": "Start rest", "team-closed": "Start team"}.get(kind)
@@ -2762,14 +2759,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if not chosen:
             session = self.current()
             team = self.team_at() if session is None else None
-            if team is not None:  # a team's row: closed, it starts; folded, it unfolds; else its view
-                name = team.team.name
-                if not self.team_open(name):
-                    self.start_team(team)
-                elif name not in self.unfolded:
-                    self.toggle_folded(name)
-                else:
-                    self.push_screen(TeamScreen(team.team, self.accent()))
+            if team is not None:  # a team's row: its view, open or closed (e unfolds it, s starts it)
+                self.push_screen(TeamScreen(team.team, self.accent()))
                 return
             if session is None:
                 self.notify("Select sessions with Space first.", severity="warning")

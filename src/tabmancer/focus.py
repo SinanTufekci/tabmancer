@@ -43,6 +43,15 @@ foreach ($w in $A::RootElement.FindAll($scope::Children, $byClass)) {
     if ([W.U]::IsIconic($hwnd)) { [void][W.U]::ShowWindow($hwnd, 9) }   # SW_RESTORE
     try { $w.SetFocus() } catch { }
     [void][W.U]::SetForegroundWindow($hwnd)
+    # The keys to the terminal in the tab, not to the tab in the strip, where the window's own
+    # focus can land: what you type goes to the prompt, the arrow keys to Claude's choices. The
+    # terminal is named as its tab; the tab's own may take a moment to come in.
+    $byTerm = New-Object System.Windows.Automation.PropertyCondition($A::ClassNameProperty, 'TermControl')
+    for ($i = 0; $i -lt 40; $i++) {
+      $term = $w.FindAll($scope::Descendants, $byTerm) | Where-Object { (Plain $_.Current.Name) -eq $want } | Select-Object -First 1
+      if ($term) { try { $term.SetFocus() } catch { }; break }
+      Start-Sleep -Milliseconds 25
+    }
     exit 0
   }
 }

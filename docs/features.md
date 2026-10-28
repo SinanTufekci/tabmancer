@@ -43,9 +43,9 @@
 - **Teams.** Several sessions on one project, each with its own focus, one of them the
   orchestrator. They message each other, and you watch it happen: the team is one row of
   the list, each member a name with a sign of what it is doing, its preview shows who talks
-  to whom, and `T` opens the full view, where every message flies from box to box and the
+  to whom, and `Enter` on it opens the full view, where every message flies from box to box and the
   conversation is drawn as arrows between the members' lanes. A closed team comes back as
-  a team: `Enter` on its row resumes every member as itself.
+  a team: `s` on its row resumes every member as itself. `T` lists your teams and starts new ones.
 - **Crowded sessions, handed over.** How full every context is, a word when one passes
   60%, and `h` to move the work to a fresh session with a full handover, when you say so.
 - **All at once.** Every chosen session opens in its own tab in one go, in the same

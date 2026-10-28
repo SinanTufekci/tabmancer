@@ -141,9 +141,7 @@ async def test_e_folds_a_team_and_its_row_opens_the_team_view(fake_home, tmp_pat
         assert app.cursor_key() == f"{TEAM_ROW}shop"  # the cursor stays on the team
         await pilot.press("e")
         assert "lead-1" not in app.table.rows and app.cursor_key() == f"{TEAM_ROW}shop"
-        await pilot.press("enter")  # folded: Enter shows the members first...
-        assert "lead-1" in app.table.rows and app.cursor_key() == f"{TEAM_ROW}shop"
-        await pilot.press("enter")  # ...then the team view
+        await pilot.press("enter")  # folded or not, Enter opens the team view
         await pilot.pause(0.1)
         assert isinstance(app.screen, TeamScreen) and app.screen.team.name == "shop"
 
@@ -192,7 +190,7 @@ async def test_a_member_in_the_background_looks_open_like_the_lead_not_closed(fa
         assert app.table.get_row("api-1")[0].plain == "[x]"
 
 
-async def test_a_team_with_nobody_open_is_one_row_that_starts_it(fake_home, tmp_path, monkeypatch):
+async def test_a_team_with_nobody_open_is_one_row_that_s_starts(fake_home, tmp_path, monkeypatch):
     from tabmancer import app as app_module
 
     shop(fake_home, tmp_path, monkeypatch)
@@ -218,7 +216,13 @@ async def test_a_team_with_nobody_open_is_one_row_that_starts_it(fake_home, tmp_
         assert app.table.get_row(f"{TEAM_ROW}shop")[0].plain == "[x]"
         app.selected.clear()
         app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
-        await pilot.press("enter")  # starts it: every member as itself, the lead last
+        await pilot.press("enter")  # its view, closed as it is: nothing opens
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, TeamScreen) and not opened
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
+        await pilot.press("s")  # starts it: every member as itself, the lead last
         await pilot.pause(0.1)
     assert [launch.session_id for launch in opened] == ["api-1", "ui-1", "lead-1"]
     assert all(launch.options[:2] == ("--name", f"shop-{name}") for launch, name in zip(opened, ("api", "ui", "lead")))
@@ -267,23 +271,30 @@ def test_closed_members_are_dim_and_unstarted_ones_say_so():
 # --- the team view (T) ---------------------------------------------------------------------------
 
 
-async def test_t_on_a_team_or_member_row_opens_that_team(fake_home, tmp_path, monkeypatch):
+async def test_t_lists_the_teams_anywhere_picking_the_one_at_hand(fake_home, tmp_path, monkeypatch):
+    from textual.widgets import OptionList
+
     from tabmancer.teamview import TeamsDialog
 
     shop(fake_home, tmp_path, monkeypatch)
+    blog = teams.new_team("blog", str(tmp_path / "shop"), "Write posts", [])
+    teams.save({"blog": blog, **teams.load()})  # listed first: the shop is not picked by chance
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await ready(pilot, app, unfold=True)
-        for row in (f"{TEAM_ROW}shop", "ui-1"):  # the team's row, and a member's (a closed one too)
+        for row, picked in ((f"{TEAM_ROW}shop", "shop"), ("ui-1", "shop"), ("one", "blog")):
             app.table.move_cursor(row=app.table.get_row_index(row))
             await pilot.press("T")
             await pilot.pause(0.1)
-            assert isinstance(app.screen, TeamScreen) and app.screen.team.name == "shop"
+            assert isinstance(app.screen, TeamsDialog)
+            options = app.screen.query_one(OptionList)
+            assert options.get_option_at_index(options.highlighted).id == picked
             await pilot.press("escape")
-        app.table.move_cursor(row=app.table.get_row_index("one"))  # in no team: the list of teams
-        await pilot.press("T")
+            await pilot.pause(0.05)
+        app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
+        await pilot.press("T", "enter")  # and from the list, the team's view
         await pilot.pause(0.1)
-        assert isinstance(app.screen, TeamsDialog)
+        assert isinstance(app.screen, TeamScreen) and app.screen.team.name == "shop"
 
 
 async def test_the_team_view_shows_traffic_tokens_and_whole_focus(fake_home, tmp_path, monkeypatch):

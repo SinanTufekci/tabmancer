@@ -707,10 +707,17 @@ class TeamsDialog(ModalScreen[tuple[str, str] | None]):
         Binding("d,delete", "delete", "Delete"),
     ]
 
-    def __init__(self, saved: dict[str, teams.Team]) -> None:
+    def __init__(self, saved: dict[str, teams.Team], picked: str | None = None) -> None:
         super().__init__()
         self.saved = saved
+        self.picked = picked  # the team the list starts on (the one the cursor was on)
         self.armed: str | None = None
+
+    def on_mount(self) -> None:
+        options = self.query_one(OptionList)
+        names = list(self.saved)
+        if self.picked in names:
+            options.highlighted = names.index(self.picked)
 
     def compose(self) -> ComposeResult:
         with Vertical():

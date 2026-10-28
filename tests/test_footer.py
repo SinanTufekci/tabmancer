@@ -38,7 +38,7 @@ async def test_the_footer_says_what_each_key_does_on_the_row(fake_home, tmp_path
         await ready(pilot, app)
         app.selected.clear()
         keys = await on_row(pilot, app, f"{TEAM_ROW}shop")  # an open team, folded
-        assert keys["open"] == ("Members", False) and keys["summarize"][0] == "Start rest"
+        assert keys["open"] == ("Team view", False) and keys["summarize"][0] == "Start rest"
         assert keys["hide"][0] == "Close team" and keys["prompt"] == ("Prompt", True)  # dimmed, still there
         assert keys["handover"][1] and keys["rename"][1] and keys["pin"][1] and keys["cycle_mode"][1]
         app.toggle_folded("shop")

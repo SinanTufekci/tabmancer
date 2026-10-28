@@ -44,15 +44,15 @@ member on its wire from the lead, with the count of messages sent along it both 
 latest one beside it, and a message flying along the wires as it is sent. From 150 columns
 the newest messages are listed beside it.
 
-`Enter` (or `e`) unfolds the team: its members hang under its row as a tree, the lead first,
-each with the latest message to or from it, and `Enter` again opens the team view. A
+`Enter` on the team's row opens the team view. `e` unfolds the team: its members hang under
+its row as a tree, the lead first, each with the latest message to or from it. A
 member's row is an ordinary session row (`Enter`, `h`, `p` and the rest work as on any
 other), and its preview says how many messages it got and sent. On the team's row, `s`
 starts every member that is not open, `a` adds members (each opens and introduces itself to
 the lead) and `x` twice closes the members' tabs.
 
 A team whose members are all closed, after a restart say, stays a team: its row sits among
-the closed sessions where it last worked, with a box to tick the whole team. `Enter` on it
+the closed sessions where it last worked, with a box to tick the whole team. `s` on it
 starts the team: each member resumed as itself, the lead last, so the others are up when it
 starts handing out work. A member opened any other way (ticked and opened, `p`, `c`, a
 workspace) also comes back with its name, its role and the setting that lets the team's
@@ -86,8 +86,8 @@ transcripts to draw the team view:
   beside it. A message still on its way is a dashed arrow, and a new day is named. The
   prompts tabmancer starts members with are drawn as tabmancer's, quieter than yours.
 
-`T` on a team's row in the list, or on one of its members, opens that team's view
-straight away; elsewhere it lists the teams, to pick one or start a new one. `←` `→` pick
+`Enter` on a team's row opens that team's view. `T` lists the teams anywhere, to open one
+or start a new one (on a team's row or a member, with that team picked). `←` `→` pick
 a member: its box, its lane and its arrows stay lit and the rest go quiet; past the last
 member everyone is lit again. `Enter` goes to the member's tab (or opens it if it is
 closed), `s` starts every member that is not open, and `a` adds members, who introduce

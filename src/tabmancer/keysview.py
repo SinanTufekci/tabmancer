@@ -25,8 +25,8 @@ from .theme import MUTED, TEXT, keys
 KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("Pick and open", [
         ("Enter", "open", ("open the ticked sessions, or else the highlighted one, each in a tab of its own. "
-                           "An open session: go to its tab. A team's row: its members under it, then the team "
-                           "view; a closed team starts, each member as itself and the lead last")),
+                           "An open session: go to its tab, ready to type. A team's row: the team view (e shows its "
+                           "members under it, s starts a closed team, each member as itself and the lead last)")),
         ("Space", "toggle", ("tick or untick the highlighted session (or click its [ ]); on a closed team's row, "
                              "all its members")),
         ("a", "toggle_all", "tick or untick every session shown. On a team's row: add members to the team"),
@@ -68,8 +68,8 @@ KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("Views", [
         ("l", "toggle_live", "the live view: only the open sessions and what each is doing; l again goes back"),
         ("u", "tokens", "stats: tokens, when you work, tools and files, plan limits, a written report"),
-        ("T", "teams", ("teams: several sessions on one project with an orchestrator, talking to each other. On a "
-                        "team's row or a member: that team's view")),
+        ("T", "teams", ("teams: several sessions on one project with an orchestrator, talking to each other: the "
+                        "list of them, and a new one. A team's own view: Enter on its row")),
     ]),
     ("Workspaces", [
         ("w", "save_workspace", "save the ticked sessions' folders as a workspace"),
