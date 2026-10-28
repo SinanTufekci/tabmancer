@@ -1,9 +1,9 @@
-"""The team view: the orchestrator on top, the members below it, every message flying from one
-box to another as it is sent, and the conversation underneath. T opens it from the dashboard."""
+"""The team view: the orchestrator's card on top, the members' cards under it on a tree of wires,
+every message flying from one card to another as it is sent, and the conversation underneath as a
+chat. Enter on a team's row opens it from the dashboard (T lists the teams)."""
 
 from __future__ import annotations
 
-import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,11 +28,11 @@ from .theme import AMBER, BLUE, CYAN, GREEN, MUTED, ORANGE, RED, TEXT, keys, mix
 from .tokens import human
 
 PALETTE = [CYAN, GREEN, AMBER, ORANGE, "#c678dd", "#61afef", "#e5c07b", "#56b6c2"]
-FLIGHT_SECONDS = 1.8  # how long a message takes to fly from box to box
-BOX_H = 6  # a box's rows: its focus gets one line...
-TALL_FROM = 36  # ...and two, with one row more, from this many rows of terminal
-BOX_MOST = 52  # boxes grow with the room up to this width
+FLIGHT_SECONDS = 1.8  # how long a message takes to fly from card to card
+CARD_H = 4  # a card's rows: its border, the name and what it does, its context and tokens, its border
+CARD_LEAST, CARD_MOST = 24, 36  # cards grow with the room between these widths
 GAP = 3
+METER = 5  # cells of a card's context meter
 WIRE = "#3a3a3a"
 STAR = "·✢✶✻✽✻✶✢"
 LOG_LINES = 200
@@ -46,8 +46,8 @@ def colours(team: teams.Team, accent: str) -> dict[str, str]:
 
 
 def status_of(session: Session | None) -> tuple[str, str, bool]:
-    """(label, style, spinning) for a member's box, in the dashboard's colours: blue works, red
-    waits for you."""
+    """(label, style, spinning) for a member's card, in the dashboard's colours: blue works, red
+    waits for you; a member done for now is idle, quiet."""
     if session is None:
         return "not started", MUTED, False
     if session.exit is not Exit.RUNNING:
@@ -55,8 +55,12 @@ def status_of(session: Session | None) -> tuple[str, str, bool]:
     state = session.live_state.lower()
     if state in ("busy", "working"):
         return "working", BLUE, True
+    if state == "permission":
+        return "needs your OK", f"bold {RED}", False
     if state in ("blocked", "waiting"):
         return "needs you", f"bold {RED}", False
+    if state == "resting":
+        return "idle", MUTED, False
     return "waiting", RED, False
 
 
@@ -104,7 +108,8 @@ class Flight:
 
 
 class TeamGraph(Widget):
-    """The boxes, the wires between them and the messages in flight."""
+    """The cards: the lead on top, the members under it on a tree of wires, the messages flying
+    along them; under the cards, what the picked member works on."""
 
     DEFAULT_CSS = "TeamGraph { height: auto; }"
 
@@ -116,8 +121,7 @@ class TeamGraph(Widget):
         self.said: list[teams.Message] = []
         self.unread: dict[str, int] = {}
         self.flights: list[Flight] = []
-        self.selected = 0  # an index into order; one past its end is everyone (no box picked)
-        self.ticker: teams.Message | None = None
+        self.selected = 0  # an index into order; one past its end is everyone (no card picked)
 
     @property
     def order(self) -> list[teams.Member]:
@@ -128,68 +132,54 @@ class TeamGraph(Widget):
         index = self.selected % (len(self.order) + 1)
         return self.order[index] if index < len(self.order) else None
 
-    @property
-    def box_h(self) -> int:
-        # Not mounted: a test drawing the boxes alone, with no app to ask.
-        tall = self.is_mounted and self.app.size.height >= TALL_FROM
-        return BOX_H + 1 if tall else BOX_H
-
     # --- geometry ----------------------------------------------------------------------
 
     def layout_boxes(self, width: int) -> tuple[dict[str, tuple[int, int, int]], list[list[str]]]:
-        """name -> (x, y, box width), and the members row by row. Boxes grow with the room."""
+        """name -> (x, y, card width), and the members row by row: the lead's card on top in the
+        middle, each row of members under a wire of its own."""
         members = [m.name for m in self.order[1:]]
         count = max(1, len(members))
-        box = max(16, min(BOX_MOST, (width - (count - 1) * GAP) // count))
-        per_row = max(1, (width + GAP) // (box + GAP))
+        card = max(CARD_LEAST, min(CARD_MOST, (width - (count - 1) * GAP) // count))
+        per_row = max(1, (width + GAP) // (card + GAP))
         rows = [members[i:i + per_row] for i in range(0, len(members), per_row)] or [[]]
-        places = {self.team.lead.name: ((width - box) // 2, 0, box)}
-        top = self.box_h + 3
+        places = {self.team.lead.name: ((width - card) // 2, 0, card)}
+        top = CARD_H + 1  # under a row's wire
         for row in rows:
-            span = len(row) * box + (len(row) - 1) * GAP
+            span = len(row) * card + (len(row) - 1) * GAP
             left = max(0, (width - span) // 2)
             for i, name in enumerate(row):
-                places[name] = (left + i * (box + GAP), top, box)
-            top += self.box_h + 3
+                places[name] = (left + i * (card + GAP), top, card)
+            top += CARD_H + 1
         return places, rows
 
     def height_for(self, rows: list[list[str]]) -> int:
-        return self.box_h + len(rows) * (self.box_h + 3) + 2  # boxes, wires, and the ticker line
+        return CARD_H + len(rows) * (CARD_H + 1) + 2  # the cards, their wires, and the focus line
 
     def path(self, sender: str, receiver: str, places: dict[str, tuple[int, int, int]]) -> list[tuple[int, int]]:
-        """The cells a message passes on its way: down the trunk from the orchestrator, along a bus
-        to a member, or from one member's bus to another's."""
+        """The cells a message passes on its way: out of the lead's card, down the trunk to a
+        member's wire and into its card; or along a wire from one member to another."""
         lead = self.team.lead.name
         lead_x = places[lead][0] + places[lead][2] // 2
 
-        def to_trunk(name: str) -> list[tuple[int, int]]:
-            """From a member's box up to the trunk under the orchestrator."""
-            x, top, box = places[name]
-            middle, bus = x + box // 2, top - 2
-            cells = [(middle, top - 1), (middle, bus)]
-            step = 1 if lead_x > middle else -1
-            cells += [(c, bus) for c in range(middle + step, lead_x + step, step)] if middle != lead_x else []
-            return cells
+        def down_to(name: str) -> list[tuple[int, int]]:
+            x, top, card = places[name]
+            middle, wire = x + card // 2, top - 1
+            cells = [(lead_x, y) for y in range(CARD_H - 1, wire + 1)]
+            step = 1 if middle > lead_x else -1
+            cells += [(c, wire) for c in range(lead_x + step, middle + step, step)] if middle != lead_x else []
+            return [*cells, (middle, top)]
 
-        def trunk(from_y: int, to_y: int) -> list[tuple[int, int]]:
-            step = 1 if to_y > from_y else -1
-            return [(lead_x, y) for y in range(from_y, to_y + step, step)]
-
-        if sender == lead and receiver in places:
-            back = to_trunk(receiver)[::-1]
-            return trunk(self.box_h, back[0][1] - 1) + back
-        if receiver == lead and sender in places:
-            up = to_trunk(sender)
-            return up + trunk(up[-1][1] - 1, self.box_h)
-        if sender in places and receiver in places:
-            one, two = to_trunk(sender), to_trunk(receiver)[::-1]
-            if one[-1][1] == two[0][1]:  # same row: straight along the bus
-                bus = one[-1][1]
-                a, b = places[sender][0] + places[sender][2] // 2, places[receiver][0] + places[receiver][2] // 2
+        if sender == lead and receiver in places and receiver != lead:
+            return down_to(receiver)
+        if receiver == lead and sender in places and sender != lead:
+            return down_to(sender)[::-1]
+        if sender in places and receiver in places and lead not in (sender, receiver):
+            if places[sender][1] == places[receiver][1]:  # the same row: along its wire
+                (a, top, wa), (b, _, wb) = places[sender], places[receiver]
+                a, b, wire = a + wa // 2, b + wb // 2, top - 1
                 step = 1 if b > a else -1
-                return ([(a, places[sender][1] - 1)] + [(c, bus) for c in range(a, b + step, step)]
-                        + [(b, places[receiver][1] - 1)])
-            return one + trunk(one[-1][1], two[0][1]) + two
+                return [(a, top), *[(c, wire) for c in range(a, b + step, step)], (b, top)]
+            return down_to(sender)[::-1] + down_to(receiver)
         return []
 
     # --- drawing ---------------------------------------------------------------------------
@@ -198,108 +188,122 @@ class TeamGraph(Widget):
         width = max(40, self.size.width or 100)
         places, rows = self.layout_boxes(width)
         canvas = Canvas(width, self.height_for(rows))
-        self.draw_wires(canvas, places, rows)
         for member in self.order:
             self.draw_box(canvas, member, places[member.name])
-        self.draw_flights(canvas, places)
+        self.draw_wires(canvas, places, rows)
+        self.draw_flights(canvas)
+        self.draw_focus(canvas)
         return canvas.text()
 
     def draw_wires(self, canvas: Canvas, places: dict, rows: list[list[str]]) -> None:
+        """The trunk out of the lead's card, a wire across each row of members, a drop into each
+        card; on each wire, beside its drop, the messages sent down to that member and back up."""
         lead = self.team.lead.name
-        lead_x = places[lead][0] + places[lead][2] // 2
-        buses = []
+        lx, _, lcard = places[lead]
+        lead_x = lx + lcard // 2
+        chosen = self.selected_member()
+        lead_picked = chosen is self.team.lead
+        canvas.put(lead_x, CARD_H - 1, "┳" if lead_picked else "┬", f"bold {self.accent}" if lead_picked else WIRE)
+        wires = []
         for row in rows:
             if not row:
                 continue
             top = places[row[0]][1]
-            bus = top - 2
+            wire = top - 1
             middles = [places[n][0] + places[n][2] // 2 for n in row]
             left, right = min([*middles, lead_x]), max([*middles, lead_x])
-            canvas.put(left, bus, "─" * (right - left + 1), WIRE)
-            for middle in middles:
-                canvas.put(middle, bus, "┬" if middle != lead_x else "┼", WIRE)
-                canvas.put(middle, top - 1, "│", WIRE)
-            canvas.put(left, bus, "╭" if left in middles and left != lead_x else canvas.char_at(left, bus), WIRE)
-            canvas.put(right, bus, "╮" if right in middles and right != lead_x else canvas.char_at(right, bus), WIRE)
-            buses.append(bus)
-        if buses:
-            for y in range(self.box_h, max(buses)):
-                if canvas.char_at(lead_x, y) == " ":
-                    canvas.put(lead_x, y, "│", WIRE)
-            for bus in buses:
-                if canvas.char_at(lead_x, bus) == "─":
-                    canvas.put(lead_x, bus, "┴" if bus == max(buses) else "┼", WIRE)
-        self.draw_traffic(canvas, places, rows, lead_x)
+            canvas.put(left, wire, "─" * (right - left + 1), WIRE)
+            for name, middle in zip(row, middles):
+                canvas.put(middle, wire, "┬", WIRE)
+                picked = chosen is not None and chosen.name == name
+                canvas.put(middle, top, "┻" if picked else "┴",
+                           f"bold {self.palette.get(name, TEXT)}" if picked else WIRE)
+            if left in middles and left != lead_x:
+                canvas.put(left, wire, "╭", WIRE)
+            if right in middles and right != lead_x:
+                canvas.put(right, wire, "╮", WIRE)
+            wires.append(wire)
+        last = max(wires, default=CARD_H - 1)
+        cards = [(cx, cy, cw) for name, (cx, cy, cw) in places.items() if name != lead]
+        for y in range(CARD_H, last + 1):  # the trunk, down to the last row's wire, behind the cards
+            if any(cx <= lead_x < cx + cw and cy <= y < cy + CARD_H for cx, cy, cw in cards):
+                continue
+            here = canvas.char_at(lead_x, y)
+            alone = canvas.char_at(lead_x - 1, y) == " " and canvas.char_at(lead_x + 1, y) == " "
+            if here == " " or alone:  # nothing across here, or one card right under the trunk
+                canvas.put(lead_x, y, "│", WIRE)
+            elif here in ("─", "┬"):
+                canvas.put(lead_x, y, "┼" if y != last or here == "┬" else "┴", WIRE)
+        self.draw_traffic(canvas, places, rows)
 
-    def draw_traffic(self, canvas: Canvas, places: dict, rows: list[list[str]], lead_x: int) -> None:
-        """Beside the wire down to each member: the messages sent along it, down to it and back up
-        ('3▼ 2▲'), on its left, and the latest of them on its right."""
+    def draw_traffic(self, canvas: Canvas, places: dict, rows: list[list[str]]) -> None:
+        """' 2▼ 1▲ ' on a member's wire beside its drop: the messages the lead sent down to it and
+        the ones it sent back up. Left of the drop, or right of it where the wire ends there; only
+        where the wire has room, a cell of it kept on either side."""
         lead = self.team.lead.name
         sent = teamtree.counts(self.said)
         for row in rows:
             for name in row:
-                x, top, box = places[name]
-                middle, y = x + box // 2, top - 1
-                # The trunk runs on down past a row that is not the last: the words stop short of it.
-                trunk = lead_x if row is not rows[-1] else -1
-                tally = f"{sent.get((lead, name), 0)}▼ {sent.get((name, lead), 0)}▲"
-                start = max(x, middle - 1 - len(tally))
-                if not start <= trunk < middle:
-                    canvas.put(start, y, tally[: middle - 1 - start], MUTED)
-                latest = next((m for m in reversed(self.said) if {m.sender, m.receiver} == {lead, name}), None)
-                end = trunk if middle + 2 <= trunk < x + box else x + box
-                if latest is not None and end - (middle + 2) >= 4:
-                    words = teamtree.gist(latest, name)
-                    room = end - (middle + 2)
-                    canvas.put(middle + 2, y, words if len(words) <= room else words[: room - 1] + "…", TEXT)
+                x, top, card = places[name]
+                middle, wire = x + card // 2, top - 1
+                tally = f" {sent.get((lead, name), 0)}▼ {sent.get((name, lead), 0)}▲ "
+                for start in (middle - 1 - len(tally), middle + 2):
+                    if all(canvas.char_at(c, wire) == "─" for c in range(start - 1, start + len(tally) + 1)):
+                        canvas.put(start, wire, tally, MUTED)
+                        break
 
     def draw_box(self, canvas: Canvas, member: teams.Member, place: tuple[int, int, int]) -> None:
-        x, y, box = place
-        height = self.box_h
+        """A card: its top in the member's colour (heavy when picked), its name and what it does on
+        the first line, its context as a small meter and its model and tokens on the second."""
+        x, y, card = place
         colour = self.palette.get(member.name, TEXT)
         chosen = member is self.selected_member()
-        edge = f"bold {colour}" if chosen else mix("#000000", colour, 0.55)
+        edge = f"bold {colour}" if chosen else mix("#000000", colour, 0.45)
         corner = ("┏", "┓", "┗", "┛", "━", "┃") if chosen else ("╭", "╮", "╰", "╯", "─", "│")
-        canvas.put(x, y, corner[0] + corner[4] * (box - 2) + corner[1], edge)
-        for row in range(1, height - 1):
-            canvas.put(x, y + row, corner[5] + " " * (box - 2) + corner[5], edge)
-        canvas.put(x, y + height - 1, corner[2] + corner[4] * (box - 2) + corner[3], edge)
-        inner = box - 4
+        canvas.put(x, y, corner[0] + corner[4] * (card - 2) + corner[1], f"bold {colour}" if chosen else colour)
+        for row in range(1, CARD_H - 1):
+            canvas.put(x, y + row, corner[5] + " " * (card - 2) + corner[5], edge)
+        canvas.put(x, y + CARD_H - 1, corner[2] + corner[4] * (card - 2) + corner[3], edge)
+        inner = card - 4
         session = self.sessions.get(member.name)
-        badge = "★ " if member.lead else "● "
-        canvas.put(x + 2, y + 1, (badge + member.name)[:inner], f"bold {colour}")
-        if member.model and len(badge + member.name) + 2 + len(member.model) <= inner:
-            canvas.put(x + box - 2 - len(member.model), y + 1, member.model, MUTED)  # its own model, top right
-        # Its focus, on as many lines as there is room for (the last one cut short if need be).
-        room = height - 5  # the rows between the name and the status
-        lines = textwrap.wrap(member.focus or "", inner) or [""]
-        if len(lines) > room:
-            rest = " ".join(lines[room - 1:])
-            lines = [*lines[:room - 1], rest if len(rest) <= inner else rest[: inner - 1] + "…"]
-        for row, line in enumerate(lines[:room]):
-            canvas.put(x + 2, y + 2 + row, line, MUTED)
-        status_y, ctx_y = y + height - 3, y + height - 2
+        name = ("★ " if member.lead else "") + member.name
         label, style, spinning = status_of(session)
         if spinning:
             label = f"{STAR[int(time.monotonic() * 8) % len(STAR)]} {label}"
         unread = self.unread.get(member.name, 0)
         if unread:
             label += f" · {unread} new"
-        canvas.put(x + 2, status_y, label[:inner], style)
-        use = getattr(self.app, "session_tokens", {}).get(session.session_id) if session is not None else None
-        if use is not None and use.total and len(label) + 2 + len(spent := human(use.total)) <= inner:
-            canvas.put(x + box - 2 - len(spent), status_y, spent, MUTED)  # its tokens, at the right
+        label = label[: max(0, inner - min(len(name), 8) - 1)]  # the name keeps a few letters at least
+        canvas.put(x + 2, y + 1, name[: max(0, inner - len(label) - 1)], f"bold {colour}")
+        canvas.put(x + 2 + inner - len(label), y + 1, label, style)
+        used = getattr(self.app, "session_tokens", {}).get(session.session_id) if session is not None else None
+        tokens = human(used.total) if used is not None and used.total else ""
+        right = " · ".join(part for part in (member.model, tokens) if part)
+        left = 0
         if session is not None and session.context:
             share = context.share(session)
-            cells = max(1, inner - 10)
-            filled = round(share * cells)
-            bar_style = GREEN if share < 0.6 else AMBER if share < 0.85 else RED
-            canvas.put(x + 2, ctx_y, "ctx ", MUTED)
-            canvas.put(x + 6, ctx_y, "▰" * filled, bar_style)
-            canvas.put(x + 6 + filled, ctx_y, "▱" * (cells - filled), "#2a2a2a")
-            canvas.put(x + 7 + cells, ctx_y, f"{share:.0%}", bar_style)
+            filled = round(share * METER)
+            bar = GREEN if share < 0.6 else AMBER if share < 0.85 else RED
+            canvas.put(x + 2, y + 2, "▰" * filled, bar)
+            canvas.put(x + 2 + filled, y + 2, "▱" * (METER - filled), "#2a2a2a")
+            canvas.put(x + 3 + METER, y + 2, f"{share:.0%}", bar)
+            left = METER + 1 + len(f"{share:.0%}")
+        if right and left + 1 + len(right) <= inner:
+            canvas.put(x + 2 + inner - len(right), y + 2, right, MUTED)  # its model and tokens, at the right
 
-    def draw_flights(self, canvas: Canvas, places: dict) -> None:
+    def draw_focus(self, canvas: Canvas) -> None:
+        """What the picked member works on, under the cards."""
+        member = self.selected_member()
+        if member is None or not member.focus:
+            return
+        line, x = canvas.height - 1, 2
+        name = ("★ " if member.lead else "") + member.name
+        canvas.put(x, line, name, f"bold {self.palette.get(member.name, TEXT)}")
+        words = "  " + _one_line(member.focus)
+        room = canvas.width - x - len(name) - 1
+        canvas.put(x + len(name), line, words if len(words) <= room else words[: room - 1] + "…", MUTED)
+
+    def draw_flights(self, canvas: Canvas) -> None:
         now = time.monotonic()
         self.flights = [f for f in self.flights if now - f.start < FLIGHT_SECONDS + 0.6]
         for flight in self.flights:
@@ -314,20 +318,12 @@ class TeamGraph(Widget):
             if progress < 1:
                 cx, cy = flight.path[head]
                 canvas.put(cx, cy, "●", f"bold {colour}")
-        if self.ticker is not None:  # the latest message, spelled out under the boxes
-            message, x, line = self.ticker, 2, canvas.height - 1
-            for part, style in ((message.sender, f"bold {self.palette.get(message.sender, TEXT)}"), (" → ", MUTED),
-                                (message.receiver, f"bold {self.palette.get(message.receiver, TEXT)}"),
-                                ("  " + _one_line(message.summary or message.text), TEXT)):
-                canvas.put(x, line, part[: max(0, canvas.width - x - 1)], style)
-                x += len(part)
 
     def launch_flight(self, message: teams.Message) -> None:
         places, _ = self.layout_boxes(max(40, self.size.width or 100))
         path = self.path(message.sender, message.receiver, places)
         if path:
             self.flights.append(Flight(message, path, time.monotonic()))
-        self.ticker = message
 
 
 def _one_line(text: str) -> str:
@@ -385,9 +381,8 @@ class TeamScreen(Screen):
     TeamScreen { background: $background; }
     TeamScreen #team-head { padding: 1 2 0 2; }
     TeamScreen TeamGraph { margin: 1 2 0 2; }
-    TeamScreen #team-log-head { padding: 1 2 0 2; color: $text-muted; text-style: bold; }
-    TeamScreen #team-lanes { padding: 0 2; height: 1; }
-    TeamScreen VerticalScroll { height: 1fr; margin: 0 2; }
+    TeamScreen #team-log-head { padding: 0 2; color: $text-muted; text-style: bold; }
+    TeamScreen VerticalScroll { height: 1fr; margin: 0 2 1 2; }
     TeamScreen .hint { color: $text-muted; padding: 0 2; width: 100%; height: auto; }
     """
     BINDINGS: ClassVar[list[Binding]] = [
@@ -417,12 +412,10 @@ class TeamScreen(Screen):
         yield Static("", id="team-head")
         yield TeamGraph(self.team, self.accent, id="team-graph")
         yield Label("CONVERSATION", id="team-log-head")
-        yield Static("", id="team-lanes")
         with VerticalScroll():
             yield Static("", id="team-log")
-        yield Label(keys(("← →", "pick a member"), ("Enter", "go to its tab or open it"),
-                         ("s", "start every member not open"), ("a", "add a member"), ("d", "take one off"),
-                         ("g", "the goal"), ("h", "hand over"), ("x", "close the team"), ("Esc", "back")),
+        yield Label(keys(("← →", "member"), ("Enter", "its tab"), ("s", "start the rest"), ("a", "add"),
+                         ("d", "take off"), ("g", "goal"), ("h", "hand over"), ("x", "close"), ("Esc", "back")),
                     classes="hint")
 
     def on_mount(self) -> None:
@@ -441,27 +434,24 @@ class TeamScreen(Screen):
 
     def show_head(self) -> None:
         open_now = sum(1 for s in self.sessions.values() if s is not None and s.exit is Exit.RUNNING)
+        spent = self.spent()
         self.query_one("#team-head", Static).update(Text.assemble(
             ("TEAM ", f"bold {MUTED}"), (self.team.name, f"bold {self.accent}"),
             (f"  ·  {self.team.cwd}  ·  {open_now} of {len(self.team.members)} open", MUTED),
+            (f"  ·  {human(spent)} tokens" if spent else "", MUTED),
             (f"  ·  the lead picks up to {self.team.decide} members" if self.team.decide else "", MUTED),
             ("  ·  members in the background" if self.team.background else "", MUTED),
-            ("\nGoal: ", MUTED), (self.team.goal, TEXT), self.spent()))
+            ("\nGoal  ", MUTED), (self.team.goal, TEXT)))
 
-    def spent(self) -> Text:
-        """'Tokens 12.3M · lead 3.1M · api 5.2M …': what each member's session has used, as the
-        dashboard counts it (nothing until it has)."""
+    def spent(self) -> int:
+        """What the members' sessions have used, as the dashboard counts it (each card has its own)."""
         counted = getattr(self.app, "session_tokens", {})
-        used = []
+        total = 0
         for member in self.team.members:
             session = self.sessions.get(member.name)
             use = counted.get(session.session_id) if session is not None else None
-            if use is not None and use.total:
-                used.append((member.name, use.total))
-        if not used:
-            return Text("")
-        each = " · ".join(f"{name} {human(total)}" for name, total in used)
-        return Text.assemble(("\nTokens ", MUTED), (human(sum(total for _, total in used)), TEXT), (f"  ·  {each}", MUTED))
+            total += use.total if use is not None else 0
+        return total
 
     @work(thread=True, exclusive=True, group="team")
     def poll(self) -> None:
@@ -491,8 +481,6 @@ class TeamScreen(Screen):
         keys = {(m.sender, m.receiver, m.text) for m in said}
         if self.seen is None:  # the first look: history stays put, nothing flies
             self.seen = keys
-            if said:
-                self.graph.ticker = said[-1]
         else:
             members = {m.name for m in self.team.members}
             for message in said:
@@ -502,14 +490,12 @@ class TeamScreen(Screen):
                 self.seen.add(key)
                 if message.sender in members and message.receiver in members:
                     self.graph.launch_flight(message)
-                else:
-                    self.graph.ticker = message
         self.show_head()
         self.show_log()
 
     def show_log(self) -> None:
-        """The conversation as a sequence diagram (teamtree.sequence): a lane a member, an arrow a
-        message. ← → light one member's lane and arrows."""
+        """The conversation as a chat (teamtree.chat), the newest at the bottom. ← → light one
+        member's messages, the rest gone quiet."""
         palette = self.graph.palette
         only = self.graph.selected_member() if self.picked else None
         head = Text("CONVERSATION", style=f"bold {MUTED}")
@@ -519,13 +505,11 @@ class TeamScreen(Screen):
         self.query_one("#team-log-head", Label).update(head)
         scroll = self.query_one(VerticalScroll)
         width = max(40, (scroll.content_size.width or self.size.width - 4) - 1)
-        lanes, rows = teamtree.sequence(self.team, self.messages[-LOG_LINES:], palette, width,
-                                        picked=only.name if only else None)
-        self.query_one("#team-lanes", Static).update(lanes if rows else "")
+        rows = teamtree.chat(self.messages[-LOG_LINES:], palette, width, picked=only.name if only else None)
         log = Text("\n").join(rows)
         if not self.messages:
-            log = Text("Nothing said yet. Once the members start, every message between them shows up here as an "
-                       "arrow from one lane to another, and flies across the boxes above.", style=MUTED)
+            log = Text("Nothing said yet. Once the members start, every message between them shows up here, "
+                       "and flies along the wires between the cards above.", style=MUTED)
         elif only is not None and not any(only.name in (m.sender, m.receiver) for m in self.messages):
             log.append(f"\n\nNothing said to or by {only.name} yet.", style=MUTED)
         self.query_one("#team-log", Static).update(log)

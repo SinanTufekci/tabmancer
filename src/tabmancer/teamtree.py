@@ -5,6 +5,7 @@ wires as it is sent. T opens the full team view."""
 
 from __future__ import annotations
 
+import textwrap
 from datetime import date
 
 from rich.text import Text
@@ -17,11 +18,7 @@ from .tokens import human
 FLIGHT_SECONDS = 1.8  # as in the team view
 TRAIL = 6  # cells of fading wire behind a message in flight
 CHIP_GAP = "  "
-TIME = 7  # "15:04  " before the lanes of the sequence diagram
-LANES_SHARE = 0.45  # the lanes take at most this much of the width; what was said gets the rest
-LANE_MOST, LANE_LEAST = 14, 7  # a lane's width
-LANE_LINE = "#333333"
-OTHER = "other"  # the lane of sessions outside the team that wrote to it
+TIME = 7  # "15:04  " before who wrote to whom in the conversation
 SHORTEST = 4  # a name on a team's row is never cut shorter; past that, "+2" stands for the last ones
 
 
@@ -180,68 +177,43 @@ def chips(members: list[tuple[str, bool, str, str, str, int]], width: int, lead_
     return drawn(SHORTEST, 1)
 
 
-def lanes_of(team: teams.Team, said: list[teams.Message]) -> list[str]:
-    """The diagram's lanes: you on the left when you (or tabmancer) said anything, then the lead and the
-    members, then one for anyone else who wrote to them."""
-    names = [team.lead.name, *(m.name for m in team.members if not m.lead)]
-    people = {m.sender for m in said} | {m.receiver for m in said}
-    left = [teams.YOU] if people & {teams.YOU, teams.TABMANCER} else []
-    right = [OTHER] if people - set(names) - {teams.YOU, teams.TABMANCER} else []
-    return [*left, *names, *right]
+CHAT_LINES = 3  # a message in the conversation gets at most this many lines
 
 
-def sequence(team: teams.Team, said: list[teams.Message], colours: dict[str, str], width: int,
-             picked: str | None = None) -> tuple[Text, list[Text]]:
-    """The conversation as a sequence diagram: a lane for each member, a row for each message with an
-    arrow from its sender's lane to its receiver's, and what it said beside the lanes; a day's first
-    message under a line naming the day, when not today. A message on its way is a dashed arrow from
-    a hollow dot. With a member picked, its lane and its arrows stay lit and the rest go quiet.
-    Returns the lane names' line and the rows, oldest first."""
-    lanes = lanes_of(team, said)
-    step = max(LANE_LEAST, min(LANE_MOST, int(width * LANES_SHARE) // max(1, len(lanes))))
-    xs = [TIME + step // 2 + i * step for i in range(len(lanes))]
-    end = TIME + step * len(lanes)
-
-    def lane(name: str) -> int:
-        if name in lanes:
-            return xs[lanes.index(name)]
-        return xs[0] if name == teams.TABMANCER else xs[-1]
-
-    head = Text(" " * TIME)
-    for name, x in zip(lanes, xs):
-        label = name if len(name) < step else name[: step - 2] + "…"
-        head.append(" " * max(0, x - len(label) // 2 - head.cell_len))
-        head.append(label, style=f"bold {colours.get(name, TEXT)}" if picked in (None, name) else MUTED)
+def chat(said: list[teams.Message], colours: dict[str, str], width: int, picked: str | None = None) -> list[Text]:
+    """The conversation as the lines of a chat: the time, who wrote to whom in their colours, and
+    what was said, wrapped under itself (at most CHAT_LINES lines); a day's first message under a
+    line naming the day, when not today. A message on its way is quieter and says so; tabmancer's
+    own prompts are quieter too. With a member picked, the messages to and from it stay lit and
+    the rest go quiet. Oldest first."""
+    if not said:
+        return []
+    pair = min(max(len(m.sender) + 3 + len(m.receiver) for m in said), max(12, width // 3))
+    indent = TIME + pair + 2
+    room = max(20, width - indent)
     rows: list[Text] = []
     day = date.today()
     for message in said:
         if message.at.date() != day:
             day = message.at.date()
-            rows.append(Text(f"{'':{TIME}}── {message.at:%a %d %b} ──", style=MUTED))
+            rows.append(Text(f"── {message.at:%a %d %b} ──", style=MUTED))
         lit = picked is None or picked in (message.sender, message.receiver)
-        colour = colours.get(message.sender, TEXT) if lit else MUTED
-        if not message.delivered:
-            colour = mix(MUTED, colour, 0.5)
-        cells = [(" ", "")] * end
-        for name, x in zip(lanes, xs):
-            cells[x] = ("│", mix(LANE_LINE, colours.get(name, TEXT), 0.6) if name == picked else LANE_LINE)
-        a, b = lane(message.sender), lane(message.receiver)
-        if a != b:
-            way = 1 if b > a else -1
-            for x in range(a + way, b, way):
-                cells[x] = ("─" if message.delivered else "╌", colour)
-            cells[a] = ("●" if message.delivered else "○", f"bold {colour}")
-            cells[b] = ("▶" if b > a else "◀", f"bold {colour}")
-        row = Text(f"{message.at:%H:%M}  ", style=MUTED)  # the time fills the cells before the lanes
-        for char, style in cells[TIME:]:
-            row.append(char, style=style)
-        words = Text(" " + gist(message, message.receiver), style=TEXT if lit and message.delivered else MUTED)
-        if not message.delivered:
-            words.append("  on its way", style=f"italic {MUTED}")
-        words.truncate(max(0, width - end), overflow="ellipsis")
-        row.append_text(words)
-        rows.append(row)
-    return head, rows
+        who = Text.assemble((message.sender, f"bold {colours.get(message.sender, TEXT)}" if lit else MUTED),
+                            (" → ", MUTED), (message.receiver, colours.get(message.receiver, TEXT) if lit else MUTED))
+        who.truncate(pair, overflow="ellipsis")
+        who.append(" " * (pair - who.cell_len))
+        quiet = not lit or not message.delivered or message.sender == teams.TABMANCER
+        lines = textwrap.wrap(one_line(message.text or message.summary), room) or [""]
+        if len(lines) > CHAT_LINES:
+            rest = lines[CHAT_LINES - 1]
+            lines = [*lines[:CHAT_LINES - 1], rest[: room - 1] + "…"]
+        for n, line in enumerate(lines):
+            row = Text.assemble((f"{message.at:%H:%M}  ", MUTED), who, "  ") if n == 0 else Text(" " * indent)
+            row.append(line, style=MUTED if quiet else TEXT)
+            if n == len(lines) - 1 and not message.delivered:
+                row.append("  on its way", style=f"italic {MUTED}")
+            rows.append(row)
+    return rows
 
 
 def head(state: TeamState, tokens: int, accent: str) -> Text:

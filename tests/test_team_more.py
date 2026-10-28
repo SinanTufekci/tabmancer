@@ -49,17 +49,19 @@ async def test_x_twice_closes_every_open_member(fake_home, tmp_path, monkeypatch
         assert closed == ["shop-lead", "shop-api"]  # the closed one (ui) is left alone
 
 
-async def test_the_head_says_what_each_member_has_used(fake_home, tmp_path):
+async def test_the_head_says_what_the_team_has_used_and_each_card_its_own(fake_home, tmp_path):
     team = a_team(tmp_path)
     screen = TeamScreen(team, "#d97757")
     viewer = Viewer(screen)
     async with viewer.run_test(size=(150, 44)) as pilot:
         await pilot.pause(0.2)
         viewer.session_tokens = {"L": Tokens(cache_read=3_000_000), "A": Tokens(output=500_000)}
-        screen.sessions = {"lead": open_session("L"), "api": open_session("A"), "ui": None}
+        screen.sessions = screen.graph.sessions = {"lead": open_session("L"), "api": open_session("A"), "ui": None}
         screen.show_head()
         head = str(screen.query_one("#team-head", Static).render())
-        assert "Tokens 3.5M  ·  lead 3M · api 500k" in head
+        assert "3.5M tokens" in head.splitlines()[0]
+        cards = screen.graph.render().plain.splitlines()
+        assert any("3M" in line for line in cards[:4]) and any("500k" in line for line in cards[4:])
 
 
 class Host(App):

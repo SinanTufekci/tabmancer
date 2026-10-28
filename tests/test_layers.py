@@ -49,7 +49,7 @@ async def test_every_part_has_its_tone_after_the_fade_in(fake_home):
         await settle(pilot, app)
         app.table.move_cursor(row=app.table.get_row_index("two"))
         # It stayed black for good: give a slow runner time to redraw, but no more than that.
-        for _ in range(60):
+        for _ in range(120):
             await pilot.pause(0.05)
             backgrounds = {seg.style.bgcolor.triplet.hex for seg in app.meta.render_line(0)
                            if isinstance(seg.style, Style) and seg.style.bgcolor}

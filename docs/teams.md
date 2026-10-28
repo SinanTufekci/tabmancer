@@ -74,21 +74,21 @@ with another member's name, and the message arrives there as a new turn, even if
 session was idle. tabmancer never carries a message; it reads them back from the
 transcripts to draw the team view:
 
-- the orchestrator on top and the members below, each box with the member's focus, what it
-  is doing (working, waiting, needs you), the tokens it has used, how full its context is,
-  and how many messages it has not read. The boxes grow with the window;
-- beside the wire down to each member, how many messages went down it and back up
-  (`3▼ 2▲`), and the latest of them;
-- every new message flying along the wires from sender to receiver, then spelled out
-  underneath;
-- the conversation as a sequence diagram: a lane for each member (yours on the left), and
-  for each message an arrow from the sender's lane to the receiver's, with what it said
-  beside it. A message still on its way is a dashed arrow, and a new day is named. The
-  prompts tabmancer starts members with are drawn as tabmancer's, quieter than yours.
+- the orchestrator's card on top and the members' cards below it on a tree of wires, each
+  card with what the member is doing (working, waiting, needs you, needs your OK, idle), how
+  many messages it has not read, how full its context is (a small meter), its model and the
+  tokens it has used. The cards grow with the window, a row of them under each wire, and the
+  picked member's focus is written under them;
+- on the wire to each member, how many messages went down it and back up (`3▼ 2▲`);
+- every new message flying along the wires from sender to receiver;
+- the conversation as a chat: the time, who wrote to whom in their colours, and what was
+  said, wrapped under itself (three lines at most). A message still on its way says so, and
+  a new day is named. The prompts tabmancer starts members with are tabmancer's, quieter
+  than yours.
 
 `Enter` on a team's row opens that team's view. `T` lists the teams anywhere, to open one
 or start a new one (on a team's row or a member, with that team picked). `←` `→` pick
-a member: its box, its lane and its arrows stay lit and the rest go quiet; past the last
+a member: its card and its messages stay lit and the rest go quiet; past the last
 member everyone is lit again. `Enter` goes to the member's tab (or opens it if it is
 closed), `s` starts every member that is not open, and `a` adds members, who introduce
 themselves to the orchestrator. `d` twice takes the picked member off the team (never the

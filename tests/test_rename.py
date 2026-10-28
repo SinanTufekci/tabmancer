@@ -36,7 +36,7 @@ def test_a_closed_session_runs_rename_once_without_a_tab(tmp_path, monkeypatch):
         RENAME(Session(session_id="s1", path=None, cwd=str(tmp_path)), "x")
 
 
-async def until(pilot, check, tries=100):
+async def until(pilot, check, tries=200):  # a loaded machine takes its time
     for _ in range(tries):
         await pilot.pause(0.05)
         if check():
