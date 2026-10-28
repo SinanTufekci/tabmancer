@@ -13,17 +13,19 @@ import base64
 import contextlib
 import io
 import json
+import math
 import re
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image, ImageChops
 
-from tabmancer.mascot import ARM, ARMS, EYES, LEGS, PALETTE, SPRITE
+from tabmancer import bitart, bitmoves
 from tabmancer.theme import AMBER, BLUE, GREEN, MUTED, RED, TEXT, THEMES
 
 DOCS = Path(__file__).resolve().parent.parent / "docs"
@@ -78,7 +80,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
   <div id="caption" class="abs"></div>
   <div id="window" class="abs"><div id="strip"></div><div id="pane"></div></div>
   <div id="restart" class="abs">Restarting<span id="dots"></span></div>
-  <canvas id="bit" class="abs" width="22" height="17"></canvas>
+  <canvas id="bit" class="abs" width="110" height="78"></canvas>
   <img id="shot" class="abs" src="__SHOT__">
   <div id="name" class="abs"><span>tab</span>mancer</div>
   <div id="install" class="abs">every coding-agent session, one look &nbsp;·&nbsp; <b>uv tool install tabmancer</b></div>
@@ -87,7 +89,10 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 <script>
 const T = parseFloat(new URLSearchParams(location.search).get("t") || "0");
 const TABS = __TABS__;
-const SPRITE = __SPRITE__, LEGS = __LEGS__, ARMS = __ARMS__, EYES = __EYES__, PALETTE = __PALETTE__, ARM = "__ARM__";
+// Bit in real pixels, a picture for each frame it is seen in (drawn by tabmancer.bitart), decoded once
+const BITS = __BITS__.map((src) => { const im = new Image(); im.src = src; return im; });
+const BIT_FROM = __BIT_FROM__, FPS = __FPS__;
+window.bitsReady = Promise.all(BITS.map((im) => im.decode()));
 const STAR = "·✢✶✻✽✻✶✢";
 const clamp = (x) => Math.max(0, Math.min(1, x));
 const ease = (x) => 1 - Math.pow(1 - clamp(x), 3);
@@ -155,30 +160,19 @@ function restart(t) {
 function bit(t) {
   const c = $("bit"), g = c.getContext("2d");
   const shown = pulse(t, 5.2, 5.5, 8.2, 8.6);
-  const scale = 9;
-  c.style.width = 22 * scale + "px"; c.style.height = 17 * scale + "px";
-  const hop = Math.max(0, Math.sin(Math.PI * clamp((t - 5.75) / 0.45))) * 14;
+  const scale = 2;
+  c.style.width = 110 * scale + "px"; c.style.height = 78 * scale + "px";
   c.style.opacity = shown;
-  c.style.transform = `translateY(${(1 - shown) * 20 - hop}px)`;
-  g.clearRect(0, 0, 22, 17);
-  const rows = SPRITE.concat(LEGS.stand);
-  rows.forEach((row, y) => [...row].forEach((key, x) => {
-    if (PALETTE[key]) { g.fillStyle = PALETTE[key]; g.fillRect(x, y, 1, 1); }
-  }));
-  const raised = t > 5.75 && t < 7.4;
-  for (const [row, col, len] of ARMS[raised ? "up" : "down"]) { g.fillStyle = ARM; g.fillRect(col, row, 1, len); }
-  const blink = (t % 3.1) > 2.95;
-  for (const [row, col] of EYES[raised ? "happy" : blink ? "blink" : "normal"]) { g.fillStyle = "#e6f4ff"; g.fillRect(col, row, 1, 1); }
-  const glow = 0.55 + 0.45 * Math.sin(t * 5);
-  g.globalAlpha = glow; g.fillStyle = "__ACCENT__";
-  rows.forEach((row, y) => [...row].forEach((key, x) => { if (key === "a" || key === "c") g.fillRect(x, y, 1, 1); }));
-  g.globalAlpha = 1;
+  c.style.transform = `translateY(${(1 - shown) * 20}px)`;
+  g.clearRect(0, 0, 110, 78);
+  const k = Math.round(t * FPS) - BIT_FROM;
+  if (shown > 0 && k >= 0 && k < BITS.length) g.drawImage(BITS[k], 0, 0);
   const sparks = $("sparks"); sparks.innerHTML = "";
   const p = clamp((t - 5.75) / 0.9);
   if (p > 0 && p < 1) for (let k = 0; k < 10; k++) {
     const a = -Math.PI * (0.15 + 0.7 * k / 9), r = 40 + p * 120;
     const s = document.createElement("div"); s.className = "spark abs";
-    s.style.left = 150 + 99 + Math.cos(a) * r + "px"; s.style.top = 205 + 40 + Math.sin(a) * r + "px";
+    s.style.left = 150 + 110 + Math.cos(a) * r + "px"; s.style.top = 205 + 60 + Math.sin(a) * r + "px";
     s.style.opacity = 1 - p; s.style.background = k % 2 ? "__ACCENT__" : "#f4c38f";
     sparks.appendChild(s);
   }
@@ -217,14 +211,42 @@ def fonts() -> str:
     return "\n".join(re.sub(r"url\((https://[^)]+)\)", inline, face) for face in faces)
 
 
+def bit_pictures() -> tuple[int, list[str]]:
+    """Bit in real pixels for each frame it is seen in, as the dashboard draws it in Windows Terminal:
+    standing, then cheering (a green beacon) while the tabs come back, then waving. PNG data URIs,
+    and the frame the first is for."""
+    first, last = int(5.1 * FPS), int(8.7 * FPS) + 1
+    accent = tuple(int(ACCENT[i:i + 2], 16) for i in (1, 3, 5))
+    out = []
+    for k in range(first, last):
+        t = k / FPS
+        action, since = ("idle", 0.0) if t < 5.75 else ("cheer", 5.75) if t < 7.4 else ("wave", 7.4)
+        glow = (math.sin(t * 5) + 1) / 2
+        context = bitmoves.Context(beat=round((t - since) * 20), frame=k * 2, beacon=glow, chest=glow,
+                                   eyes="happy" if action != "idle" else "normal")
+        frame = bitmoves.frame(action, context)
+        pose = bitart.themed(frame.pose, accent)
+        if action == "cheer":
+            pose = replace(pose, beacon_colour=tuple(int(GREEN[i:i + 2], 16) for i in (1, 3, 5)))
+        image = Image.new("RGBA", bitart.size())
+        for y, row in enumerate(bitart.frame_pixels(bitart.Frame(pose, frame.effects))):
+            for x, colour in enumerate(row):
+                if colour is not None:
+                    image.putpixel((x, y), (*colour, 255))
+        data = io.BytesIO()
+        image.save(data, format="PNG")
+        out.append("data:image/png;base64," + base64.b64encode(data.getvalue()).decode())
+    return first, out
+
+
 def page(shot: Path) -> str:
+    first, pictures = bit_pictures()
     replacements = {
         "__FONTS__": fonts(),
         "__W__": str(W), "__H__": str(H), "__TEXT__": TEXT, "__MUTED__": MUTED, "__ACCENT__": ACCENT,
-        "__BLUE__": BLUE, "__GREEN__": GREEN, "__AMBER__": AMBER, "__RED__": RED, "__ARM__": ARM,
-        "__TABS__": json.dumps(TABS), "__SPRITE__": json.dumps(SPRITE), "__LEGS__": json.dumps(LEGS),
-        "__ARMS__": json.dumps(ARMS), "__EYES__": json.dumps(EYES), "__PALETTE__": json.dumps(PALETTE),
-        "__SHOT__": "data:image/png;base64," + base64.b64encode(shot.read_bytes()).decode(),
+        "__BLUE__": BLUE, "__GREEN__": GREEN, "__AMBER__": AMBER, "__RED__": RED,
+        "__TABS__": json.dumps(TABS), "__BITS__": json.dumps(pictures), "__BIT_FROM__": str(first),
+        "__FPS__": str(FPS), "__SHOT__": "data:image/png;base64," + base64.b64encode(shot.read_bytes()).decode(),
     }
     out = PAGE
     for key, value in replacements.items():
@@ -268,7 +290,7 @@ class Edge:
                              ).get("result", {}).get("value"):
                 break
             time.sleep(0.1)
-        self.evaluate("document.fonts.ready.then(() => true)")
+        self.evaluate("Promise.all([document.fonts.ready, window.bitsReady]).then(() => true)")
 
     def call(self, method: str, **params):
         self.calls += 1

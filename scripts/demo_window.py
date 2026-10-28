@@ -20,7 +20,7 @@ os.environ.pop("NO_COLOR", None)  # a window started from a test shell may have 
 
 from tabmancer import app as app_module
 from tabmancer import demo as demo_data  # the made-up sessions
-from tabmancer import focus, report, sessions, summarize, teams, toast, usage
+from tabmancer import focus, report, sessions, sixel, summarize, teams, toast, usage
 from tabmancer.app import TEAM_ROW, SessionPicker
 from tabmancer.teamview import TeamScreen
 
@@ -127,6 +127,7 @@ def main() -> None:
     summarize._store("pcb-router", {"summary": demo_data.SUMMARY, "size": pcb.stat().st_size, "model": "haiku"})
     summarize.ask = lambda prompt, model, timeout=180: demo_data.DEMO_REPORT  # no model call
     report.save = lambda entry, folder=None: HOME / "report.md"
+    sixel.probe()  # Bit in real pixels, as the dashboard draws it in Windows Terminal
     Demo(days=14).run()
 
 
