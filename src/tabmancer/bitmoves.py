@@ -13,7 +13,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from .bitart import RED, Arm, Effect, Frame, Pose
+from .bitart import RED, Arm, Effect, Frame, Pose, arm_between
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ TRAITS: dict[str, Trait] = {
     # Things that happen.
     "cheer": Trait("cheer", (40, 40)),
     "dance": Trait("cheer", (60, 60)),
-    "spin": Trait("dizzy", (24, 24)),
+    "spin": Trait("dizzy", (30, 30)),
     "alarm": Trait("alarm", (50, 50), speed=0.9),
     "worried": Trait("look", (60, 60)),
     "dizzy": Trait("dizzy", (40, 40)),
@@ -79,7 +79,8 @@ class Context:
     beat: int = 0                # frames since the action started
     frame: int = 0               # frames since Bit came to life
     direction: int = 1           # walking right (1) or left (-1)
-    distance: float = 0.0        # walked so far, in octant pixels: drives the steps
+    distance: float = 0.0        # walked so far, in octant pixels: drives the octant steps
+    gait: float = 0.0            # strides walked (stride_length each): drives the steps in pixels
     height: float = 0.0          # off the ground, in octant pixels
     eyes: str = "normal"         # what the behaviour says the eyes do (octant names)
     antenna: float = 0.0         # its sway, degrees
@@ -116,19 +117,21 @@ def _step(value: float, step: float) -> float:
 
 
 def _steady_arm(arm: Arm) -> Arm:
-    return Arm(arm.kind, _step(arm.angle, 4), (_step(arm.to[0], 1), _step(arm.to[1], 1)), arm.front)
+    return Arm(arm.kind, _step(arm.angle, 4), (_step(arm.to[0], 1), _step(arm.to[1], 1)), arm.front,
+               (_step(arm.elbow[0], 1), _step(arm.elbow[1], 1)))
 
 
 def steady(pose: Pose) -> Pose:
     """The pose in steps about a pixel apart, so poses repeat and are drawn once (bitart.drawn keeps
-    them): a swinging arm, a tilted head or a swaying antenna come round to the same few."""
-    return _with(pose, lift=_step(pose.lift, 1), squash=_step(pose.squash, 0.02), widen=_step(pose.widen, 0.08),
+    them): a swinging arm, a tilted head or a swaying antenna come round to the same few. A gear
+    comes round to itself every tooth (45 degrees)."""
+    return _with(pose, lift=_step(pose.lift, 1), squash=_step(pose.squash, 0.02), turn=_step(pose.turn, 6) % 360,
                  lean=_step(pose.lean, 2), tilt=_step(pose.tilt, 2), head_y=_step(pose.head_y, 0.5),
                  antenna=_step(pose.antenna, 4), left_foot=_step(pose.left_foot, 1),
                  right_foot=_step(pose.right_foot, 1), look=(_step(pose.look[0], 1), _step(pose.look[1], 1)),
                  beacon=_step(pose.beacon, 0.125), chest=_step(pose.chest, 0.125), left=_steady_arm(pose.left),
                  right=_steady_arm(pose.right), prop_at=(_step(pose.prop_at[0], 0.5), _step(pose.prop_at[1], 0.5)),
-                 prop_turn=_step(pose.prop_turn, 15 if pose.prop == "gear" else 1))
+                 prop_turn=_step(pose.prop_turn % 45, 7.5) % 45 if pose.prop == "gear" else _step(pose.prop_turn, 1))
 
 
 def _keeps_eyes(action: str) -> bool:
@@ -157,6 +160,22 @@ def _breath(c: Context) -> float:
     return math.sin(c.frame / 14) * 0.5
 
 
+def ease(t: float) -> float:
+    """0 to 1, slow to start and slow to stop."""
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def _hop(t: float, height: float) -> float:
+    """Off the ground and back, t going 0 to 1: up and down in an arc, never a jump of a few pixels."""
+    return height * math.sin(math.pi * t) if 0 < t < 1 else 0.0
+
+
+def _arms(left: tuple[Arm, Arm, float], right: tuple[Arm, Arm, float]) -> dict[str, Arm]:
+    """Both arms, each on its way from one place to another (bitart.arm_between): (from, to, how far)."""
+    return {"left": arm_between(-1, *left), "right": arm_between(1, *right)}
+
+
 # --- nothing going on ---------------------------------------------------------------------------
 
 def _idle(c: Context) -> Frame:
@@ -176,16 +195,17 @@ def _tap(c: Context) -> Frame:
 
 
 def _stretch(c: Context) -> Frame:
-    k = min(1.0, c.beat / 10) if c.beat < 30 else max(0.0, 1 - (c.beat - 30) / 10)
+    k = ease(c.beat / 14) if c.beat < 26 else ease((40 - c.beat) / 14)
     swing = math.sin(c.beat / 3) * 8 * k
-    arms = (_raise(-10 + swing), _raise(-10 - swing)) if k > 0.4 else (_hang(40 * k + 8), _hang(40 * k + 8))
-    return Frame(Pose(squash=1 + 0.05 * k, left=arms[0], right=arms[1], eyes="closed" if 6 < c.beat < 34 else "happy",
-                      tilt=math.sin(c.beat / 6) * 3 * k))
+    up = ease((k - 0.1) / 0.8)
+    return Frame(Pose(squash=1 + 0.05 * k, eyes="closed" if 6 < c.beat < 34 else "happy", tilt=math.sin(c.beat / 6) * 3 * k,
+                      **_arms((_hang(40 * k + 8), _raise(-10 + swing), up), (_hang(40 * k + 8), _raise(-10 - swing), up))))
 
 
 def _coffee(c: Context) -> Frame:
-    sip = (c.beat % 50) < 18
-    k = math.sin(min(1.0, (c.beat % 50) / 6) * math.pi / 2) if sip else 0.0
+    beat = c.beat % 50
+    sip = beat < 20  # up in six frames, a sip, down in six
+    k = ease(beat / 6) if beat < 14 else ease((20 - beat) / 6)
     hand = (71 - 5 * k, 66 - 13 * k)
     effects = [Effect("steam", hand[0] + 1 + math.sin((c.frame + n * 7) / 5) * 1.5, hand[1] - 7 - n * 4,
                       size=0.6, alpha=1 - n * 0.3) for n in range(3)] if not sip and c.frame % 3 else []
@@ -216,13 +236,23 @@ def _jump(c: Context) -> Frame:
     up = c.height > 0.3
     dust = [Effect("dust", 55 + side * (12 + c.beat % 6), 76, size=0.8, alpha=0.8) for side in (-1, 1)] \
         if not up and 2 < c.beat < 8 else []
-    return Frame(Pose(squash=1.05 if up else (0.92 if c.beat < 3 else 1.0), tucked=up,
-                      left=_raise(10) if up else _hang(24), right=_raise(10) if up else _hang(24), eyes="happy"), dust)
+    k = min(ease((c.beat + 1) / 6), ease((15 - c.beat) / 8))  # the arms up as it takes off, down after it lands
+    return Frame(Pose(squash=1.05 if up else (0.92 if c.beat < 3 else 1.0), tucked=up, eyes="happy",
+                      **_arms((_hang(24), _raise(10), k), (_hang(24), _raise(10), k))), dust)
+
+
+STRIDE_STEPS = 24  # a stride's poses: a walk comes round to the same ones
+
+
+def stride_length(speed: float) -> float:
+    """Octant pixels walked a stride (two steps): four strolling; hurrying, longer, so that a stride
+    takes ten frames at least and the legs and arms swing, not flicker."""
+    return max(4.0, speed * 10)
 
 
 def stride(c: Context) -> float:
-    """Where in its stride Bit is, in sixteen steps: a walk comes round to the same poses."""
-    return round(c.distance / 4 * 16) / 16
+    """Where in its stride Bit is, 0 to 1, in STRIDE_STEPS steps."""
+    return round(c.gait * STRIDE_STEPS) % STRIDE_STEPS / STRIDE_STEPS
 
 
 def _walk(c: Context, speed: float = 1.0) -> Frame:
@@ -238,7 +268,7 @@ def _skip(c: Context) -> Frame:
     t = stride(c)
     hop = abs(math.sin(math.pi * t))
     f = _walk(c, 1.3)
-    return Frame(_with(f.pose, lift=hop * 4, eyes="happy", left=_raise(math.sin(t * 6) * 15) if hop > 0.6 else _hang(30),
+    return Frame(_with(f.pose, lift=hop * 4, eyes="happy", left=_raise(math.sin(2 * math.pi * t) * 15),
                        right=_hang(30)))
 
 
@@ -268,13 +298,13 @@ def _work(c: Context) -> Frame:
 def _think(c: Context) -> Frame:
     prop = "gear" if (c.beat // 25) % 2 == 0 else "dots"
     return Frame(Pose(right=_reach(63, 57), left=_reach(48, 67, front=True), eyes="up", tilt=-4 + math.sin(c.beat / 12) * 2,
-                      prop=prop, prop_at=(80, 14), prop_turn=c.beat * 9 if prop == "gear" else c.beat / 6,
+                      prop=prop, prop_at=(80, 14), prop_turn=c.beat * 7.5 if prop == "gear" else c.beat / 6,
                       antenna=math.sin(c.beat / 10) * 6))
 
 
 def _idea(c: Context) -> Frame:
     pop = min(1.0, c.beat / 4)
-    return Frame(Pose(lift=4 if 2 < c.beat < 8 else 0, left=_raise(-5), right=_raise(15), eyes="star", blush=True,
+    return Frame(Pose(lift=_hop((c.beat - 2) / 7, 4), left=_raise(-5), right=_raise(15), eyes="star", blush=True,
                       prop="bulb" if pop > 0.5 else None, prop_at=(80, 12), antenna=8 if c.beat < 6 else 0),
                  [Effect("spark", 80 + dx, 12 + dy, size=1) for dx, dy in ((-9, -4), (9, -4), (0, -11), (-7, 6), (7, 6))
                   if c.beat % 6 < 3])
@@ -302,16 +332,20 @@ def _call(c: Context) -> Frame:
     beat = c.beat % 120
     if beat >= 48:  # between calls: stand and look this way
         return Frame(Pose(eyes="wide" if beat % 30 < 4 else "open", head_y=_breath(c)))
+    # The arms go up as a call starts and come down before it ends, not in a frame.
+    up = min(ease(beat / 8), ease((47 - beat) / 10))
+    rest = Pose()
     if c.call == "point":  # points up at the list
-        return Frame(Pose(right=_raise(-35 + math.sin(beat / 3) * 6), left=_hang(10), eyes="wide",
-                          tilt=-6, lift=2 if beat % 12 < 3 else 0),
+        return Frame(Pose(eyes="wide", tilt=-6 * up, lift=_hop((beat % 12) / 5, 2) * up,
+                          **_arms((rest.left, _hang(10), up), (rest.right, _raise(-35 + math.sin(beat / 3) * 6), up))),
                      [Effect("bang", 82, 6, size=1)] if beat % 10 < 6 else [])
     if c.call == "bounce":  # both arms, jumping
-        up = beat % 10 < 5
-        return Frame(Pose(lift=4 if up else 0, tucked=up, left=_raise(math.sin(beat / 2) * 20),
-                          right=_raise(-math.sin(beat / 2) * 20), eyes="wide"))
-    return Frame(Pose(right=_raise(math.sin(beat / 1.8) * 28), left=_hang(8), eyes="wide",
-                      lift=2.5 if beat % 10 < 3 else 0))
+        hop = _hop((beat % 10) / 7, 4) * up
+        return Frame(Pose(lift=hop, tucked=hop > 2, eyes="wide",
+                          **_arms((rest.left, _raise(math.sin(beat / 2) * 20), up),
+                                  (rest.right, _raise(-math.sin(beat / 2) * 20), up))))
+    return Frame(Pose(eyes="wide", lift=_hop((beat % 10) / 5, 2.5) * up,
+                      **_arms((rest.left, _hang(8), up), (rest.right, _raise(math.sin(beat / 1.8) * 28), up))))
 
 
 # --- things that happen -------------------------------------------------------------------------
@@ -324,19 +358,21 @@ def _cheer(c: Context) -> Frame:
 
 
 def _dance(c: Context) -> Frame:
-    beat = (c.beat // 6) % 4
-    side = -1 if beat in (0, 1) else 1
-    return Frame(Pose(lean=side * 8, left_foot=3 if side < 0 and c.beat % 6 < 3 else 0,
-                      right_foot=3 if side > 0 and c.beat % 6 < 3 else 0,
-                      left=_raise(20) if side < 0 else _hang(40), right=_raise(-20) if side > 0 else _hang(40),
-                      eyes="heart", blush=True, tilt=side * 6),
+    """Swaying side to side, a beat of 24 frames: leaning and tilting over, the arm on that side up
+    and a foot off the ground, swung there and back, not snapped."""
+    sway = -math.cos(c.beat / 24 * 2 * math.pi)  # -1 over to the left, 1 to the right
+    side = 1 if sway > 0 else -1
+    left, right = ease(0.5 - sway * 0.5), ease(0.5 + sway * 0.5)  # how far up each arm is
+    return Frame(Pose(lean=sway * 8, tilt=sway * 6, left_foot=3 * max(0.0, -sway) ** 2, right_foot=3 * max(0.0, sway) ** 2,
+                      eyes="heart", blush=True, **_arms((_hang(40), _raise(20), left), (_hang(40), _raise(-20), right))),
                  [Effect("note", 88 if side > 0 else 18, 26 - (c.beat % 12), alpha=1 - (c.beat % 12) / 12)])
 
 
 def _spin(c: Context) -> Frame:
-    turn = math.cos(c.beat / 24 * 2 * math.pi)
-    return Frame(Pose(widen=max(0.08, abs(turn)), eyes="happy" if turn > 0 else "blink", lift=3 if 8 < c.beat < 16 else 0,
-                      left=_raise(10), right=_raise(10)))
+    """Round once on the spot and facing you again: slow to start and to stop, off the ground a
+    little on the way, the arms out. Its head and body go round, its back shows, then its face."""
+    t = c.beat / TRAITS["spin"].frames[0]
+    return Frame(Pose(turn=360 * ease(t), lift=_hop(t, 3), eyes="happy", left=_hang(70), right=_hang(70)))
 
 
 def _alarm(c: Context) -> Frame:
@@ -364,8 +400,9 @@ def _dizzy(c: Context) -> Frame:
 
 def _yawn(c: Context) -> Frame:
     k = math.sin(min(1.0, c.beat / 40) * math.pi)
-    return Frame(Pose(left=_raise(-20) if k > 0.5 else _hang(20 + 30 * k), right=_raise(20) if k > 0.5 else _hang(20 + 30 * k),
-                      eyes="closed" if k > 0.3 else "half", tilt=-4 * k, squash=1 + 0.04 * k, head_y=-1 * k))
+    up = ease((k - 0.15) / 0.7)
+    return Frame(Pose(eyes="closed" if k > 0.3 else "half", tilt=-4 * k, squash=1 + 0.04 * k, head_y=-1 * k,
+                      **_arms((_hang(20 + 30 * k), _raise(-20), up), (_hang(20 + 30 * k), _raise(20), up))))
 
 
 def _nod(c: Context) -> Frame:
@@ -389,9 +426,10 @@ def _sleep(c: Context) -> Frame:
 
 def _wake(c: Context) -> Frame:
     first = c.beat < 10
+    down = ease((c.beat - 8) / 10)  # the arms, up with the start, come down again
     return Frame(Pose(eyes="wide" if first else "blink" if c.beat in (14, 15) else "open",
-                      lift=5 if 1 < c.beat < 6 else 0, antenna=math.sin(c.beat / 1.4) * max(0, 20 - c.beat),
-                      left=_raise(20) if first else _hang(10), right=_raise(-20) if first else _hang(10)),
+                      lift=_hop((c.beat - 1) / 6, 5), antenna=math.sin(c.beat / 1.4) * max(0, 20 - c.beat),
+                      **_arms((_raise(20), _hang(10), down), (_raise(-20), _hang(10), down))),
                  [Effect("bang", 80, 4, size=1)] if first else [])
 
 

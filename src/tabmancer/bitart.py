@@ -19,12 +19,16 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
+from itertools import pairwise
 
 CELLS = (11, 4)          # Bit's place in the strip, in cells
 GROUND = 77.5            # the feet, in design coordinates (the strip's 80 rows, less a band's spare)
 HEIGHT = 78              # design rows down Bit's place: in Windows Terminal, its whole bands of six
 SCALE = 0.9              # Bit a little smaller than its place: room to hop and raise its arms
 WT_CELL = (10, 20)       # Sixel pixels a cell in Windows Terminal
+HEAD_DEPTH = 0.8         # the head front to back, its width being 1, and the body's: turned side on,
+BODY_DEPTH = 0.65        # Bit is this wide, not a sheet of paper
+FAR = 1000.0             # a design coordinate nothing is drawn at: the face, seen from the back
 
 Colour = tuple[int, int, int]
 
@@ -77,11 +81,13 @@ PROPS = (None, "laptop", "mug", "clipboard", "wrench", "box", "bulb", "gear", "d
 @dataclass(frozen=True)
 class Arm:
     """An arm: hanging at an angle from straight down (outward positive, inward negative),
-    raised beside the head and swung, or reaching for a design point (a hand on the laptop)."""
-    kind: str = "hang"       # hang, raise, reach
+    raised beside the head and swung, reaching for a design point (a hand on the laptop), or
+    bent with its elbow and hand where they are (on its way from one of those to another)."""
+    kind: str = "hang"       # hang, raise, reach, bent
     angle: float = 8.0       # hang: degrees out; raise: the swing
-    to: tuple[float, float] = (0.0, 0.0)  # reach: where the hand goes
+    to: tuple[float, float] = (0.0, 0.0)  # reach, bent: where the hand goes
     front: bool = False      # drawn over the body (reaching in front of it)
+    elbow: tuple[float, float] = (0.0, 0.0)  # bent: where the elbow is
 
 
 @dataclass(frozen=True)
@@ -89,7 +95,7 @@ class Pose:
     """Where every part of Bit is this frame. Offsets in design pixels, angles in degrees."""
     lift: float = 0.0          # the whole of Bit off the ground (a hop)
     squash: float = 1.0        # height about the feet: < 1 squashed, > 1 stretched
-    widen: float = 1.0         # width about the middle (a spin squeezes it)
+    turn: float = 0.0          # turned about its middle, degrees: 0 facing you, 180 its back to you
     lean: float = 0.0          # the body leaning, degrees (hurrying)
     tilt: float = 0.0          # the head, degrees, clockwise
     head_y: float = 0.0        # the head bobbing on its own
@@ -185,9 +191,24 @@ class _Space:
         self.sx, self.sy = scale(cell)  # screen pixels a design pixel
         self.feet = GROUND - p.lift
         self.k = SCALE * p.squash
-        tilt, lean = math.radians(-p.tilt), math.radians(-p.lean)
+        tilt, lean, turn = math.radians(-p.tilt), math.radians(-p.lean), math.radians(p.turn)
         self.tilt = (math.cos(tilt), math.sin(tilt))
         self.lean = (math.cos(lean), math.sin(lean))
+        self.turn = (math.cos(turn), math.sin(turn))
+        # Turned, the head and the body are as wide as they are across and deep there, and what is
+        # on their front has gone round by this much (an ellipse turned: its point at the front).
+        self.head_across, self.head_round = self._round(HEAD_DEPTH)
+        self.body_across, self.body_round = self._round(BODY_DEPTH)
+
+    def _round(self, depth: float) -> tuple[float, float]:
+        c, s = self.turn
+        return math.hypot(c, depth * s), math.atan2(depth * s, c) if self.p.turn % 360 else 0.0
+
+    def turned(self, x: float, z: float = 0.0) -> tuple[float, float]:
+        """A point x across from the middle and z out in front of it, as Bit turns: how far across
+        it is now, and how far in front (behind the middle when negative)."""
+        c, s = self.turn
+        return x * c + z * s, z * c - x * s
 
     def ground(self, x, y):
         """Where Bit stands: its shadow stays there when it hops."""
@@ -195,7 +216,7 @@ class _Space:
 
     def legs(self, x, y):
         x, y = x / self.sx, y / self.sy
-        return 55 + (x - 55) / (SCALE * self.p.widen), GROUND - (self.feet - y) / self.k
+        return 55 + (x - 55) / SCALE, GROUND - (self.feet - y) / self.k
 
     def body(self, x, y):
         bx, by = self.legs(x, y)
@@ -213,13 +234,67 @@ class _Space:
         dx, dy = bx - 55, by - self.p.head_y - 40
         return 55 + dx * c - dy * s, 40 + dx * s + dy * c
 
+    def helmet(self, x, y):
+        """The head's coordinates for its outline, as wide as it is turned."""
+        hx, hy = self.head(x, y)
+        return 55 + (hx - 55) / self.head_across, hy
+
+    def face(self, x, y):
+        """The head's coordinates on its front, where the visor and the eyes are: turned, they go
+        round to the side and out of sight, narrower as they go."""
+        return _surface(*self.helmet(x, y), 35.0, self.head_round, True)
+
+    def nape(self, x, y):
+        """The head's coordinates on its back, seen as Bit turns away."""
+        return _surface(*self.helmet(x, y), 35.0, self.head_round, False)
+
+    def torso(self, x, y):
+        """The body's coordinates for its outline, as wide as it is turned."""
+        bx, by = self.body(x, y)
+        return 55 + (bx - 55) / self.body_across, by
+
+    def chest(self, x, y):
+        """The body's coordinates on its front (the panel, its light, the vents)."""
+        return _surface(*self.torso(x, y), 17.5, self.body_round, True)
+
+    def back(self, x, y):
+        """The body's coordinates on its back."""
+        return _surface(*self.torso(x, y), 17.5, self.body_round, False)
+
+    def seen(self, left: float, right: float, part: str = "head", front: bool = True) -> tuple[float, float] | None:
+        """Where across what lies from left to right on the front (or the back) of the head or the
+        body shows as Bit turns, for its box: None when it has gone round out of sight."""
+        half, gone, across = (35.0, self.head_round, self.head_across) if part == "head" else \
+            (17.5, self.body_round, self.body_across)
+        if not gone:
+            return (left, right) if front else None
+        xs = []
+        for k in range(9):
+            at = math.asin(max(-1.0, min(1.0, (left + (right - left) * k / 8 - 55) / half))) + (0.0 if front else math.pi)
+            if math.cos(at + gone) >= 0:
+                xs.append(55 + half * math.sin(at + gone) * across)
+        return (min(xs) - 3, max(xs) + 3) if xs else None
+
     def to_screen(self, x, y, part="body"):
         """Where a design point lands on the screen, roughly (lean and tilt aside): for boxes."""
         drop = self.SIT_DROP if self.p.sitting and part != "legs" else 0.0
         head = self.p.head_y if part == "head" else 0.0
-        sx = 55 + (x - 55) * SCALE * self.p.widen
+        sx = 55 + (x - 55) * SCALE
         sy = self.feet - (GROUND - y - drop - head) * self.k
         return sx * self.sx, sy * self.sy
+
+
+def _surface(x: float, y: float, half: float, gone: float, front: bool) -> tuple[float, float]:
+    """A point of an outline half wide, turned: where on the front (or the back) of the part it is,
+    across as if it faced you; far off where that side is turned away. Untouched facing you."""
+    if not gone:
+        return (x, y) if front else (FAR, y)
+    if abs(x - 55) >= half:  # off the part's side: nothing of its front or back there
+        return FAR, y
+    seen = math.asin((x - 55) / half) - gone
+    if (math.cos(seen) > 0) != front:
+        return FAR, y
+    return 55 + half * math.sin(seen) * (1 if front else -1), y
 
 
 Paint = "callable[[float, float, float], Colour]"
@@ -230,7 +305,8 @@ def _shapes(p: Pose, s: _Space):
     shapes = []
 
     def add(part, box, distance, paint):
-        shapes.append((part, box, distance, paint))
+        if box is not None:  # None: round the other side, out of sight
+            shapes.append((part, box, distance, paint))
 
     flat = _flat
 
@@ -238,32 +314,46 @@ def _shapes(p: Pose, s: _Space):
     add("ground", (25, 74, 85, 80), lambda x, y: _ellipse(*s.ground(x, y), 55, GROUND - 0.3, 20 * spread, 1.8),
         flat(SHADOW))
 
+    def on(left, top, right, bottom, part, front=True):
+        """The box of what lies on the front (or the back) of the head or the body, where it shows
+        as Bit turns (_Space.seen); None out of sight."""
+        seen = s.seen(left, right, part, front)
+        return None if seen is None else (seen[0], top, seen[1], bottom)
+
     arms = {-1: p.left, 1: p.right}
+    # An arm is in front of the body when it reaches over it, or when Bit has turned it towards you.
+    front = {side: s.turned(side * 20.5, 6.0 if arms[side].front else 0.0)[1] > 0 for side in (-1, 1)}
     for side in (-1, 1):  # arms behind the body first
-        if not arms[side].front:
+        if not front[side]:
             shapes += _arm(side, arms[side], p, s)
 
-    for side, lifted in ((-1, p.left_foot), (1, p.right_foot)):
-        hip = 55 + side * 9
+    # The legs, the far one first; turned, they go round the middle, the feet pointing ahead.
+    for side, lifted in sorted(((-1, p.left_foot), (1, p.right_foot)), key=lambda leg: s.turned(leg[0] * 9)[1]):
+        hip = 55 + s.turned(side * 9)[0]
+        toe = 55 + s.turned(side * 11, 1.5)[0]
+        long = 6.0 * abs(s.turn[0]) + 4.5 * abs(s.turn[1])
         if p.sitting:
             continue
         top, sole = (68.0, 72.0) if p.tucked else (68.0, 75.6 - lifted)
         add(f"leg{side}", (hip - 4, top - 4, hip + 4, sole + 2),
             lambda x, y, h=hip, t=top, so=sole: _segment(*s.legs(x, y), h, t, h, so - 1.5, 2.8), flat(LIMB_SHADE))
-        add(f"foot{side}", (hip - 9, sole - 3, hip + 9, sole + 3),
-            lambda x, y, h=hip, so=sole, sd=side: _rounded(*s.legs(x, y), h + sd * 2, so, 6.0, 2.2, 2.0),
+        add(f"foot{side}", (toe - 9, sole - 3, toe + 9, sole + 3),
+            lambda x, y, f=toe, so=sole, w=long: _rounded(*s.legs(x, y), f, so, w, 2.2, 2.0),
             lambda x, y, d, so=sole: SOLE if s.legs(x, y)[1] > so + 1.0 else BODY)
 
     add("neck", (45, 57, 65, 64), lambda x, y: _rounded(*s.body(x, y), 55, 60.5, 8, 2.6, 1.5), flat(NECK))
-    add("body", (35, 58, 75, 74), lambda x, y: _rounded(*s.body(x, y), 55, 66, 17.5, 6.5, 4.0),
+    add("body", (35, 58, 75, 74), lambda x, y: _rounded(*s.torso(x, y), 55, 66, 17.5, 6.5, 4.0),
         lambda x, y, d: BODY if s.body(x, y)[1] < 67.5 else BODY_SHADE)
-    add("panel", (46, 61, 64, 71), lambda x, y: _rounded(*s.body(x, y), 55, 66, 7.5, 4.3, 2.0), flat(PANEL))
-    add("chest", (50, 61, 60, 71), lambda x, y: _circle(*s.body(x, y), 55, 66, 3.0),
+    add("panel", on(46, 61, 64, 71, "body"), lambda x, y: _rounded(*s.chest(x, y), 55, 66, 7.5, 4.3, 2.0), flat(PANEL))
+    add("chest", on(50, 61, 60, 71, "body"), lambda x, y: _circle(*s.chest(x, y), 55, 66, 3.0),
         lambda x, y, d: CHEST_SHINE if d < -1.6 and s.body(x, y)[1] < 65.2 else CHEST_LIGHT)
     for side in (-1, 1):  # vents on either side of the panel
         vx = 55 + side * 12.5
-        add(f"vent{side}", (vx - 2, 62, vx + 2, 70), lambda x, y, v=vx: _segment(*s.body(x, y), v, 63.5, v, 68.5, 0.55),
-            flat(BODY_SHADE))
+        add(f"vent{side}", on(vx - 2, 62, vx + 2, 70, "body"),
+            lambda x, y, v=vx: _segment(*s.chest(x, y), v, 63.5, v, 68.5, 0.55), flat(BODY_SHADE))
+    # Its back, turned away: a hatch where the panel is in front.
+    add("hatch", on(48, 61, 62, 71, "body", front=False), lambda x, y: _rounded(*s.back(x, y), 55, 66, 6.0, 3.6, 1.6),
+        flat(PANEL))
 
     if p.sitting:  # legs out in front, under the lowered body: wider than it, shoes at their ends
         add("lap", (33, 72, 77, 79), lambda x, y: _rounded(*s.legs(x, y), 55, 75.6, 19.5, 2.0, 2.0), flat(LIMB_SHADE))
@@ -274,28 +364,42 @@ def _shapes(p: Pose, s: _Space):
                 lambda x, y, f=fx, up=lifted: _rounded(*s.legs(x, y), f, 74.6 - up, 3.2, 2.9, 2.6),
                 lambda x, y, d: SOLE if d > -1.0 else LIMB)
 
-    # The head: ears, helmet, visor and eyes, the antenna.
+    # The head: ears, helmet, visor and eyes, the antenna. Turned, an ear goes round to the middle,
+    # over the helmet on the side that comes to you and behind it on the other.
+    ears = []
     for side in (-1, 1):
-        ex = 55 + side * 35.5
-        add(f"ear{side}", (ex - 6, 35, ex + 6, 47), lambda x, y, e=ex: _circle(*s.head(x, y), e, 41, 4.6),
-            lambda x, y, d, e=ex: HELMET_SHADE if _circle(*s.head(x, y), e, 41, 1.7) < 0 else HELMET_MID)
-    add("helmet", (19, 19, 91, 61), lambda x, y: _rounded(*s.head(x, y), 55, 40, 35, 20, 9), _helmet(s))
-    add("visor", (29, 28, 81, 55), lambda x, y: _rounded(*s.head(x, y), 55, 41.5, 25, 12.5, 6.5), _visor(s))
+        ex, ahead = s.turned(side * 35.5)
+        ex += 55
+        ears.append((ahead > 0.5, f"ear{side}", (ex - 6, 35, ex + 6, 47),
+                     lambda x, y, e=ex: _circle(*s.head(x, y), e, 41, 4.6),
+                     lambda x, y, d, e=ex: HELMET_SHADE if _circle(*s.head(x, y), e, 41, 1.7) < 0 else HELMET_MID))
+    for near, *ear in ears:
+        if not near:
+            add(*ear)
+    add("helmet", (19, 19, 91, 61), lambda x, y: _rounded(*s.helmet(x, y), 55, 40, 35, 20, 9), _helmet(s))
+    for near, *ear in ears:
+        if near:
+            add(*ear)
+    # The back of the head, turned away: a grille where the visor is in front.
+    add("grille", on(45, 34, 65, 50, "head", front=False),
+        lambda x, y: min(_segment(*s.nape(x, y), 47, gy, 63, gy, 1.1) for gy in (37, 42, 47)), flat(HELMET_SHADE))
+    add("visor", on(29, 28, 81, 55, "head"), lambda x, y: _rounded(*s.face(x, y), 55, 41.5, 25, 12.5, 6.5), _visor(s))
     shapes += _eyes(p, s)
     if p.blush:
         for side in (-1, 1):
             bx = 55 + side * 11
-            add(f"blush{side}", (bx - 4, 48, bx + 4, 52), lambda x, y, b=bx: _rounded(*s.head(x, y), b, 49.6, 2.6, 0.9, 0.9),
-                flat(BLUSH))
+            add(f"blush{side}", on(bx - 4, 48, bx + 4, 52, "head"),
+                lambda x, y, b=bx: _rounded(*s.face(x, y), b, 49.6, 2.6, 0.9, 0.9), flat(BLUSH))
     tip = _antenna_tip(p)
+    tip = (55 + s.turned(tip[0] - 55)[0], tip[1])  # it sways across Bit, which turns
     add("stem", (45, 4, 65, 22), lambda x, y: _segment(*s.head(x, y), 55, 21, tip[0], tip[1] + 3, 1.3), flat(HELMET_SHADE))
     add("beacon", (tip[0] - 6, tip[1] - 6, tip[0] + 6, tip[1] + 6),
         lambda x, y: _circle(*s.head(x, y), *tip, 4.4),
         lambda x, y, d: BEACON_RIM if d > -0.9 else (
             BEACON_SHINE if _circle(*s.head(x, y), tip[0] - 1.4, tip[1] - 1.4, 1.2) < 0 else BEACON_LIGHT))
 
-    for side in (-1, 1):  # arms in front of the body: on the laptop, holding the box
-        if arms[side].front:
+    for side in (-1, 1):  # arms in front of the body: on the laptop, holding the box, or turned to you
+        if front[side]:
             shapes[len(shapes):] = _arm(side, arms[side], p, s)
     shapes += _prop(p, s)
     return shapes
@@ -303,7 +407,7 @@ def _shapes(p: Pose, s: _Space):
 
 def _helmet(s: _Space):
     def paint(x, y, d):
-        hx, hy = s.head(x, y)
+        hx, hy = s.helmet(x, y)  # the light stays where it is as Bit turns
         if d > -1.6 and hy < 31:
             return RIM
         t = max(0.0, min(1.0, (hy - 22) / 38)) * 0.7 + max(0.0, min(1.0, (hx - 26) / 60)) * 0.3
@@ -313,7 +417,7 @@ def _helmet(s: _Space):
 
 def _visor(s: _Space):
     def paint(x, y, d):
-        hx, hy = s.head(x, y)
+        hx, hy = s.face(x, y)
         across = hx - 34 + (hy - 31) * 0.9  # a glint running down to the right, top left
         if 0 <= across <= 3 and hy < 37:
             return GLINT
@@ -338,8 +442,11 @@ def _eyes(p: Pose, s: _Space):
         own = "happy" if kind == "wink" and side < 0 else "open" if kind == "wink" else kind
 
         def distance(x, y, own=own, side=side, cx=cx, cy=cy):
-            return _eye(own, side, *s.head(x, y), cx, cy)
-        shapes.append((f"eye{side}", (cx - 8, cy - 8, cx + 8, cy + 8), distance,
+            return _eye(own, side, *s.face(x, y), cx, cy)
+        seen = s.seen(cx - 8, cx + 8)
+        if seen is None:  # round the side, out of sight
+            continue
+        shapes.append((f"eye{side}", (seen[0], cy - 8, seen[1], cy + 8), distance,
                        _flat(PINK if own == "heart" else YELLOW if own == "star" else EYE)))
     return shapes
 
@@ -382,6 +489,8 @@ def _flat(colour: Colour):
 def _arm_points(side: int, arm: Arm):
     """Shoulder, elbow and hand of an arm, in design coordinates of the body."""
     sx, sy = 55 + side * 20.5, 63.0
+    if arm.kind == "bent":
+        return (sx, sy), arm.elbow, arm.to
     if arm.kind == "raise":
         ex, ey = sx + side * 22, sy - 5
         a = math.radians(arm.angle)
@@ -391,10 +500,8 @@ def _arm_points(side: int, arm: Arm):
         mx, my = (sx + hx) / 2, (sy + hy) / 2
         dx, dy = hx - sx, hy - sy
         n = math.hypot(dx, dy) or 1.0
-        bulge = max(0.0, 14 - n) * 0.5  # a short reach bends the elbow out
-        ox, oy = -dy / n * side, dx / n * side
-        if ox * side < 0:
-            ox, oy = -ox, -oy
+        bulge = max(0.0, 14 - n) * 0.5  # a short reach bends the elbow out...
+        ox, oy = dy / n * side, -dx / n * side  # ...and down, always that side: it never flips over
         return (sx, sy), (mx + ox * bulge, my + oy * bulge), (hx, hy)
     a = math.radians(arm.angle)
     hx, hy = sx + side * math.sin(a) * 13, sy + math.cos(a) * 13
@@ -402,7 +509,8 @@ def _arm_points(side: int, arm: Arm):
 
 
 def _arm(side: int, arm: Arm, p: Pose, s: _Space):
-    (sx, sy), (ex, ey), (hx, hy) = _arm_points(side, arm)
+    ahead = 6.0 if arm.front else 0.0  # turned, an arm goes round with Bit, as thick as it is
+    (sx, sy), (ex, ey), (hx, hy) = ((55 + s.turned(x - 55, ahead)[0], y) for x, y in _arm_points(side, arm))
     box = (min(sx, ex, hx) - 5, min(sy, ey, hy) - 5, max(sx, ex, hx) + 5, max(sy, ey, hy) + 5)
     return [
         (f"upper{side}", box, lambda x, y: _segment(*s.body(x, y), sx, sy, ex, ey, 2.6), lambda x, y, d: LIMB_SHADE),
@@ -558,7 +666,7 @@ def drawn(pose: Pose, cell: tuple[int, int] = WT_CELL) -> tuple[tuple[Colour | N
 
 def _screen_box(box, part, s: _Space, width: int, height: int) -> tuple[int, int, int, int]:
     """The screen pixels a part's design box can reach, tilted or leaning, plus a margin."""
-    which = "head" if part in ("helmet", "visor", "stem", "beacon", "glass", "screw", "gear") or part.startswith(
+    which = "head" if part in ("helmet", "visor", "grille", "stem", "beacon", "glass", "screw", "gear") or part.startswith(
         ("ear", "eye", "blush", "dot")) else "legs" if part.startswith(("leg", "foot", "shoe")) or part in ("ground", "lap") else "body"
     corners = [s.to_screen(x, y, which) for x in (box[0], box[2]) for y in (box[1], box[3])]
     spin = 4 + abs(s.p.tilt) * 0.6 + abs(s.p.lean) * 0.6  # rotation can carry a corner this far
@@ -634,3 +742,75 @@ def themed(pose: Pose, accent: Colour) -> Pose:
     """The pose with the lights in the dashboard's accent, unless they are red for a call."""
     return replace(pose, beacon_colour=accent if pose.beacon_colour == ACCENT else pose.beacon_colour,
                    chest_colour=accent if pose.chest_colour == ACCENT else pose.chest_colour)
+
+
+def _towards(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def _round_towards(a: float, b: float, t: float, whole: float) -> float:
+    """An angle t of the way to another, the short way round."""
+    return a + ((b - a + whole / 2) % whole - whole / 2) * t
+
+
+def arm_between(side: int, a: Arm, b: Arm, t: float) -> Arm:
+    """An arm t of the way from one place to another: the upper arm turning about the shoulder and
+    the elbow bending, so it keeps its length and swings, never shrinks, on the way (an arm coming
+    down from over the head unfolds outwards, not across the face)."""
+    if t <= 0:
+        return a
+    if t >= 1 or a == b:
+        return b
+    whole = 2 * math.pi
+    (shoulder, elbow_a, hand_a), (_, elbow_b, hand_b) = _arm_points(side, a), _arm_points(side, b)
+
+    # Angles as either arm sees them: 0 out from the body, a quarter turn down, a half in. Counted
+    # from where an arm never points (up and in, over its own head) and from a fold it never makes,
+    # so that an arm on its way, while the other pose moves too, never flips to the other way round.
+    up_in, fold = -2 * math.pi / 3, -3 * math.pi / 4
+
+    def angle(p, q):
+        return math.atan2(q[1] - p[1], side * (q[0] - p[0]))
+
+    def counted(a, never):
+        return (a - never) % whole + never
+
+    upper_a, upper_b = counted(angle(shoulder, elbow_a), up_in), counted(angle(shoulder, elbow_b), up_in)
+    bend_a = counted(angle(elbow_a, hand_a) - upper_a, fold)
+    bend_b = counted(angle(elbow_b, hand_b) - upper_b, fold)
+    upper = _towards(upper_a, upper_b, t)
+    fore = upper + _towards(bend_a, bend_b, t)
+    reach = _towards(math.dist(shoulder, elbow_a), math.dist(shoulder, elbow_b), t)
+    elbow = shoulder[0] + side * math.cos(upper) * reach, shoulder[1] + math.sin(upper) * reach
+    reach = _towards(math.dist(elbow_a, hand_a), math.dist(elbow_b, hand_b), t)
+    hand = elbow[0] + side * math.cos(fore) * reach, elbow[1] + math.sin(fore) * reach
+    return Arm("bent", to=hand, elbow=elbow, front=b.front if t >= 0.5 else a.front)
+
+
+def travel(a: Pose, b: Pose) -> float:
+    """How far the hands and elbows go from one pose to another, along the way between() takes
+    them, in design pixels: the farther, the longer a move takes to come out of the last one."""
+    longest = 0.0
+    for side, arm_a, arm_b in ((-1, a.left, b.left), (1, a.right, b.right)):
+        points = [_arm_points(side, arm_between(side, arm_a, arm_b, k / 8))[1:] for k in range(9)]
+        for joint in (0, 1):
+            longest = max(longest, sum(math.dist(p[joint], q[joint]) for p, q in pairwise(points)))
+    return longest
+
+
+def between(a: Pose, b: Pose, t: float) -> Pose:
+    """A pose t of the way from one to another, for a move taking over from the last: what moves
+    goes there, what does not (the eyes, a prop, the lights' colour) is the new one's, and sitting
+    or tucked up halfway."""
+    if t >= 1 or a == b:
+        return b
+    half = b if t >= 0.5 else a
+    return replace(
+        b, lift=_towards(a.lift, b.lift, t), squash=_towards(a.squash, b.squash, t),
+        turn=_round_towards(a.turn, b.turn, t, 360) % 360, lean=_towards(a.lean, b.lean, t),
+        tilt=_towards(a.tilt, b.tilt, t), head_y=_towards(a.head_y, b.head_y, t),
+        antenna=_towards(a.antenna, b.antenna, t), left_foot=_towards(a.left_foot, b.left_foot, t),
+        right_foot=_towards(a.right_foot, b.right_foot, t), tucked=half.tucked, sitting=half.sitting,
+        left=arm_between(-1, a.left, b.left, t), right=arm_between(1, a.right, b.right, t),
+        look=(_towards(a.look[0], b.look[0], t), _towards(a.look[1], b.look[1], t)),
+        beacon=_towards(a.beacon, b.beacon, t), chest=_towards(a.chest, b.chest, t))

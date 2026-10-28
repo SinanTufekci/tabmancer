@@ -52,6 +52,8 @@ CALL_FOR = 48           # ...and how long each call (waving, eyes wide) lasts
 POINTER_FRAMES = 60     # how long Bit keeps an eye on where the mouse pointer last was
 DIZZY_CLICKS = 3        # clicks this close together (CLICK_FRAMES) make Bit dizzy
 CLICK_FRAMES = 30
+BLEND = 6               # frames, at least, a new move takes to come out of the last one's pose (pixels)...
+BLEND_PACE = 6.0        # ...and the design pixels a hand goes a frame on its way: a longer way takes longer
 BUBBLE = "#4a525c"       # the frame of what Bit says: there, but quieter than the words
 
 PALETTE = {
@@ -199,6 +201,7 @@ class Mascot(Widget):
         self.action = "idle"
         self.left = 40
         self.distance = 0.0     # walked so far, drives the steps
+        self.gait = 0.0         # strides walked, drives the steps in real pixels (bitmoves.stride_length)
         self.height = 0.0       # pixels above the floor
         self.velocity = 0.0
         self.jumps_left = 0
@@ -228,6 +231,9 @@ class Mascot(Widget):
         self.antenna_speed = 0.0
         self.picture: sixel.Picture | None = None  # Bit in real pixels, where the terminal draws them
         self.drawn = None       # what the picture shows: no need to send it again
+        self.posed: bitart.Pose | None = None      # the last pose in real pixels...
+        self.blend_from: bitart.Pose | None = None  # ...and the one a new move comes out of,
+        self.blend_for: int | None = None           # in this many frames
 
     def on_mount(self) -> None:
         self.set_interval(TICK, self.tick)
@@ -250,7 +256,7 @@ class Mascot(Widget):
             self.picture = None
         else:
             return
-        self.drawn, self.shown = None, None
+        self.drawn, self.shown, self.posed = None, None, None
         self.refresh()  # its cells written whole: the picture there goes, or the block characters do
 
     def base(self) -> str:
@@ -358,6 +364,7 @@ class Mascot(Widget):
         if self.calm:
             action = bitmoves.CALM.get(action, action)
         self.action, self.left, self.since = action, frames, self.frame
+        self.blend_from, self.blend_for = self.posed, None
 
     def look(self, eyes: str, frames: int) -> None:
         self.eyes, self.eyes_left = eyes, frames
@@ -451,6 +458,7 @@ class Mascot(Widget):
         if speed:
             self.x += speed * self.direction
             self.distance += speed
+            self.gait += speed / bitmoves.stride_length(speed)
             if self.x <= 0 or self.x >= span:
                 self.direction *= -1
                 self.x = max(0.0, min(self.x, float(span)))
@@ -558,7 +566,7 @@ class Mascot(Widget):
         eyes = "normal" if self.eyes == "down" and self.action != "work" else self.eyes  # the moves look their own way
         red = bool(self.waiting or self.alarm_frames)
         context = bitmoves.Context(
-            beat=self.frame - self.since, frame=self.frame, direction=self.direction, distance=self.distance,
+            beat=self.frame - self.since, frame=self.frame, direction=self.direction, distance=self.distance, gait=self.gait,
             height=self.height, eyes=eyes, antenna=self.antenna,
             beacon=(1.0 if self.frame % 10 < 5 else 0.15) if red else self.glow(), beacon_red=red,
             chest=self.chest_glow(), working=bool(self.working), call="wave" if self.calm else bitmoves.CALLS[self.calls % len(bitmoves.CALLS)],
@@ -567,6 +575,15 @@ class Mascot(Widget):
         pose = bitart.themed(frame.pose, _rgb(self.accent))
         if self.action in ("cheer", "dance", "spin"):
             pose = replace(pose, beacon_colour=_rgb(GREEN))
+        beat = self.frame - self.since
+        if self.blend_from is not None:  # out of the last move's pose, not a jump to this one
+            if self.blend_for is None:
+                way = bitart.travel(self.blend_from, pose)
+                self.blend_for = max(BLEND, min(BLEND * 3, round(way / BLEND_PACE)))
+            if beat < self.blend_for:
+                t = bitmoves.ease((beat + 1) / (self.blend_for + 1))
+                pose = bitmoves.steady(bitart.between(self.blend_from, pose, t))
+        self.posed = pose
         return bitart.Frame(pose, frame.effects)
 
     def confetti(self, cell: int, shift: int, size: tuple[int, int]) -> list[bitart.Effect]:
