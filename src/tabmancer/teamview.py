@@ -381,7 +381,7 @@ class TeamScreen(Screen):
     TeamScreen { background: $background; }
     TeamScreen #team-head { padding: 1 2 0 2; }
     TeamScreen TeamGraph { margin: 1 2 0 2; }
-    TeamScreen #team-log-head { padding: 0 2; color: $text-muted; text-style: bold; }
+    TeamScreen #team-log-head { padding: 1 2 0 2; color: $text-muted; text-style: bold; }
     TeamScreen VerticalScroll { height: 1fr; margin: 0 2 1 2; }
     TeamScreen .hint { color: $text-muted; padding: 0 2; width: 100%; height: auto; }
     """
