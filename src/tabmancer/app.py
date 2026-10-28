@@ -2637,6 +2637,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.full_poll_due = False
             self.full_polls += 1
         self.warn_crowded(updates.values())
+        resting = self.resting_members()
+        for fresh in updates.values():  # a member done for now waits for its lead, not for you
+            if fresh.session_id in resting and fresh.live_state.lower() in ("idle", "done"):
+                fresh.live_state = "resting"
         turned: list[Session] = []  # were working and now wait for you, or stopped at a limit
         for sid, fresh in updates.items():
             if sid in self.queued and (fresh.exit is not Exit.RUNNING or fresh.live_state in handover.IDLE):
@@ -2654,7 +2658,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 turned.append(fresh)
                 if self.live_mode:
                     self.bell()
-                self.notify(f"{fresh.project}: {state_of(fresh)[0]}", timeout=10)
+                words = f"{fresh.project}: {state_of(fresh)[0]}"
+                if now == 0 and fresh.status is Status.BACKGROUND:  # nowhere to answer but in it
+                    words += f" ({fresh.title}). It runs in the background: Enter on its row attaches to it."
+                self.notify(words, timeout=10)
                 if now == 1:
                     self.mascot.celebrate(fresh.project)  # done, waiting for your next message
                 else:
@@ -2680,6 +2687,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.sync_rows(changed)
             self.update_dashboard()
             self.check_limits()
+
+    def resting_members(self) -> set[str]:
+        """The sessions of the teams' members other than their leads: idle, they wait for the lead's
+        next message, not for you."""
+        return {s.session_id for state in self.team_states.values() for name, s in state.sessions.items()
+                if s is not None and name != state.team.lead.name}
 
     def tell_desktop(self, turned: list[Session]) -> None:
         """A desktop notification too, for when the dashboard is not in front: Windows asks what

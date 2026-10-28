@@ -554,7 +554,16 @@ def mark_live(session: Session, info: dict | None) -> None:
         return
     session.status = Status.BACKGROUND if info.get("kind") == "background" else Status.RUNNING
     session.exit = Exit.RUNNING
-    session.live_state = str(info.get("state") or info.get("status") or "")
+    # A background job says two things: how the job stands (working, blocked) and how its turn does
+    # (busy, idle, waiting). A working job whose turn is over is idle, not at work; one stopped at a
+    # permission prompt needs your OK, which only attaching to it gives (a session in a tab asks there).
+    state, turn = str(info.get("state") or ""), str(info.get("status") or "")
+    if "permission" in str(info.get("waitingFor") or "").lower() and (state == "blocked" or turn == "waiting"):
+        session.live_state = "permission"
+    elif state in ("", "working") and turn:
+        session.live_state = turn
+    else:
+        session.live_state = state or turn
 
 
 def transcript_path(session_id: str) -> Path | None:

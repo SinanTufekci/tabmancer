@@ -228,3 +228,17 @@ def test_agents_json_handles_missing_cli_and_bad_output(monkeypatch):
     assert S._agents_json() is None
     Result.stdout = '[{"sessionId": "a"}, {"no": "id"}, 3]'
     assert S._agents_json() == [{"sessionId": "a"}]
+
+
+def test_a_background_jobs_turn_says_whether_it_works_and_a_permission_prompt_is_named():
+    def live(info):
+        session = S.Session(session_id="x", path=S.Path("x.jsonl"))
+        S.mark_live(session, dict(info, sessionId="x"))
+        return session.live_state
+
+    assert live({"kind": "background", "state": "working", "status": "busy"}) == "busy"
+    assert live({"kind": "background", "state": "working", "status": "idle"}) == "idle"  # its turn is over
+    assert live({"kind": "background", "state": "blocked", "status": "waiting",
+                 "waitingFor": "permission prompt"}) == "permission"
+    assert live({"kind": "background", "state": "blocked"}) == "blocked"  # whatever it waits for
+    assert live({"kind": "interactive", "status": "idle"}) == "idle"

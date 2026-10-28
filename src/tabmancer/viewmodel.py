@@ -69,6 +69,8 @@ OUTCOME = {  # the heading over how a session ended, when its row is opened
 LIVE = {
     "blocked": ("needs you", "your-turn!", 0, "needs-you"),
     "waiting": ("needs you", "your-turn!", 0, "needs-you"),
+    "permission": ("needs your OK", "your-turn!", 0, "needs-you"),  # stopped at a permission prompt
+    "resting": ("idle", "done", 3, "idle"),  # a team member done for now: it waits for its lead, not you
     "idle": ("waiting for you", "your-turn", 1, "waiting"),
     "done": ("waiting for you", "your-turn", 1, "waiting"),
     "busy": ("working", "working", 2, "working"),

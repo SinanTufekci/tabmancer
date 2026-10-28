@@ -385,3 +385,31 @@ def test_tabmancers_own_prompts_are_not_taken_for_yours(tmp_path):
              "api": Session(session_id="a", path=api_log, cwd=made.cwd)}
     said = teams.conversation(made, found, {})
     assert [(m.sender, m.receiver) for m in said] == [("tabmancer", "lead"), ("tabmancer", "api"), ("you", "lead")]
+
+
+async def test_a_member_done_for_now_is_idle_and_one_at_a_permission_prompt_needs_you(fake_home, tmp_path,
+                                                                                       monkeypatch):
+    from dataclasses import replace
+
+    from tabmancer import viewmodel as VM
+
+    shop(fake_home, tmp_path, monkeypatch)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await ready(pilot, app)
+        told = []
+        monkeypatch.setattr(app, "notify", lambda message, *args, **kwargs: told.append(message))
+        celebrated = []
+        monkeypatch.setattr(app.mascot, "celebrate", lambda project="": celebrated.append(project))
+        api = app.sessions["api-1"]
+        app.apply_live_updates({"api-1": replace(api, live_state="busy")})
+        app.apply_live_updates({"api-1": replace(api, live_state="idle")})  # a member done: no "for you"
+        assert app.sessions["api-1"].live_state == "resting" and not told and not celebrated
+        assert VM.state_of(app.sessions["api-1"])[:2] == ("idle", "done")
+        app.apply_live_updates({"api-1": replace(api, live_state="busy", status=sessions.Status.BACKGROUND)})
+        app.apply_live_updates({"api-1": replace(api, live_state="permission", status=sessions.Status.BACKGROUND)})
+        assert told and "needs your OK" in told[-1] and "Enter on its row attaches" in told[-1]
+        lead = app.sessions["lead-1"]
+        app.apply_live_updates({"lead-1": replace(lead, live_state="busy")})
+        app.apply_live_updates({"lead-1": replace(lead, live_state="idle")})  # the lead: it waits for you
+        assert app.sessions["lead-1"].live_state == "idle" and "waiting for you" in told[-1]
