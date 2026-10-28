@@ -1,6 +1,6 @@
 """The team view: the orchestrator's card on top, the members' cards under it on a tree of wires,
-every message flying from one card to another as it is sent, and the conversation underneath as a
-chat. Enter on a team's row opens it from the dashboard (T lists the teams)."""
+every message flying from one card to another as it is sent, and the conversation underneath as
+arrows between the members' lanes. Enter on a team's row opens it from the dashboard (T lists the teams)."""
 
 from __future__ import annotations
 
@@ -382,6 +382,7 @@ class TeamScreen(Screen):
     TeamScreen #team-head { padding: 1 2 0 2; }
     TeamScreen TeamGraph { margin: 1 2 0 2; }
     TeamScreen #team-log-head { padding: 1 2 0 2; color: $text-muted; text-style: bold; }
+    TeamScreen #team-lanes { padding: 0 2; height: 1; }
     TeamScreen VerticalScroll { height: 1fr; margin: 0 2 1 2; }
     TeamScreen .hint { color: $text-muted; padding: 0 2; width: 100%; height: auto; }
     """
@@ -412,6 +413,7 @@ class TeamScreen(Screen):
         yield Static("", id="team-head")
         yield TeamGraph(self.team, self.accent, id="team-graph")
         yield Label("CONVERSATION", id="team-log-head")
+        yield Static("", id="team-lanes")
         with VerticalScroll():
             yield Static("", id="team-log")
         yield Label(keys(("← →", "member"), ("Enter", "its tab"), ("s", "start the rest"), ("a", "add"),
@@ -494,8 +496,8 @@ class TeamScreen(Screen):
         self.show_log()
 
     def show_log(self) -> None:
-        """The conversation as a chat (teamtree.chat), the newest at the bottom. ← → light one
-        member's messages, the rest gone quiet."""
+        """The conversation as a sequence diagram (teamtree.sequence): a lane a member, an arrow a
+        message from its sender to its receiver. ← → light one member's lane and arrows."""
         palette = self.graph.palette
         only = self.graph.selected_member() if self.picked else None
         head = Text("CONVERSATION", style=f"bold {MUTED}")
@@ -505,11 +507,14 @@ class TeamScreen(Screen):
         self.query_one("#team-log-head", Label).update(head)
         scroll = self.query_one(VerticalScroll)
         width = max(40, (scroll.content_size.width or self.size.width - 4) - 1)
-        rows = teamtree.chat(self.messages[-LOG_LINES:], palette, width, picked=only.name if only else None)
+        lanes, rows = teamtree.sequence(self.team, self.messages[-LOG_LINES:], palette, width,
+                                        picked=only.name if only else None)
+        self.query_one("#team-lanes", Static).update(lanes if rows else "")
         log = Text("\n").join(rows)
         if not self.messages:
-            log = Text("Nothing said yet. Once the members start, every message between them shows up here, "
-                       "and flies along the wires between the cards above.", style=MUTED)
+            log = Text("Nothing said yet. Once the members start, every message between them shows up here as an "
+                       "arrow from one lane to another, and flies along the wires between the cards above.",
+                       style=MUTED)
         elif only is not None and not any(only.name in (m.sender, m.receiver) for m in self.messages):
             log.append(f"\n\nNothing said to or by {only.name} yet.", style=MUTED)
         self.query_one("#team-log", Static).update(log)

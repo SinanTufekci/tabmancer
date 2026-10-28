@@ -329,7 +329,8 @@ async def test_left_and_right_light_one_members_lane_then_everyones(fake_home, t
         def log():
             return plain(screen.query_one("#team-log").content)
 
-        assert "lead → api" in log() and "make the endpoint" in log() and "endpoint done" in log() and "work as shop-ui" in log()
+        assert plain(screen.query_one("#team-lanes").content).split() == ["you", "lead", "api", "ui"]
+        assert "make the endpoint" in log() and "endpoint done" in log() and "work as shop-ui" in log()
         await pilot.press("right", "right")  # api, then ui
         assert screen.graph.selected_member().name == "ui"
         assert "CONVERSATION · ui" in plain(screen.query_one("#team-log-head").content)
@@ -342,32 +343,30 @@ async def test_left_and_right_light_one_members_lane_then_everyones(fake_home, t
         assert isinstance(app.screen, TeamScreen)
 
 
-def test_the_conversation_is_a_chat_of_who_wrote_to_whom():
+def test_the_conversation_is_drawn_as_arrows_between_lanes():
+    made = teams.new_team("shop", "C:/shop", "goal", teams.parse_members("api: a; ui: b"))
     now = datetime.now()
-    long = "a long message " * 30
     said = [teams.Message(now - timedelta(days=1), "you", "lead", "start"),
             teams.Message(now, "lead", "api", "make it"),
-            teams.Message(now, "ui", "lead", "is it done?", delivered=False),
-            teams.Message(now, "api", "lead", long)]
-    rows = teamtree.chat(said, {"lead": "#ff0000"}, 80)
-    lines = [row.plain for row in rows]
-    assert lines[0].startswith("── ") and "you → lead" in lines[1] and lines[1].endswith("start")
-    assert lines[2].startswith("── ")  # yesterday, then today
-    assert "lead → api" in lines[3] and "make it" in lines[3]
-    assert "ui → lead" in lines[4] and lines[4].endswith("on its way")  # not read yet
-    wrapped = lines[5:]
-    assert len(wrapped) == teamtree.CHAT_LINES and wrapped[-1].endswith("…")  # at most three lines
-    text_at = lines[3].index("make it")
-    assert all(line[:text_at].strip() == "" for line in wrapped[1:])  # under the text, not the names
-    assert all(len(line) <= 80 for line in lines)
+            teams.Message(now, "ui", "lead", "is it done?", delivered=False)]
+    head, rows = teamtree.sequence(made, said, {"lead": "#ff0000"}, 100)
+    names = head.plain.split()
+    assert names == ["you", "lead", "api", "ui"]
+    lane = {name: head.plain.index(name) + len(name) // 2 for name in names}
+    assert [rows[0].plain.strip()[:2], rows[2].plain.strip()[:2]] == ["──", "──"]  # yesterday, then today
+    assert rows[1].plain.index("●") == lane["you"] and rows[1].plain.index("▶") == lane["lead"]
+    assert rows[3].plain.index("●") == lane["lead"] and rows[3].plain.index("▶") == lane["api"]
+    on_its_way = rows[4].plain  # back from ui to the lead, dashed from a hollow dot, not read yet
+    assert on_its_way.index("◀") == lane["lead"] and on_its_way.index("○") == lane["ui"] and "╌" in on_its_way
+    assert "on its way" in on_its_way
 
     def style_at(row, words):
         at = row.plain.index(words)
         return [str(span.style) for span in row.spans if span.start <= at < span.end][-1]
 
-    picked = teamtree.chat(said, {"lead": "#ff0000"}, 80, picked="api")
+    _, picked = teamtree.sequence(made, said, {"lead": "#ff0000"}, 100, picked="api")
     assert style_at(picked[3], "make it") != style_at(picked[1], "start")  # api's message lit, yours quiet
-    assert "#ff0000" in style_at(picked[3], "lead") and "#ff0000" not in style_at(picked[1], "lead")
+    assert "#ff0000" in style_at(picked[3], "●") and "#ff0000" not in style_at(picked[1], "●")
 
 
 def test_tabmancers_own_prompts_are_not_taken_for_yours(tmp_path):
