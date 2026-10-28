@@ -27,6 +27,7 @@ from textual.widgets import DataTable, Input, Label, OptionList, Sparkline, Stat
 from textual.widgets.option_list import Option
 
 from . import (
+    accounts,
     background,
     clis,
     context,
@@ -144,6 +145,7 @@ SPIN_SECONDS = 0.08
 TIMER_THREADS = 64  # Windows: a thread for every timer at once, the team view's and dialogs' too
 USAGE_SECONDS = 300  # plan limits change slowly; `claude -p /usage` is cheap but not free
 TOKENS_SECONDS = 60  # token counts: only what transcripts gained since the last count is read
+ACCOUNTS_SECONDS = 5  # who the CLIs are signed in as: /login in any session switches it
 GIT_SECONDS = 60  # where each project's folder stands in git (git status: local, no network)
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
@@ -588,6 +590,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.set_interval(USAGE_SECONDS, self.refresh_usage)
         self.refresh_tokens()
         self.set_interval(TOKENS_SECONDS, self.refresh_tokens)
+        self.show_accounts()
+        self.set_interval(ACCOUNTS_SECONDS, self.show_accounts)
         armed = saved.get("continue_at_reset") if isinstance(saved, dict) else None
         for sid, moment in (armed.items() if isinstance(armed, dict) else ()):
             try:
@@ -2065,6 +2069,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         limits = usage.read_all()  # Codex's too, when it is turned on
         usage.record(limits)  # the stats chart these readings and forecast from them
         self.call_from_thread(self.show_usage, limits)
+
+    def show_accounts(self) -> None:
+        """The accounts in the top bar, beside the plan limits: read from the CLIs' own files, again
+        only when they changed."""
+        self.topbar.show_accounts(accounts.signed_in())
 
     def show_usage(self, limits: list[usage.Limit]) -> None:
         self.limits = limits

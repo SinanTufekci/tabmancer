@@ -17,6 +17,8 @@ from textual.reactive import reactive
 from textual.widgets import Footer, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
+from . import accounts
+from .accounts import Account
 from .sessions import INTERRUPTED, Exit, Session, Status, _shorten, folder_key  # noqa: F401  (re-exported)
 from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, mix
 from .usage import Limit, until
@@ -201,6 +203,9 @@ def tally(lines: list[tuple[str, str]], room: int = 3) -> Text:
     return Text("\n").join(Text(words, style=style, no_wrap=True, overflow="ellipsis") for words, style in lines)
 
 
+BAR_PADDING = {"pills": 2, "usage": 2}  # the top bar's parts' own padding, as in its CSS
+
+
 class TopBar(Horizontal):
     """One slim line: the name, what is on screen, a breathing live dot and a clock."""
 
@@ -209,19 +214,25 @@ class TopBar(Horizontal):
     TopBar > #brand { width: auto; color: $accent; text-style: bold; }
     TopBar > #info { width: 1fr; color: $text-muted; padding: 0 3; text-wrap: nowrap; text-overflow: ellipsis; }
     TopBar > #pills { width: auto; padding: 0 1; }
+    TopBar > #account { width: auto; padding: 0 1; }
     TopBar > #usage { width: auto; padding: 0 1; }
     TopBar > #live { width: auto; padding: 0 2; }
     TopBar > #clock { width: auto; color: $text-muted; }
     """
 
+    INFO_LEAST = 20  # cells the info line keeps before the accounts give way
+
     def __init__(self, live: bool = True, **kwargs) -> None:
         super().__init__(**kwargs)
         self.live = live  # the breathing dot: only where the view refreshes itself
+        self.widths: dict[str, int] = {"brand": cell_len("◆ tabmancer")}  # the parts' contents, in cells
+        self.accounts: list[Account] = []
 
     def compose(self) -> ComposeResult:
         yield Static("◆ tabmancer", id="brand")
         yield Static("", id="info")
         yield Static("", id="pills")  # what the list is narrowed to and what is ticked: never cut off
+        yield Static("", id="account")  # who the CLIs are signed in as: gives way first
         yield Static("", id="usage")
         yield Static("", id="live")
         yield Static("", id="clock")
@@ -252,6 +263,51 @@ class TopBar(Horizontal):
         found = self.query(f"#{part}")
         if found:
             found.first(Static).update(content)
+        if part not in ("info", "account", "clock", "live"):  # the clock and the dot keep their widths
+            width = content.cell_len if isinstance(content, Text) else cell_len(str(content))
+            if width != self.widths.get(part):
+                self.widths[part] = width
+                self.fit_accounts()
+
+    def show_accounts(self, found: list[Account]) -> None:
+        if found != self.accounts:
+            self.accounts = found
+            self.fit_accounts()
+
+    def on_resize(self, event: events.Resize) -> None:
+        self.fit_accounts()
+
+    def fit_accounts(self) -> None:
+        """The accounts in the room the rest of the bar leaves: Claude Code's beside the plan limits
+        it is about, Codex's before it. Short of room, Codex's goes first, then Claude Code's plan,
+        then its email is cut in the middle. The info line keeps a little room, unless Claude
+        Code's account would not fit at all: then it gives way."""
+        # The parts, the clock, the live dot with its padding, the info's padding (the bar's own
+        # padding is outside self.size).
+        taken = (sum(width + BAR_PADDING.get(part, 0) for part, width in self.widths.items() if width)
+                 + 8 + (10 if self.live else 0) + 6)
+        for least in (self.INFO_LEAST, 0):
+            text, claude_shown = self._accounts_in(self.size.width - taken - least - 2)  # less their padding
+            if claude_shown or not any(account.cli == "claude" for account in self.accounts):
+                break
+        self.put("account", text)
+
+    def _accounts_in(self, room: int) -> tuple[Text, bool]:
+        text, claude_shown = Text(), False
+        for account in sorted(self.accounts, key=lambda a: a.cli != "codex"):  # Codex's first, Claude's last
+            label = "codex " if account.cli == "codex" else ""
+            gap = 3 if text else 0
+            shown = accounts.words(account, room - gap - len(label) - text.cell_len)
+            if not shown:
+                continue  # Codex's gone: Claude Code's, which matters more, may still fit
+            email, _, plan = shown.partition(" · ")
+            text.append(" " * gap)
+            text.append(label, style=MUTED)
+            text.append(email, style=TEXT)
+            if plan:
+                text.append(f" · {plan}", style=MUTED)
+            claude_shown = claude_shown or account.cli == "claude"
+        return text, claude_shown
 
     def on_mount(self) -> None:
         self.started = time.monotonic()

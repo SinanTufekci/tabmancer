@@ -13,7 +13,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-from . import __version__, clis, sixel, summarize, tokens, workspaces
+from . import __version__, accounts, clis, sixel, summarize, tokens, workspaces
 from .config import config_dir, read_json
 from .launch import clean_env, terminal_kind
 from .mascot import way_of
@@ -108,6 +108,9 @@ def checks() -> list[Result]:
     claude = shutil.which("claude")
     if claude:
         found.append(version_check(_claude_version(claude) or claude))
+        account = accounts.claude()
+        found.append(("ok", f"Signed in as {account.email}" + (f" ({account.plan})" if account.plan else "")
+                      if account else f"No account in {accounts.claude_file()}: an API key, or not signed in."))
         missing = missing_from_cli(claude)
         if missing:
             found.append(("fail", ("Claude Code no longer lists what tabmancer runs it with: "

@@ -11,6 +11,10 @@
 - **Your plan limits at a glance.** The top bar shows how full the current session and
   weekly limits are and when they reset. It reads Claude Code's own `/usage` every five
   minutes; that is a local command, not a model call. With Codex on, its limits show too.
+  Beside them, the account each is signed in with and its plan (`you@example.com · Max 5x`),
+  read from the CLIs' own files: after a `/login` with another account, the bar says so
+  within seconds. Antigravity keeps its sign-in in the system's credential store, which
+  tabmancer does not read.
 - **Stats.** Where the tokens went, when you work (a map of the hours of the week), which
   tools and files, and how fast your plan limits fill, with a forecast of when they run
   out. Over 7 to 90 days, this week against the last, and an export to JSON and CSV.

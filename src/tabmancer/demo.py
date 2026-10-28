@@ -147,7 +147,13 @@ SUMMARY = ("Routed the 3V3 plane on layer 3 and added ground stitching around th
            "Claude was updating the design rules when the PC shut down; DRC has not run yet.")
 
 
+ACCOUNT = {"emailAddress": "you@example.com", "displayName": "You", "organizationType": "claude_max",
+           "organizationRateLimitTier": "default_claude_max_5x"}  # who the demo is signed in as
+
+
 def build_home(home: Path) -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    (home / ".claude.json").write_text(json.dumps({"oauthAccount": ACCOUNT}), encoding="utf-8")
     for sid, project, title, records, ended, branch in SESSIONS:
         cwd = f"{ROOT}{os.sep}{project}"
         folder = home / "projects" / cwd.replace(":", "-").replace(os.sep, "-")
@@ -344,14 +350,13 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
 
 def picker(days: float = 14):
     """The dashboard, saying all along that it is the demo; its tell() is for stand_ins()."""
-    from textual.widgets import Static
-
     from . import app as app_module
     from .app import SessionPicker
+    from .widgets import TopBar
 
     class Demo(SessionPicker):
         def on_mount(self) -> None:
-            self.query_one("#brand", Static).update("◆ tabmancer demo")
+            self.query_one(TopBar).put("brand", "◆ tabmancer demo")  # its width counted, for the accounts
             self.notify(NOTE, title="Demo", timeout=12)
 
         def open_sessions(self, launches: list) -> None:
