@@ -147,12 +147,15 @@ def _rgb(colour: str) -> bitart.Colour:
 
 
 @lru_cache(maxsize=128)
-def _picture(pose: bitart.Pose, effects: tuple, shift: int, back: bitart.Colour, cell: tuple[int, int]) -> str:
-    """A frame of Bit as a Sixel image; kept, as breathing, sitting and dozing come round again."""
+def _picture(pose: bitart.Pose, effects: tuple, shift: int, back: bitart.Colour, cell: tuple[int, int],
+             kitty: int = 0) -> str:
+    """A frame of Bit as a Sixel image, or as a kitty graphics picture with the id kitty (clear
+    around Bit: it lies over the strip, and replaces the last one by its id); kept, as breathing,
+    sitting and dozing come round again."""
     frame = bitart.Frame(pose, [bitart.Effect(kind, x, y, size, alpha, colour)
                                 for kind, x, y, size, alpha, colour in effects])
     palette, rows = bitart.indexed(frame, cell, shift)
-    return sixel.encode_indexed(palette, rows, back)
+    return sixel.encode_kitty(palette, rows, kitty) if kitty else sixel.encode_indexed(palette, rows, back)
 
 
 def fine_blocks() -> bool:
@@ -227,6 +230,11 @@ class Mascot(Widget):
     def on_mount(self) -> None:
         self.set_interval(TICK, self.tick)
         self.use_pixels(True)
+
+    def on_unmount(self) -> None:
+        """A kitty picture stays until taken off: not after the dashboard."""
+        if self.picture is not None and isinstance(self.app, sixel.SixelHost):
+            self.app.remove_picture(self.picture)
 
     def use_pixels(self, on: bool) -> None:
         """Bit in real pixels, where the terminal draws them, or in block characters (b chooses)."""
@@ -586,7 +594,8 @@ class Mascot(Widget):
             return
         before = self.drawn[2] if self.drawn else cell
         self.drawn = key
-        self.picture.data = _picture(frame.pose, effects, shift, _rgb(back), found.cell)
+        self.picture.data = _picture(frame.pose, effects, shift, _rgb(back), found.cell,
+                                     self.picture.number if found.kitty else 0)
         self.picture.fresh = True
         repainted = list(repainted or ())
         if before != cell:  # the cells it left: written blank again, which wipes the old picture there
@@ -669,9 +678,13 @@ class Mascot(Widget):
                     if key in PALETTE:
                         put(body_top + 2 + r, x0 + c, PALETTE[key])
 
+        # In real pixels the picture has the particles over Bit's cells: there, in text too, they
+        # would show through it where it is clear (kitty graphics).
+        first = -WIDTH if sprite else self.cell_x(width)
         for p in self.particles:
             row, col = round(p.y), round(p.x)
-            if 0 <= row < PIXELS and 0 <= col < cols and grid[row][col] == BACKGROUND:
+            if 0 <= row < PIXELS and 0 <= col < cols and grid[row][col] == BACKGROUND \
+                    and not first <= col // 2 < first + WIDTH:
                 put(row, col, p.colour)  # behind Bit, never over its face
         return grid
 

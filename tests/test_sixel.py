@@ -580,3 +580,17 @@ async def test_b_shows_bit_in_pixels_then_blocks_then_sends_it_away_and_remember
     async with app.run_test(size=(150, 40)) as pilot:
         await pilot.pause(0.3)
         assert app.mascot.picture is None and not app.mascot.has_class("hidden")  # as chosen last time
+
+
+def test_a_kitty_picture_carries_its_pixels_clear_around_them_and_its_id():
+    import base64
+    import zlib
+
+    palette = [None, (255, 0, 0), (0, 0, 255)]
+    rows = [bytes([0, 1, 2]), bytes([2, 1, 0])]
+    data = sixel.encode_kitty(palette, rows, 7301)
+    assert data.startswith("\x1b_Ga=T,f=32,s=3,v=2,i=7301,p=1,o=z,q=2,C=1,m=0;") and data.endswith("\x1b\\")
+    pixels = zlib.decompress(base64.standard_b64decode(data.split(";", 1)[1][:-2]))
+    assert pixels[:12] == bytes([0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 255, 255])  # clear, red, blue
+    assert sixel.kitty_delete(7301) == "\x1b_Ga=d,d=I,i=7301,q=2\x1b\\"
+    assert sixel.kitty_in("\x1b_Gi=31;OK\x1b\\x1b[?62;22c") and not sixel.kitty_in("\x1b[?62;22c")

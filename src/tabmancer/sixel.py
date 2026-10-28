@@ -21,11 +21,14 @@ image is not sent while a dialog is in front, or while something else covers its
 
 from __future__ import annotations
 
+import base64
+import itertools
 import os
 import re
 import sys
 import time
 import weakref
+import zlib
 from dataclasses import dataclass, replace
 
 from .bitart import WT_CELL, Colour
@@ -36,10 +39,14 @@ BEGIN, END = f"\x1b[?{SYNC}h", f"\x1b[?{SYNC}l"
 MOST = 256   # colours an image can have
 
 
+KITTY_ASK = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"  # a one-pixel image, only asked about
+
+
 @dataclass(frozen=True)
 class Terminal:
     cell: tuple[int, int]  # pixels a cell, across and down
     sync: bool = False     # shows what comes between two marks at once (synchronized output, mode 2026)
+    kitty: bool = False    # draws pictures the kitty way (kitty, Ghostty), not as Sixel
 
 
 _terminal: Terminal | None = None
@@ -61,13 +68,22 @@ def probe() -> Terminal | None:
     if setting == "0":
         return None
     try:
-        answer = _ask(f"\x1b[?{SYNC}$p\x1b[16t\x1b[c")  # the attributes last: every terminal answers those
+        # The attributes last: every terminal answers those. One that does not know the kitty
+        # question ignores it.
+        answer = _ask(f"\x1b[?{SYNC}$p\x1b[16t{KITTY_ASK}\x1b[c")
     except (OSError, ValueError, AttributeError, ImportError):
         answer = ""
     cell = cell_in(answer) or window_cell() or (WT_CELL if os.environ.get("WT_SESSION") or setting == "1" else None)
-    if cell and (sixel_in(answer) or setting == "1"):
-        _terminal = Terminal(cell, sync=sync_in(answer))
+    sixel = sixel_in(answer) or setting == "1"
+    kitty = not sixel and kitty_in(answer)  # Sixel where both are drawn: the way tried the most
+    if cell and (sixel or kitty):
+        _terminal = Terminal(cell, sync=sync_in(answer), kitty=kitty)
     return _terminal
+
+
+def kitty_in(answer: str) -> bool:
+    """Whether the terminal answered the kitty graphics question (KITTY_ASK) with OK."""
+    return "\x1b_Gi=31;OK\x1b\\" in answer
 
 
 def sync_in(answer: str) -> bool:
@@ -260,7 +276,37 @@ def _nearest(colour: Colour, defined: list[Colour]) -> int:
     return min(range(len(defined)), key=lambda n: sum((a - b) ** 2 for a, b in zip(colour, defined[n])))
 
 
+KITTY_CHUNK = 4096  # the base64 of a picture goes out in pieces of at most this
+
+
+def encode_kitty(palette: list[Colour | None], rows: list[bytes], image: int) -> str:
+    """Rows of indices into a palette as a kitty graphics picture with the id image: RGBA, nothing
+    drawn left clear, packed with zlib, in base64 pieces. Sent again with the same id, it replaces
+    the last one and its place on the screen; q=2 keeps the terminal from answering, and C=1 the
+    cursor where it is."""
+    table = [bytes((*colour, 255)) if colour is not None else bytes(4) for colour in palette]
+    table += [bytes(4)] * (256 - len(table))
+    pixels = b"".join(b"".join(map(table.__getitem__, row)) for row in rows)
+    data = base64.standard_b64encode(zlib.compress(pixels)).decode()
+    pieces = [data[i:i + KITTY_CHUNK] for i in range(0, len(data), KITTY_CHUNK)] or [""]
+    width, height = (len(rows[0]) if rows else 0), len(rows)
+    out = []
+    for n, piece in enumerate(pieces):
+        more = int(n < len(pieces) - 1)
+        keys = f"a=T,f=32,s={width},v={height},i={image},p=1,o=z,q=2,C=1,m={more}" if n == 0 else f"m={more}"
+        out.append(f"\x1b_G{keys};{piece}\x1b\\")
+    return "".join(out)
+
+
+def kitty_delete(image: int) -> str:
+    """Takes a kitty picture off the screen and out of the terminal's memory."""
+    return f"\x1b_Ga=d,d=I,i={image},q=2\x1b\\"
+
+
 # --- the app's side -------------------------------------------------------------------------------
+
+_numbers = itertools.count(7301)
+
 
 class Picture:
     """What a widget wants on the screen in pixels: drawn by the widget, sent by the host."""
@@ -268,8 +314,10 @@ class Picture:
     def __init__(self, owner, place) -> None:
         self.owner = owner           # the widget: its screen
         self.place = place           # () -> its cells on the screen (x, y, width, height), or None
-        self.data = ""               # the Sixel image
+        self.data = ""               # the image: Sixel, or kitty graphics
         self.fresh = False           # changed since it was last sent
+        self.number = next(_numbers)  # its id in kitty graphics
+        self.shown = False           # on the screen now (kitty graphics: it stays until taken off)
 
 
 class SixelHost:
@@ -286,6 +334,17 @@ class SixelHost:
 
     def remove_picture(self, picture: Picture) -> None:
         self._sixel_pictures().discard(picture)
+        self._take_off(picture)
+
+    def _take_off(self, picture: Picture) -> None:
+        """A kitty picture off the screen: text written over it does not take it off, as it does
+        a Sixel image. Sent again when it can be seen (fresh)."""
+        found = terminal()
+        driver = getattr(self, "_driver", None)
+        if picture.shown and found is not None and found.kitty and driver is not None:
+            driver.write(kitty_delete(picture.number))
+            driver.flush()
+        picture.shown, picture.fresh = False, True
 
     def on_resize(self, event) -> None:
         """A font made bigger or smaller resizes the terminal: pictures drawn to the old cell size
@@ -327,15 +386,18 @@ class SixelHost:
         old picture is replaced, never wiped and then drawn (that blinked). Kept for Textual's
         next update when it cannot go now (a dialog in front, say)."""
         driver = getattr(self, "_driver", None)
+        if driver is None or getattr(self, "is_headless", True):
+            return False
         cells = picture.place() if picture.data else None
-        if driver is None or cells is None or getattr(self, "is_headless", True) or not in_view(self, picture, cells):
+        if cells is None or not in_view(self, picture, cells):
+            self._take_off(picture)
             return False
         x, y, _, _ = cells
         sync = self._sixel_sync() or getattr(self, "_sync_available", False)
         image = f"\x1b7\x1b[{y + 1};{x + 1}H{picture.data}\x1b8"
         driver.write(f"{BEGIN}{image}{END}" if sync else image)
         driver.flush()
-        picture.fresh = False
+        picture.fresh, picture.shown = False, True
         return True
 
     def _end_update(self) -> None:
@@ -350,17 +412,21 @@ class SixelHost:
         driver = getattr(self, "_driver", None)
         if driver is None:
             return
+        found = terminal()
+        kitty = found is not None and found.kitty
         for picture in list(self._sixel_pictures()):
             cells = picture.place() if picture.data else None
-            if cells is None:
+            if cells is None or not in_view(self, picture, cells):
+                if kitty and picture.shown:  # a dialog in front, Bit away: it would stay over them
+                    driver.write(kitty_delete(picture.number))
+                    picture.shown, picture.fresh = False, True
                 continue
-            if not (picture.fresh or wrote_over(update, cells)):
-                continue
-            if not in_view(self, picture, cells):
+            # Text written over a Sixel image wipes it: then it goes again. Not a kitty picture.
+            if not (picture.fresh or (not kitty and wrote_over(update, cells))):
                 continue
             x, y, _, _ = cells
             driver.write(f"\x1b7\x1b[{y + 1};{x + 1}H{picture.data}\x1b8")
-            picture.fresh = False
+            picture.fresh, picture.shown = False, True
 
 
 def wrote_over(update, cells: tuple[int, int, int, int]) -> bool:
