@@ -324,3 +324,22 @@ async def test_without_the_focus_bit_is_drawn_less_often_and_lives_on(fake_home,
         app.post_message(events.AppFocus())
         await pilot.pause(0.1)
         assert (await share(0.8))[0] > 0.9
+
+
+def test_bit_takes_what_the_dashboard_tells_with_a_move_that_goes_with_it():
+    assert {action for action, _ in M.REACTIONS.values()} <= set(M.TRAITS)
+    robot = M.Mascot(seed=1, fine=True)
+    robot.start("sleep", 10 ** 6)
+    robot.look("sleep", 10 ** 9)
+    robot.react("lifted", "the limit has lifted")  # wakes it, two hops
+    assert (robot.action, robot.jumps_left, robot.eyes) == ("cheer", 2, "happy")
+    assert robot.bubbles[-1].text == "the limit has lifted"
+    robot.react("handover", "shop: handed over")  # the box goes across, not a "done!"
+    assert (robot.action, robot.jumps_left) == ("carry", 0)
+    robot.react("back", "3 back at work")
+    assert (robot.action, robot.eyes) == ("hurry", "happy")
+    robot.worry("Careful: session limit at 90%")
+    assert robot.action == "worried" and robot.bubbles[-1].text.startswith("Careful")
+    for _ in range(200):  # and back to what it does on its own
+        robot.advance(80)
+    assert robot.action not in ("worried", "carry")

@@ -1548,7 +1548,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.notify(f"{session.project}{going} its context is {context.share(session):.0%} full. /compact in "
                         "its tab goes on with the same work; h starts a new phase in a fresh session, and shows "
                         "what is handed over.", title="Crowded session", timeout=12)
-            self.mascot.say(f"{session.project}: context {context.share(session):.0%} full", AMBER, seconds=6)
+            self.mascot.react("crowded", f"{session.project}: context {context.share(session):.0%} full", AMBER)
         else:
             names = ", ".join(s.project for s in crowded[:4])
             self.notify(f"{len(crowded)} open sessions have crowded contexts ({names}). /compact in a tab goes "
@@ -1645,7 +1645,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                         f"{left_open}.", title="Handed over", severity="warning", timeout=15)
         else:
             self.notify(f"Handed {session.project} over to a fresh session.", title="Handed over", timeout=8)
-        self.mascot.celebrate(session.project)
+        self.mascot.react("handover", f"{session.project}: handed over", self.accent())
 
     # --- renaming ----------------------------------------------------------------------
 
@@ -2425,7 +2425,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if still_open:
             self.continue_open(still_open, len(closed))
         else:
-            self.mascot.say(f"{len(closed)} back at work", self.accent(), seconds=6)
+            self.mascot.react("back", f"{len(closed)} back at work", self.accent())
 
     def save_armed(self) -> None:
         saved = read_json("config.json")
@@ -2463,7 +2463,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                   if not (s.live_state in handover.IDLE and typein.type_into(s.session_id, prompt))]
         back = opened + len(still_open) - len(missed)
         if back:
-            self.call_from_thread(self.mascot.say, f"{back} back at work", self.accent(), seconds=6)
+            self.call_from_thread(self.mascot.react, "back", f"{back} back at work", self.accent())
         if missed:
             names = ", ".join(dict.fromkeys(s.project for s in missed))
             self.call_from_thread(self.notify, f"Could not write in the tab of {names}: type “continue” there "
@@ -2490,7 +2490,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if soon and soon > datetime.now():
             self.mascot.say(f"{names}: limit until {lifts(soon)}. c continues then", AMBER, seconds=10)
         else:
-            self.mascot.say(f"{names}: the limit has lifted. c continues now", AMBER, seconds=10)
+            self.mascot.react("lifted", f"{names}: the limit has lifted. c continues now", AMBER, seconds=10)
 
     # --- hiding and pinning -----------------------------------------------------------
 
@@ -2606,7 +2606,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                        for e in self.background_live.values())
             if idle and not self.told_idle:
                 self.told_idle = True
-                self.call_from_thread(self.mascot.say, f"{idle} background session{'s sit' if idle > 1 else ' sits'}"
+                self.call_from_thread(self.mascot.react, "idle", f"{idle} background session{'s sit' if idle > 1 else ' sits'}"
                                       " idle. B tidies up.", seconds=6)
             watched = set(live) | {sid for sid, s in known.items() if s.exit is Exit.RUNNING}
         else:

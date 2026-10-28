@@ -119,6 +119,14 @@ EYES = {
     "sleep": [(8, 7), (8, 8), (8, 9), (8, 12), (8, 13), (8, 14)],  # closed: a line each
     "down": [(8, 8), (8, 9), (9, 8), (9, 9), (8, 12), (8, 13), (9, 12), (9, 13)],  # at its work
 }
+# What the dashboard tells Bit, and how it takes it: (move, eyes for the while).
+REACTIONS = {
+    "back": ("hurry", "happy"),      # sessions called back are at work again: off it goes
+    "lifted": ("cheer", "happy"),    # a usage limit has lifted: two hops
+    "crowded": ("worried", None),    # a limit or a context nearly full: a drop of sweat
+    "idle": ("tap", None),           # background sessions sit waiting: it taps its foot
+    "handover": ("carry", None),     # a session handed over to a fresh one: the box goes across
+}
 TIPS = [
     "p writes to a session", "t switches the theme", "s asks Claude for a summary",
     "e opens a row", "w saves a workspace", "l shows only open sessions",
@@ -272,9 +280,18 @@ class Mascot(Widget):
 
     def worry(self, text: str, colour: str = RED) -> None:
         """A usage limit nearly full: a worried look, a drop of sweat, and the word."""
+        self.react("crowded", text, colour)
+
+    def react(self, what: str, text: str, colour: str = TEXT, seconds: float = 6) -> None:
+        """Something the dashboard tells (REACTIONS): the move that goes with it, and the words."""
+        action, eyes = REACTIONS[what]
         self.wake()
-        self.start("worried", TRAITS["worried"].frames[0])
-        self.say(text, colour, seconds=6)
+        frames = TRAITS[action].frames[0]
+        self.start(action, frames)
+        self.jumps_left = 2 if action == "cheer" else 0
+        if eyes:
+            self.look(eyes, frames)
+        self.say(text, colour, seconds=seconds)
 
     def alert(self, project: str = "") -> None:
         """A session needs you: a startled hop, red sparks and a call."""

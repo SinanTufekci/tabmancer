@@ -159,7 +159,10 @@ It talks in a bubble beside it:
 - It greets you, saying how many sessions were open at the last shutdown.
 - It cheers with confetti when a session finishes ("web-app is done!"), or dances, or spins.
 - It throws red sparks when one needs you.
-- It worries, with a drop of sweat, when a usage limit passes 85 %.
+- It worries, with a drop of sweat, when a usage limit passes 85 % or a context fills up.
+- It hurries off when the sessions it called back are at work again, hops twice when a
+  usage limit lifts, carries a box across when a session is handed over, and taps its foot
+  while background sessions sit idle.
 - Click it for a tip about the keys; click it again and again and it gets dizzy.
 
 Press `b` to change how Bit is drawn: in real pixels (where the terminal draws them), in block
