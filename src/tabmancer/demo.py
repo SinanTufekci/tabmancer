@@ -372,6 +372,9 @@ def picker(days: float = 14):
 
 def run(days: float = 14) -> None:
     """The dashboard over the made-up sessions, in a folder of its own that goes when it closes."""
+    from . import sixel
+
+    sixel.probe()  # Bit in real pixels where the terminal draws them, as in the dashboard
     home = Path(tempfile.mkdtemp(prefix="tabmancer-demo-"))
     try:
         live = prepare(home)

@@ -118,36 +118,46 @@ so tabmancer cannot stop you from opening one twice.
 ## Bit
 
 A little robot of our own walks along the top edge of the preview, below the list: a
-head with a beacon on top and a dark visor, a body with a light on its chest, two arms
-and two legs. It takes up four rows and has no box of its own: around it is the list's
-background.
+helmet with a dark visor, two eyes and a beacon on a springy antenna, a body with a light
+on its chest, two arms and two legs. It takes up four rows and has no box of its own:
+around it is the list's background.
 
-Bit is pixel art. In Windows Terminal each cell holds 2x4 pixels (Unicode block
-octants), so Bit is 22x15 pixels in a space eleven cells wide (the outer cells are for
-its arms, raised). It is drawn to the cell grid, so no cell has to show more than the two
-colours a terminal cell can, in any pose, and it moves up or down only a whole cell at a
-time: a hop lifts it one cell. Other
-terminals get half blocks, which every font has. Set `TABMANCER_MASCOT_BLOCKS` to
-`octants` or `half` to choose. Frames that have not changed
-are not redrawn.
+Where the terminal draws Sixel images (Windows Terminal from 1.22, WezTerm, iTerm2,
+Konsole and others that say so), Bit is drawn in real pixels: 110x78 in Windows Terminal,
+in the same eleven cells by four rows. It moves a pixel at a time, squashes before a hop
+and stretches in the air, its eyes change with what it does (happy, wide, hearts, stars,
+dizzy rings...), and it handles things: a laptop, a mug, a clipboard, a box, a wrench. Its
+pictures are sent right after the dashboard's own updates, so it never covers a dialog.
+`tabmancer` asks the terminal when it starts; `TABMANCER_SIXEL=0` keeps Bit in block
+characters, `=1` asks for pixels where the terminal does not say it draws them.
+
+Elsewhere Bit is pixel art in block characters. In Windows Terminal each cell holds 2x4
+pixels (Unicode block octants), so Bit is 22x15 pixels in a space eleven cells wide (the
+outer cells are for its arms, raised). It is drawn to the cell grid, so no cell has to show
+more than the two colours a terminal cell can, in any pose, and it moves up or down only a
+whole cell at a time: a hop lifts it one cell. Other terminals get half blocks, which every
+font has. Set `TABMANCER_MASCOT_BLOCKS` to `octants` or `half` to choose. Both drawings
+follow the same life; in blocks, a move shows as the nearest pose these have. Frames that
+have not changed are not redrawn.
 
 What Bit does follows what the sessions do:
 
-- While sessions work, it works too, eyes down and hands quick, and hurries about; its
-  chest light pulses quickly.
-- While a session needs you (a question to answer), it stays put and calls you: it waves
-  with its eyes wide every few seconds, and its beacon blinks red, for as long as it
-  lasts.
-- When nothing happens, it wanders slowly, sits, and in the end dozes off with drifting
-  Z's and its eyes closed.
+- While sessions work, it works too: it types on its laptop, thinks it over (a gear turns
+  above its head, and sometimes a light bulb comes on), reads, fixes things, carries a box
+  across or hurries about; its chest light pulses quickly.
+- While a session needs you (a question to answer), it stays put and calls you, a
+  different way each time: waving, pointing up at the list, or jumping with both arms up,
+  with its eyes wide and its beacon blinking red, for as long as it lasts.
+- When nothing happens, it wanders, skips, looks around, taps its foot, stretches, drinks
+  a coffee, whistles or sits swinging its feet; in the end it yawns, nods off and sleeps
+  with drifting Z's. News, a click or the pointer startles it awake.
 
-It walks with its feet lifting in turn and its arms swinging, looks around, waves, hops
-and blinks. Its eyes follow the mouse pointer. It talks in a bubble beside it:
+It talks in a bubble beside it:
 
 - It greets you, saying how many sessions were open at the last shutdown.
-- It cheers with confetti when a session finishes ("web-app is done!").
+- It cheers with confetti when a session finishes ("web-app is done!"), or dances, or spins.
 - It throws red sparks when one needs you.
-- It warns when a usage limit passes 85 %.
-- Click it for a tip about the keys; click it again and again and its head spins.
+- It worries, with a drop of sweat, when a usage limit passes 85 %.
+- Click it for a tip about the keys; click it again and again and it gets dizzy.
 
 Press `b` to hide Bit, or to bring it back.

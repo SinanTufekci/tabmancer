@@ -21,13 +21,17 @@ import math
 import os
 import random
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 
 from rich.style import Style
 from rich.text import Text
 from textual import events
+from textual.geometry import Region
 from textual.widget import Widget
 
+from . import bitart, bitmoves, sixel
+from .bitmoves import TRAITS
 from .blocks import BACKGROUND, octant_cell
 from .theme import AMBER, GREEN, MUTED, RED, TEXT, mix
 
@@ -120,6 +124,19 @@ TIPS = [
 ]
 
 
+def _rgb(colour: str) -> bitart.Colour:
+    return int(colour[1:3], 16), int(colour[3:5], 16), int(colour[5:7], 16)
+
+
+@lru_cache(maxsize=128)
+def _picture(pose: bitart.Pose, effects: tuple, shift: int, back: bitart.Colour, cell: tuple[int, int]) -> str:
+    """A frame of Bit as a Sixel image; kept, as breathing, sitting and dozing come round again."""
+    frame = bitart.Frame(pose, [bitart.Effect(kind, x, y, size, alpha, colour)
+                                for kind, x, y, size, alpha, colour in effects])
+    palette, rows = bitart.indexed(frame, cell, shift)
+    return sixel.encode_indexed(palette, rows, back)
+
+
 def fine_blocks() -> bool:
     """2x4 pixels per cell where the terminal draws block octants itself (Windows Terminal)."""
     choice = os.environ.get("TABMANCER_MASCOT_BLOCKS", "").lower()
@@ -183,9 +200,23 @@ class Mascot(Widget):
         self.pointer_seen = -10 ** 6  # ...and on which frame
         self.following = False  # the eyes are on the pointer
         self.clicks: list[int] = []  # frames of the recent clicks on Bit
+        self.calls = 0          # calls made: each goes another way (bitmoves.CALLS)
+        self.antenna = 0.0      # its sway, degrees, and how fast it swings (a spring)
+        self.antenna_speed = 0.0
+        self.picture: sixel.Picture | None = None  # Bit in real pixels, where the terminal draws them
+        self.drawn = None       # what the picture shows: no need to send it again
 
     def on_mount(self) -> None:
         self.set_interval(TICK, self.tick)
+        found = sixel.terminal()
+        if found is not None and isinstance(self.app, sixel.SixelHost):
+            self.picture = sixel.Picture(self, self.picture_cells)
+            self.app.add_picture(self.picture)
+
+    def base(self) -> str:
+        """The octant pose that stands in for the action (bitmoves.TRAITS)."""
+        trait = TRAITS.get(self.action)
+        return trait.octant if trait else self.action
 
     # --- what the dashboard tells Bit ---------------------------------------------------
 
@@ -193,9 +224,8 @@ class Mascot(Widget):
         """`working`: sessions at work; `waiting`: sessions that need you (a question to answer)."""
         if (working, waiting) != (self.working, self.waiting):
             self.quiet = 0
-            if self.action == "sleep":
-                self.start("idle", 30)
-                self.look("blink", 6)
+            if self.drowsy():
+                self.rouse()
         if waiting and not self.waiting:
             self.start("call", CALL_EVERY)  # at once: it stays put and calls you while it lasts
         elif not waiting and self.action == "call":
@@ -209,13 +239,20 @@ class Mascot(Widget):
         self.bubbles = self.bubbles[-3:]
 
     def celebrate(self, project: str = "") -> None:
-        """A session finished: two hops, confetti and a word about it."""
+        """A session finished: a cheer (two hops), a dance or a spin, confetti and a word about it."""
         self.wake()
-        self.start("cheer", 40)
-        self.jumps_left = 2
-        self.look("happy", 40)
+        how = self.rng.choice(bitmoves.CHEERS)
+        self.start(how, TRAITS[how].frames[0])
+        self.jumps_left = 2 if how == "cheer" else 0
+        self.look("happy", TRAITS[how].frames[0])
         self.burst([GREEN, self.accent, "#ffffff", "#7ee0a1"], 14)
         self.say(f"{project} is done!" if project else "Done!", GREEN)
+
+    def worry(self, text: str, colour: str = RED) -> None:
+        """A usage limit nearly full: a worried look, a drop of sweat, and the word."""
+        self.wake()
+        self.start("worried", TRAITS["worried"].frames[0])
+        self.say(text, colour, seconds=6)
 
     def alert(self, project: str = "") -> None:
         """A session needs you: a startled hop, red sparks and a call."""
@@ -228,6 +265,9 @@ class Mascot(Widget):
         self.say(f"{project} needs you!" if project else "Someone needs you!", RED)
 
     def on_click(self, event: events.Click) -> None:
+        if self.drowsy():
+            self.rouse()
+            return
         self.wake()
         self.clicks = [f for f in self.clicks if self.frame - f < CLICK_FRAMES] + [self.frame]
         if len(self.clicks) >= DIZZY_CLICKS:  # clicked again and again: its head spins
@@ -241,10 +281,8 @@ class Mascot(Widget):
         self.say(self.rng.choice(TIPS), self.accent)
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
-        if self.action == "sleep":  # the pointer over Bit wakes it
-            self.wake()
-            self.start("idle", 30)
-            self.look("blink", 6)
+        if self.drowsy():  # the pointer over Bit wakes it
+            self.rouse()
 
     def point_at(self, pixel: float) -> None:
         """Where the mouse pointer is, in pixels along the strip: Bit's eyes follow it a while."""
@@ -256,6 +294,16 @@ class Mascot(Widget):
         self.quiet = 0
         if self.action == "sleep":
             self.notes.clear()
+
+    def drowsy(self) -> bool:
+        """Dozing off or asleep: news, a click or the pointer startles it awake."""
+        return self.action in ("yawn", "nod", "sleep")
+
+    def rouse(self) -> None:
+        self.wake()
+        self.start("wake", TRAITS["wake"].frames[0])
+        self.jumps_left = 1
+        self.look("alarm", 8)
 
     def start(self, action: str, frames: int) -> None:
         self.action, self.left, self.since = action, frames, self.frame
@@ -280,20 +328,18 @@ class Mascot(Widget):
         if self.waiting:
             self.start("call", CALL_EVERY)
             return
-        if self.quiet > SLEEP_AFTER and not self.working:
-            self.start("sleep", 10 ** 9)
-            self.look("sleep", 10 ** 9)
+        if self.quiet > SLEEP_AFTER and not self.working:  # it yawns, nods off, and sleeps
+            following = {"yawn": "nod", "nod": "sleep", "sleep": "sleep"}.get(self.action, "yawn")
+            self.start(following, self.rng.randint(*TRAITS[following].frames))
+            if following == "sleep":
+                self.look("sleep", 10 ** 9)
             return
-        if self.working:
-            options = ["walk"] * 4 + ["work"] * 5 + ["look"] * 2 + ["idle"]
+        if self.action == "think" and self.rng.random() < 0.35:  # and then it has it
+            action = "idea"
         else:
-            options = ["walk"] * 5 + ["idle"] * 4 + ["look"] * 2 + ["sit"] * 2 + ["wave", "jump"]
-        action = self.rng.choice(options)
-        frames = {"walk": self.rng.randint(50, 130), "idle": self.rng.randint(30, 70),
-                  "look": 40, "sit": self.rng.randint(60, 140), "wave": 36, "jump": 20,
-                  "work": self.rng.randint(60, 120)}[action]
-        self.start(action, frames)
-        if action == "walk" and self.rng.random() < 0.35:
+            action = self.rng.choice(bitmoves.WORK_CHOICES if self.working else bitmoves.IDLE_CHOICES)
+        self.start(action, self.rng.randint(*TRAITS[action].frames))
+        if TRAITS[action].speed and self.rng.random() < 0.35:
             self.direction *= -1
         if action == "look":
             self.look(self.rng.choice(("left", "right")), 20)
@@ -308,8 +354,25 @@ class Mascot(Widget):
         # frames are identical, and redrawing them would cost CPU for nothing.
         frame = Text("\n").join(self.lines(self.size.width))
         if frame != self.shown or self.shown_width != self.size.width:
+            whole = self.picture is None or self.shown_width != self.size.width
             self.shown, self.shown_width = frame, self.size.width
-            self.refresh()
+            # In real pixels Bit's own cells are blank and stay so: written again, they would wipe its
+            # picture until it is sent again, a blink. Only what is beside it is repainted.
+            self.refresh(*(() if whole else self.beside(self.size.width)))
+        self.update_picture(self.size.width)
+
+    def beside(self, width: int) -> list[Region]:
+        """The strip left and right of Bit's cells."""
+        cell = self.cell_x(width)
+        return [r for r in (Region(0, 0, cell, ROWS), Region(cell + WIDTH, 0, width - cell - WIDTH, ROWS))
+                if r.width > 0]
+
+    def speed(self) -> float:
+        """Pixels along the strip a frame: brisker walking while sessions work."""
+        if self.action == "walk" and self.working:
+            return 0.6
+        trait = TRAITS.get(self.action)
+        return trait.speed if trait else 0.0
 
     def advance(self, width: int | None = None) -> None:
         """One frame of Bit's life (separate from tick, so tests can pass a width in cells)."""
@@ -322,8 +385,8 @@ class Mascot(Widget):
         if self.left <= 0:
             self.next_action()
 
-        if self.action in ("walk", "alarm"):
-            speed = 0.9 if self.action == "alarm" else 0.6 if self.working else 0.35  # brisk at work
+        speed = self.speed()
+        if speed:
             self.x += speed * self.direction
             self.distance += speed
             if self.x <= 0 or self.x >= span:
@@ -333,17 +396,24 @@ class Mascot(Widget):
         if self.jumps_left and self.height == 0 and self.velocity == 0:
             self.velocity = JUMP_SPEED
             self.jumps_left -= 1
+            self.antenna_speed -= 3  # it lags behind as Bit takes off...
         if self.velocity or self.height:
             self.height += self.velocity
             self.velocity -= 0.1
             if self.height <= 0:
                 self.height, self.velocity = 0.0, 0.0
+                self.antenna_speed += 6 * self.rng.choice((-1, 1))  # ...and wobbles on landing
+        # The antenna is on a spring: it trails behind as Bit walks, and settles.
+        lean = -self.direction * min(12.0, speed * 18)
+        self.antenna_speed += (lean - self.antenna) * 0.25 - self.antenna_speed * 0.3
+        self.antenna = max(-30.0, min(30.0, self.antenna + self.antenna_speed))
 
         if self.action == "call" and (self.frame - self.since) % CALL_EVERY == 0:
+            self.calls += 1  # each call another way: waving, pointing at the list, bouncing
             self.look("alarm", CALL_FOR)  # each call: eyes wide while it waves
-        elif self.action == "work" and self.frame == self.since + 1:
+        elif self.base() == "work" and self.frame == self.since + 1:
             self.look("down", self.left)
-        elif self.action == "dizzy":
+        elif self.base() == "dizzy":
             self.eyes, self.eyes_left = ("left", "right")[(self.frame // 3) % 2], 1
         if self.eyes_left:
             self.eyes_left -= 1
@@ -360,7 +430,7 @@ class Mascot(Widget):
 
         if self.action == "sleep" and self.frame % 30 == 0:
             self.notes.append([(self.x + SPRITE_W) / 2, 40, "z"])
-        if self.action == "cheer" and self.frame % 12 == 0:
+        if self.action in ("cheer", "dance") and self.frame % 12 == 0:
             self.notes.append([self.x / 2 + self.rng.choice((-2, WIDTH + 1)), 30, "♪"])
         for note in self.notes:
             note[0] += 0.04
@@ -385,19 +455,94 @@ class Mascot(Widget):
         """The antenna: red blinks when needed, otherwise a slow glow in the accent colour."""
         if self.waiting or self.alarm_frames:
             return RED if self.frame % 10 < 5 else "#3d0f0d"
-        if self.action == "cheer":
+        if self.action in ("cheer", "dance", "spin"):
             return GREEN
+        return mix(mix(self.accent, BACKGROUND, 0.6), self.accent, self.glow())
+
+    def glow(self) -> float:
+        """How bright the antenna glows, 0 to 1: slowly, quicker while sessions work."""
         glow = (math.sin(self.frame / FPS * (5 if self.working else 2)) + 1) / 2
-        glow = round(glow * 8) / 8  # in steps, so a still Bit repeats frames and costs nothing
-        return mix(mix(self.accent, BACKGROUND, 0.6), self.accent, glow)
+        return round(glow * 8) / 8  # in steps, so a still Bit repeats frames and costs nothing
 
     def chest(self) -> str:
         """The chest light: the accent, pulsing quickly while sessions work, dim asleep."""
-        if self.action == "sleep":
+        if self.action in ("sleep", "nod"):
             return mix(self.accent, BACKGROUND, 0.7)
+        return mix(mix(self.accent, BACKGROUND, 0.55), self.accent, self.chest_glow())
+
+    def chest_glow(self) -> float:
         glow = (math.sin(self.frame / FPS * (9 if self.working else 1.5)) + 1) / 2
-        glow = round(glow * 6) / 6  # in steps, so a still Bit repeats frames and costs nothing
-        return mix(mix(self.accent, BACKGROUND, 0.55), self.accent, glow)
+        return round(glow * 6) / 6  # in steps, so a still Bit repeats frames and costs nothing
+
+    # --- in real pixels (Sixel) -------------------------------------------------------------
+
+    def cell_x(self, width: int) -> int:
+        """The first of Bit's cells along the strip. In octants it moves a cell at a time; in
+        real pixels it is drawn between cells too, its picture starting at this one."""
+        x = max(0.0, min(self.x, float(width * 2 - SPRITE_W)))
+        return int(x // 2) if self.picture is not None else round(x / 2)
+
+    def picture_cells(self) -> tuple[int, int, int, int] | None:
+        """Where Bit's picture goes on the screen, in cells: x, y, width, height."""
+        region = self.region
+        if not self.is_attached or region.width < WIDTH or region.height < ROWS:
+            return None
+        return region.x + self.cell_x(region.width), region.y, WIDTH, ROWS
+
+    def hires(self, cell: int = 0, shift: int = 0, size: tuple[int, int] = bitart.WT_CELL) -> bitart.Frame:
+        """Bit this frame in real pixels: the action's pose, with what the behaviour knows."""
+        eyes = "normal" if self.eyes == "down" and self.action != "work" else self.eyes  # the moves look their own way
+        red = bool(self.waiting or self.alarm_frames)
+        context = bitmoves.Context(
+            beat=self.frame - self.since, frame=self.frame, direction=self.direction, distance=self.distance,
+            height=self.height, eyes=eyes, antenna=self.antenna,
+            beacon=(1.0 if self.frame % 10 < 5 else 0.15) if red else self.glow(), beacon_red=red,
+            chest=self.chest_glow(), working=bool(self.working), call=bitmoves.CALLS[self.calls % len(bitmoves.CALLS)],
+            effects=self.confetti(cell, shift, size))
+        frame = bitmoves.frame(self.action, context)
+        pose = bitart.themed(frame.pose, _rgb(self.accent))
+        if self.action in ("cheer", "dance", "spin"):
+            pose = replace(pose, beacon_colour=_rgb(GREEN))
+        return bitart.Frame(pose, frame.effects)
+
+    def confetti(self, cell: int, shift: int, size: tuple[int, int]) -> list[bitart.Effect]:
+        """The particles flying about Bit, in its picture's own coordinates."""
+        found = []
+        width = WIDTH * size[0]
+        for p in self.particles:
+            x = p.x * size[0] / 2 - cell * size[0] - shift  # pixels from the picture's left, before its shift
+            y = p.y * size[1] / 4
+            if -2 <= x < width:
+                found.append(bitart.Effect("confetti", 55 + (x / (size[0] / 10) - 55) / bitart.SCALE,
+                                           bitart.GROUND - (bitart.GROUND - y / (size[1] / 20)) / bitart.SCALE,
+                                           colour=_rgb(p.colour)))
+        return found
+
+    def update_picture(self, width: int) -> None:
+        """Bit in real pixels, drawn again only when it changed. The app sends it right after
+        Textual has written its cells again (sixel.SixelHost): they are refreshed for that, and
+        where it stood before too, so no old picture stays behind."""
+        found = sixel.terminal()
+        if self.picture is None or found is None or width < WIDTH:
+            return
+        cell = self.cell_x(width)
+        x = max(0.0, min(self.x, float(width * 2 - SPRITE_W)))
+        shift = round((x / 2 - cell) * found.cell[0])  # between cells, in pixels
+        frame = self.hires(cell, shift, found.cell)
+        back = self.backdrop()
+        effects = tuple((e.kind, round(e.x), round(e.y), e.size, round(e.alpha, 1), e.colour) for e in frame.effects)
+        key = (frame.pose, effects, cell, shift, back, found.cell)
+        if key == self.drawn:
+            return
+        before = self.drawn[2] if self.drawn else cell
+        self.drawn = key
+        self.picture.data = _picture(frame.pose, effects, shift, _rgb(back), found.cell)
+        self.picture.fresh = True
+        if before != cell:  # the cells it left: written blank again, which wipes the old picture there
+            left = [c for c in range(before, before + WIDTH) if not cell <= c < cell + WIDTH]
+            self.refresh(Region(min(left), 0, len(left), ROWS))
+        if self.is_attached and isinstance(self.app, sixel.SixelHost):
+            self.app.send_now(self.picture)  # over the old one, opaque: replaced, not wiped
 
     def eye_colour(self) -> str:
         # In octants the helmet's own colour, so a cell holding eye, visor and helmet needs
@@ -407,17 +552,19 @@ class Mascot(Widget):
         # the helmet's would then take the visor's edges too.
         return PALETTE["H"] if self.fine else "#e6f4ff"
 
-    def pixels(self, width: int) -> list[list[str]]:
-        """The strip as a grid of colours, two pixels per cell across and four down."""
+    def pixels(self, width: int, sprite: bool = True) -> list[list[str]]:
+        """The strip as a grid of colours, two pixels per cell across and four down; without the
+        sprite where Bit is drawn in real pixels (its cells left blank for the picture)."""
         cols = width * 2
         grid = [[BACKGROUND] * cols for _ in range(PIXELS)]
         self.painted = set()  # cells with something in them
         # Whole cells across, so the sprite always lines up with the cell grid.
         x0 = 2 * round(max(0.0, min(self.x, float(cols - SPRITE_W))) / 2)
-        if self.action == "dizzy":  # its head spins: a cell this way and that
+        base = self.base()
+        if base == "dizzy":  # its head spins: a cell this way and that
             x0 = max(0, min(cols - SPRITE_W, x0 + (2 if (self.frame // 2) % 2 else -2)))
         airborne = self.height >= 0.5
-        sitting = self.action in ("sit", "sleep")
+        sitting = base in ("sit", "sleep")
         # Bit moves up or down a whole cell at a time, never a pixel: across the cell grid,
         # cells would need more colours than they can show and the face would smear. A hop
         # lifts it one cell (its antenna goes above the strip for that moment).
@@ -429,34 +576,35 @@ class Mascot(Widget):
                 grid[row][col] = colour
                 self.painted.add((row // 4, col // 2))
 
-        colours = {**PALETTE, "a": self.light(), "c": self.chest()}
-        for r, line in enumerate(SPRITE):
-            for c, key in enumerate(line):
-                if key in colours:
-                    put(top + r, x0 + c, colours[key])
-        for r, c in EYES.get(self.eyes, EYES["normal"]):
-            put(top + r, x0 + c, self.eye_colour())
+        if sprite:
+            colours = {**PALETTE, "a": self.light(), "c": self.chest()}
+            for r, line in enumerate(SPRITE):
+                for c, key in enumerate(line):
+                    if key in colours:
+                        put(top + r, x0 + c, colours[key])
+            for r, c in EYES.get(self.eyes, EYES["normal"]):
+                put(top + r, x0 + c, self.eye_colour())
 
-        for row, col, length in ARMS[self.arms()]:
-            if row < BODY_ROW:  # raised: out from the shoulder along the body's top, then up
-                span = range(col, 6) if col < SPRITE_W // 2 else range(16, col + 2)
-                for c in span:
-                    put(body_top, x0 + c, ARM)
-            for r in range(row, min(row + length, BODY_ROW + 3)):
-                put(top + r, x0 + col, ARM)
-                put(top + r, x0 + col + 1, ARM)
+            for row, col, length in ARMS[self.arms()]:
+                if row < BODY_ROW:  # raised: out from the shoulder along the body's top, then up
+                    span = range(col, 6) if col < SPRITE_W // 2 else range(16, col + 2)
+                    for c in span:
+                        put(body_top, x0 + c, ARM)
+                for r in range(row, min(row + length, BODY_ROW + 3)):
+                    put(top + r, x0 + col, ARM)
+                    put(top + r, x0 + col + 1, ARM)
 
-        step = int(self.distance / 2)  # one per cell walked
-        if sitting:
-            legs = LEGS["sit"]
-        elif self.action in ("walk", "alarm") and not airborne:
-            legs = LEGS[STRIDE[step % 4]]
-        else:
-            legs = LEGS["stand"]
-        for r, line in enumerate(legs):
-            for c, key in enumerate(line):
-                if key in PALETTE:
-                    put(body_top + 2 + r, x0 + c, PALETTE[key])
+            step = int(self.distance / 2)  # one per cell walked
+            if sitting:
+                legs = LEGS["sit"]
+            elif base in ("walk", "alarm") and not airborne:
+                legs = LEGS[STRIDE[step % 4]]
+            else:
+                legs = LEGS["stand"]
+            for r, line in enumerate(legs):
+                for c, key in enumerate(line):
+                    if key in PALETTE:
+                        put(body_top + 2 + r, x0 + c, PALETTE[key])
 
         for p in self.particles:
             row, col = round(p.y), round(p.x)
@@ -467,24 +615,25 @@ class Mascot(Widget):
     def arms(self) -> str:
         """Which of ARMS the arms are in, this frame."""
         beat = self.frame - self.since
-        if self.action == "walk":
+        action = self.base()
+        if action == "walk":
             return ("swing", "swung")[int(self.distance / 2) % 2]
-        if self.action == "work":  # quick, like typing
+        if action == "work":  # quick, like typing
             return ("swing", "swung")[(self.frame // 3) % 2]
-        if self.action == "wave":
+        if action == "wave":
             return ("wave", "waved")[(self.frame // 4) % 2]
-        if self.action == "call":
+        if action == "call":
             return ("wave", "waved")[(self.frame // 4) % 2] if beat % CALL_EVERY < CALL_FOR else "down"
-        if self.action in ("cheer", "alarm"):
+        if action in ("cheer", "alarm"):
             return ("up", "upped")[(self.frame // 5) % 2]
-        if self.action == "dizzy":
+        if action == "dizzy":
             return ("up", "upped")[(self.frame // 2) % 2]
         return "down"
 
     def lines(self, width: int) -> list[Text]:
         """The strip as ROWS lines of text, each exactly `width` cells wide."""
         width = max(width, WIDTH)
-        grid = self.pixels(width)
+        grid = self.pixels(width, sprite=self.picture is None)
         # The face and the lights win when a cell has more colours than it can show.
         self.important = frozenset({self.eye_colour(), self.light(), self.chest(),
                                     *(p.colour for p in self.particles)})
@@ -545,7 +694,7 @@ class Mascot(Widget):
         if not self.bubbles:
             return
         saying = self.bubbles[-1]
-        x0 = round(self.x / 2)
+        x0 = self.cell_x(width)
         right, left = width - (x0 + WIDTH), x0  # cells free beside Bit
         room = max(right, left) - 5  # the tail, the frame and a space each side
         if room < 3:

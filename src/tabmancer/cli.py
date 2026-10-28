@@ -135,8 +135,10 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "startup-run":
         startup_main()
     else:
+        from . import sixel
         from .app import SessionPicker  # Textual is slow to import; only the picker needs it
 
+        sixel.probe()  # whether Bit can be drawn in real pixels: asked before Textual reads the keys
         # The picker opens sessions itself and stays open; it only hands back commands
         # when no supported terminal can open tabs.
         print_leftover(SessionPicker(args.days, args.all, live=args.command == "live").run())

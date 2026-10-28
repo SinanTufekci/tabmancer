@@ -111,11 +111,14 @@ def test_sayings_and_particles_fade():
 def test_bit_falls_asleep_when_nothing_happens_and_wakes_on_news():
     robot = bit()
     robot.quiet = M.SLEEP_AFTER + 1
-    robot.left = 0
-    robot.advance(80)
-    assert robot.action == "sleep"
+    seen = []
+    for _ in range(3):  # it yawns, nods off, and sleeps
+        robot.left = 0
+        robot.advance(80)
+        seen.append(robot.action)
+    assert seen == ["yawn", "nod", "sleep"]
     robot.set_mood(working=1, waiting=0)
-    assert robot.action != "sleep"
+    assert robot.action == "wake"  # startled awake
 
 
 def test_fine_blocks_follow_the_terminal(monkeypatch):
@@ -155,7 +158,9 @@ POSES = [("idle", {}), ("look", {"eyes": "left"}), ("work", {"eyes": "down", "wo
          ("wave", {"eyes": "happy"}), ("call", {"eyes": "alarm", "waiting": 1}),
          ("cheer", {"eyes": "happy"}), ("alarm", {"eyes": "alarm"}), ("sit", {}),
          ("sleep", {"eyes": "sleep"}), ("dizzy", {}), ("jump", {"height": 2.0}),
-         *(("walk", {"distance": float(d)}) for d in range(0, 8, 2))]
+         *(("walk", {"distance": float(d)}) for d in range(0, 8, 2)),
+         # The moves drawn in real pixels, as the octant poses that stand in for them.
+         *((action, {"distance": 2.0}) for action in M.TRAITS if action not in ("call", "alarm", "jump", "walk"))]
 
 
 def test_every_cell_of_every_pose_needs_two_colours_at_most():

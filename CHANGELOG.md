@@ -27,6 +27,9 @@ The first release.
 - **Stats** (`u`): tokens, when you work, tools and files, plan limits with a forecast, and a
   written report of a period.
 - **Codex and Antigravity** sessions in the same list, if you turn them on (`,`).
+- **Bit in real pixels** where the terminal draws Sixel (Windows Terminal and others): a
+  finer robot with dozens of moves that follow what your sessions do. Elsewhere, in block
+  characters as before.
 - **A demo** (`tabmancer --demo`): the dashboard over made-up sessions, to try every key before
   you have sessions of your own. Nothing of yours is read or changed.
 - **Windows first**: Windows Terminal tabs, start at login, desktop notifications, a desktop

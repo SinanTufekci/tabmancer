@@ -37,6 +37,7 @@ from . import (
     newsessions,
     rename,
     search,
+    sixel,
     summarize,
     teams,
     teamtree,
@@ -379,7 +380,7 @@ def resumes(launch: Launch) -> bool:
     return launch.cli == "claude" and launch.mode in (Mode.RESUME, Mode.AUTO) and bool(launch.session_id)
 
 
-class SessionPicker(App[list[str]]):
+class SessionPicker(sixel.SixelHost, App[list[str]]):
     """The dashboard. It stays open while sessions open in tabs beside it; it exits with
     shell commands only when no supported terminal can open the tabs itself."""
 
@@ -2070,7 +2071,7 @@ class SessionPicker(App[list[str]]):
         full = [lim for lim in limits if lim.percent >= 85]
         if full:  # Bit mentions it once per reading
             worst = max(full, key=lambda lim: lim.percent)
-            self.mascot.say(f"Careful: {worst.label} limit at {worst.percent}%", RED, seconds=6)
+            self.mascot.worry(f"Careful: {worst.label} limit at {worst.percent}%", RED)
 
     @work(thread=True)
     def start_background(self, launch: Launch) -> None:

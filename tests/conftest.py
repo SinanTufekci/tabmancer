@@ -57,6 +57,12 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("TABMANCER_CONFIG_DIR", str(tmp_path / "tabmancer-config"))
     # An empty ~/.claude unless a test builds one: never read the real transcripts.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-home"))
+    # Bit in block characters, whatever terminal runs the tests: a test that wants real pixels says so.
+    from tabmancer import sixel
+
+    monkeypatch.setenv("TABMANCER_SIXEL", "0")
+    monkeypatch.setattr(sixel, "_terminal", None)
+    monkeypatch.setattr(sixel, "_asked", False)
 
 
 def _records(prompt, reply, title):
