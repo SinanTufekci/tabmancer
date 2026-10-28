@@ -22,6 +22,7 @@ from functools import lru_cache
 
 CELLS = (11, 4)          # Bit's place in the strip, in cells
 GROUND = 77.5            # the feet, in design coordinates (the strip's 80 rows, less a band's spare)
+HEIGHT = 78              # design rows down Bit's place: in Windows Terminal, its whole bands of six
 SCALE = 0.9              # Bit a little smaller than its place: room to hop and raise its arms
 WT_CELL = (10, 20)       # Sixel pixels a cell in Windows Terminal
 
@@ -181,7 +182,7 @@ class _Space:
 
     def __init__(self, p: Pose, cell: tuple[int, int]):
         self.p = p
-        self.sx, self.sy = cell[0] / 10, cell[1] / 20  # screen pixels a design pixel
+        self.sx, self.sy = scale(cell)  # screen pixels a design pixel
         self.feet = GROUND - p.lift
         self.k = SCALE * p.squash
         tilt, lean = math.radians(-p.tilt), math.radians(-p.lean)
@@ -487,6 +488,13 @@ def size(cell: tuple[int, int] = WT_CELL) -> tuple[int, int]:
     return CELLS[0] * cell[0], (CELLS[1] * cell[1]) // 6 * 6
 
 
+def scale(cell: tuple[int, int] = WT_CELL) -> tuple[float, float]:
+    """Screen pixels a design pixel, across and down: ten across a cell, and the design's rows
+    down the place's whole bands, so the feet stand inside it whatever the cell (13 pixels high,
+    four rows of cells are 52, and the bands 48)."""
+    return cell[0] / 10, size(cell)[1] / HEIGHT
+
+
 def figure(pose: Pose, cell: tuple[int, int] = WT_CELL) -> list[list[Colour | None]]:
     """Bit in a pose: rows of colours, None where nothing is drawn (the strip shows through)."""
     palette, rows = indexed(Frame(pose), cell)
@@ -579,7 +587,7 @@ def _effects(palette: list[Colour | None], rows: list[bytearray], effects: list[
              cell: tuple[int, int] = WT_CELL) -> None:
     """The effects laid over Bit's pixels: glyphs of a few pixels, dots and puffs."""
     height, width = len(rows), len(rows[0]) if rows else 0
-    sx, sy = cell[0] / 10, cell[1] / 20
+    sx, sy = scale(cell)
     unit = max(1, round(sx))  # a glyph's pixel: one screen pixel in Windows Terminal
     index = {colour: n for n, colour in enumerate(palette)}
 
@@ -596,13 +604,13 @@ def _effects(palette: list[Colour | None], rows: list[bytearray], effects: list[
         colour = e.colour or EFFECT_COLOUR.get(e.kind, EYE)
         x, y = round((55 + (e.x - 55) * SCALE) * sx), round((GROUND - (GROUND - e.y) * SCALE) * sy)
         if e.kind in GLYPHS:
-            scale = max(1, round(e.size)) * unit
+            dot = max(1, round(e.size)) * unit
             for gy, line in enumerate(GLYPHS[e.kind]):
                 for gx, c in enumerate(line):
                     if c == "#":
-                        for yy in range(scale):
-                            for xx in range(scale):
-                                put(x + gx * scale + xx, y + gy * scale + yy, colour, e.alpha)
+                        for yy in range(dot):
+                            for xx in range(dot):
+                                put(x + gx * dot + xx, y + gy * dot + yy, colour, e.alpha)
         elif e.kind in ("dust", "steam"):
             r = max(1.0, e.size * 2 * sx)
             for yy in range(int(y - r), int(y + r) + 1):

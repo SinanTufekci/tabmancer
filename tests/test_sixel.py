@@ -2,13 +2,15 @@
 after Textual's updates, never over a dialog."""
 
 import re
+from types import SimpleNamespace
 
 import pytest
+from rich.color import ColorSystem
 from rich.console import Console
 from rich.segment import Segment
 from rich.style import Style
-from textual._compositor import ChopsUpdate
-from textual.geometry import Region
+from textual._compositor import ChopsUpdate, LayoutUpdate
+from textual.geometry import Region, Size
 from textual.strip import Strip
 
 from tabmancer import bitart, bitmoves, sixel
@@ -77,15 +79,17 @@ def test_the_cell_size_comes_from_the_answer():
     assert sixel.cell_in("") is None
 
 
-@pytest.mark.parametrize(("env", "wt", "answer", "cell"), [
-    ("0", True, "\x1b[6;20;10t\x1b[?62;4c", None),           # turned off
-    (None, True, "\x1b[?62;4c", (10, 20)),                     # Windows Terminal: its own cell size
-    (None, False, "\x1b[?62;4c", None),                        # Sixel, but no cell size said: no
-    (None, False, "\x1b[6;16;8t\x1b[?62;4c", (8, 16)),         # another terminal, saying its size
-    (None, False, "\x1b[6;16;8t\x1b[?62;22c", None),           # its size, but no Sixel
-    ("1", False, "", (10, 20)),                                # turned on by hand
+@pytest.mark.parametrize(("env", "wt", "answer", "window", "cell"), [
+    ("0", True, "\x1b[6;20;10t\x1b[?62;4c", None, None),           # turned off
+    (None, True, "\x1b[?62;4c", None, (10, 20)),                     # Windows Terminal: its own cell size
+    (None, False, "\x1b[?62;4c", None, None),                        # Sixel, but no cell size known: no
+    (None, False, "\x1b[?62;4c", (9, 19), (9, 19)),                  # ...known from the window's pixels
+    (None, False, "\x1b[6;16;8t\x1b[?62;4c", (9, 19), (8, 16)),      # another terminal, saying its size
+    (None, False, "\x1b[6;16;8t\x1b[?62;22c", None, None),           # its size, but no Sixel
+    ("1", False, "", None, (10, 20)),                                # turned on by hand
 ])
-def test_the_terminal_is_asked_once(monkeypatch, env, wt, answer, cell):
+def test_the_terminal_is_asked_once(monkeypatch, env, wt, answer, window, cell):
+    monkeypatch.setattr(sixel, "window_cell", lambda: window)
     if env is None:
         monkeypatch.delenv("TABMANCER_SIXEL", raising=False)
     else:
@@ -100,6 +104,39 @@ def test_the_terminal_is_asked_once(monkeypatch, env, wt, answer, cell):
     assert (found.cell if found else None) == cell
     sixel.probe()
     assert len(asked) <= 1  # once
+
+
+def test_a_font_made_bigger_or_smaller_measures_the_cell_again(monkeypatch):
+    monkeypatch.setattr(sixel, "window_cell", lambda: None)
+    monkeypatch.setattr(sixel, "_terminal", None)
+    assert not sixel.resized(100, 40, (900, 760))  # no Sixel: nothing to measure
+    monkeypatch.setattr(sixel, "_terminal", sixel.Terminal((10, 20), sync=True))
+    assert sixel.resized(100, 40, (900, 760)) and sixel.terminal() == sixel.Terminal((9, 19), sync=True)
+    assert not sixel.resized(100, 40, (905, 770))  # the same cell
+    assert not sixel.resized(100, 40) and sixel.terminal().cell == (9, 19)  # nothing said: it stays
+    monkeypatch.setattr(sixel, "window_cell", lambda: (12, 24))  # what the system has
+    assert sixel.resized(80, 30) and sixel.terminal().cell == (12, 24)
+    assert not sixel.resized(80, 30, (80, 30))  # one pixel a cell: nonsense, not taken
+
+
+def test_the_feet_stand_inside_bits_place_whatever_the_cell():
+    assert bitart.scale(bitart.WT_CELL) == (1.0, 1.0)  # Windows Terminal: as drawn
+    for cell in [(width, height) for width in range(5, 17) for height in range(10, 33)]:
+        assert bitart.GROUND * bitart.scale(cell)[1] <= bitart.size(cell)[1], cell
+
+
+@pytest.mark.parametrize("cell", [(6, 13), (9, 19), (14, 28)])
+def test_bit_is_drawn_at_other_cell_sizes(cell):
+    width, height = bitart.size(cell)
+    for action in ("walk", "cheer", "wave", "sleep"):
+        robot = M.Mascot(seed=3, fine=True)
+        robot.start(action, 10 ** 6)
+        robot.burst(["#ffffff"], 8)
+        for _ in range(20):
+            robot.advance(60)
+            pixels = bitart.frame_pixels(robot.hires(0, 0, cell), cell)
+            assert len(pixels) == height and all(len(row) == width for row in pixels), action
+            assert any(px is not None for px in pixels[-3]), action  # down to its feet
 
 
 class Spans:
@@ -242,6 +279,7 @@ async def test_bits_cells_always_show_its_picture_after_textuals_updates(fake_ho
             bit.bubbles.clear()
             bit.start("walk", 10 ** 6)
             bit.x, bit.direction = 120.0, direction
+            bit.tick()  # moved by hand: drawn there at once, as a tick of its own would
             start = len(set(checked))
             for _ in range(50):
                 await pilot.pause(0.1)
@@ -249,6 +287,7 @@ async def test_bits_cells_always_show_its_picture_after_textuals_updates(fake_ho
                     break
         assert len(set(checked)) >= 6  # it walked cells both ways
         bit.x = 20.0  # then near the left, so what it says goes on its right
+        bit.tick()
         await pilot.pause(0.3)
         monkeypatch.setattr(bit, "advance", lambda width=None: None)  # standing still: the same picture
         still = len(checked)
@@ -256,6 +295,57 @@ async def test_bits_cells_always_show_its_picture_after_textuals_updates(fake_ho
             bit.say(f"note {n}")  # written right of it: Textual writes the line from the strip's start
             await pilot.pause(0.2)
         assert len(checked) > still
+
+
+async def test_after_a_resize_that_changes_the_cell_bit_is_drawn_to_the_new_one(fake_home, pixels_on, monkeypatch):
+    monkeypatch.setattr(sixel, "window_cell", lambda: None)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 40)) as pilot:
+        await pilot.pause(0.5)
+        bit = app.mascot
+        assert '"1;1;110;78' in bit.picture.data
+        await pilot.resize_terminal(150, 38)  # the same cell (nothing says otherwise): drawn as it was
+        await pilot.pause(0.2)
+        assert '"1;1;110;78' in bit.picture.data
+        x, y, _, _ = bit.picture_cells()
+        written = set()
+        display = app._display
+
+        def record(screen, renderable):
+            if isinstance(renderable, ChopsUpdate):
+                written.update(cells_written(renderable))
+            elif isinstance(renderable, LayoutUpdate):  # the whole screen, or a region of it
+                r = renderable.region
+                written.update((row, col) for row in range(r.y, r.bottom) for col in range(r.x, r.right))
+            display(screen, renderable)
+
+        app._display = record
+        monkeypatch.setattr(sixel, "window_cell", lambda: (9, 19))  # a smaller font, the same rows and columns (xterm)
+        await pilot.resize_terminal(150, 38)
+        assert '"1;1;110;78' not in bit.picture.data  # the old size is not sent again
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if bit.picture.data:
+                break
+        assert '"1;1;99;72' in bit.picture.data
+        below = {(row, col) for row in range(y + 4, y + 7) for col in range(x, x + 14)}
+        assert below <= written  # where the old, bigger picture reached, text was written again
+
+
+@pytest.mark.parametrize(("system", "register"), [
+    (ColorSystem.TRUECOLOR, "#0;2;4;4;4"),   # the list's own #0b0b0b
+    (ColorSystem.EIGHT_BIT, "#0;2;3;3;3"),   # as 256 colours have it: #080808
+    (ColorSystem.STANDARD, "#0;2;0;0;0"),    # as 16 do (xterm, saying nothing of true colour): black
+])
+async def test_bits_picture_takes_the_strips_shade_as_the_terminal_shows_it(fake_home, pixels_on, system, register):
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 40)) as pilot:
+        await pilot.pause(0.6)  # faded in
+        app.console._color_system = system
+        bit = app.mascot
+        bit.drawn = None
+        bit.update_picture(bit.size.width)
+        assert bit.backdrop().lower() == "#0b0b0b" and f'"1;1;110;78{register}#' in bit.picture.data
 
 
 def test_a_new_picture_never_wipes_bits_cells_only_the_ones_it_left(monkeypatch):
@@ -320,10 +410,15 @@ class Driver:
 class Host(sixel.SixelHost):
     is_headless = False
     _sync_available = False
+    console = SimpleNamespace(_color_system=None)  # true colour: Bit's picture keeps the strip's own shade
 
     def __init__(self):
         self.screen = Screen()
         self._driver = Driver()
+        self.refreshed = 0
+
+    def refresh(self):
+        self.refreshed += 1
 
 
 def test_a_picture_textual_writes_over_next_goes_with_that_update_not_also_at_once(monkeypatch):
@@ -354,6 +449,24 @@ def test_a_picture_textual_writes_over_next_goes_with_that_update_not_also_at_on
     robot.picture.fresh = False
     assert sent_at_once(20.0, Region(0, 0, 10, M.ROWS))         # what is left of it repainted
     assert not sent_at_once(20.0, Region(30, 0, 30, M.ROWS))    # right of it: with Textual's update
+
+
+def test_a_picture_drawn_to_the_old_cell_size_is_not_sent_again(monkeypatch):
+    # Bigger than its cells after a smaller font, it would stay on beside them until drawn anew.
+    monkeypatch.setattr(sixel, "_terminal", sixel.Terminal(bitart.WT_CELL))
+    monkeypatch.setattr(sixel, "window_cell", lambda: None)
+    host = Host()
+    host.screen.owner = Owner(host.screen)
+    picture = sixel.Picture(host.screen.owner, lambda: (4, 6, M.WIDTH, M.ROWS))
+    picture.data = "\x1bPq-\x1b\\"
+    host.add_picture(picture)
+    host.on_resize(SimpleNamespace(size=Size(100, 40), pixel_size=Size(1000, 800)))  # the same cell
+    assert picture.data and host.refreshed == 0
+    host.on_resize(SimpleNamespace(size=Size(100, 40), pixel_size=Size(900, 760)))
+    assert picture.data == "" and host.refreshed == 1  # and the screen written again whole
+    picture.fresh = True
+    host.send_pictures(None)
+    assert host._driver.written == []
 
 
 @pytest.mark.parametrize("sync", [True, False])

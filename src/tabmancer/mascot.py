@@ -24,6 +24,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
+from rich.color import Color, ColorSystem
 from rich.style import Style
 from rich.text import Text
 from textual import events
@@ -511,12 +512,13 @@ class Mascot(Widget):
         """The particles flying about Bit, in its picture's own coordinates."""
         found = []
         width = WIDTH * size[0]
+        sx, sy = bitart.scale(size)
         for p in self.particles:
             x = p.x * size[0] / 2 - cell * size[0] - shift  # pixels from the picture's left, before its shift
             y = p.y * size[1] / 4
             if -2 <= x < width:
-                found.append(bitart.Effect("confetti", 55 + (x / (size[0] / 10) - 55) / bitart.SCALE,
-                                           bitart.GROUND - (bitart.GROUND - y / (size[1] / 20)) / bitart.SCALE,
+                found.append(bitart.Effect("confetti", 55 + (x / sx - 55) / bitart.SCALE,
+                                           bitart.GROUND - (bitart.GROUND - y / sy) / bitart.SCALE,
                                            colour=_rgb(p.colour)))
         return found
 
@@ -535,7 +537,7 @@ class Mascot(Widget):
         x = max(0.0, min(self.x, float(width * 2 - SPRITE_W)))
         shift = round((x / 2 - cell) * found.cell[0])  # between cells, in pixels
         frame = self.hires(cell, shift, found.cell)
-        back = self.backdrop()
+        back = self.as_shown(self.backdrop())
         effects = tuple((e.kind, round(e.x), round(e.y), e.size, round(e.alpha, 1), e.colour) for e in frame.effects)
         key = (frame.pose, effects, cell, shift, back, found.cell)
         if key == self.drawn:
@@ -553,6 +555,15 @@ class Mascot(Widget):
             return  # Textual writes over it next: it goes with that update
         if self.is_attached and isinstance(self.app, sixel.SixelHost):
             self.app.send_now(self.picture)  # over the old one, opaque: replaced, not wiped
+
+    def as_shown(self, colour: str) -> str:
+        """A colour as the terminal shows the strip's: where Textual writes 256 colours or 16 (xterm
+        says nothing of true colour), the one of those it becomes, so that Bit's picture, in true
+        colour, is not a box of another shade around it."""
+        system = self.app.console._color_system if self.is_attached else None
+        if system in (None, ColorSystem.TRUECOLOR):
+            return colour
+        return Color.parse(colour).downgrade(system).get_truecolor().hex
 
     def eye_colour(self) -> str:
         # In octants the helmet's own colour, so a cell holding eye, visor and helmet needs

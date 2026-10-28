@@ -2,10 +2,11 @@
 
 Whether it does is asked once, before Textual starts reading the keyboard (probe): its primary
 device attributes (ESC [ c) list 4 when it draws Sixel, and ESC [ 16 t asks how many pixels a
-cell is. Windows Terminal (1.22 on) draws Sixel and counts 10x20 pixels to a cell whatever the
-font; a terminal that does not say its cell size gets no Sixel, so an image never comes out the
-wrong size. TABMANCER_SIXEL=0 turns it off, =1 on (with Windows Terminal's cell size unless the
-terminal says otherwise).
+cell is (elsewhere than Windows, the system knows the window's pixels too). Windows Terminal
+(1.22 on) draws Sixel and counts 10x20 pixels to a cell whatever the font; a terminal whose cell
+size is not known gets no Sixel, so an image never comes out the wrong size. A font made bigger or
+smaller resizes the terminal, and the cell is measured again (resized). TABMANCER_SIXEL=0 turns it
+off, =1 on (with Windows Terminal's cell size unless the terminal says otherwise).
 
 An image is text: its colours, then six rows of pixels at a time, a character a column (the
 six pixels as bits), colour by colour, runs of a character as !count. It is drawn at the cursor
@@ -25,7 +26,7 @@ import re
 import sys
 import time
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .bitart import WT_CELL, Colour
 
@@ -63,7 +64,7 @@ def probe() -> Terminal | None:
         answer = _ask(f"\x1b[?{SYNC}$p\x1b[16t\x1b[c")  # the attributes last: every terminal answers those
     except (OSError, ValueError, AttributeError, ImportError):
         answer = ""
-    cell = cell_in(answer) or (WT_CELL if os.environ.get("WT_SESSION") or setting == "1" else None)
+    cell = cell_in(answer) or window_cell() or (WT_CELL if os.environ.get("WT_SESSION") or setting == "1" else None)
     if cell and (sixel_in(answer) or setting == "1"):
         _terminal = Terminal(cell, sync=sync_in(answer))
     return _terminal
@@ -86,8 +87,51 @@ def cell_in(answer: str) -> tuple[int, int] | None:
     found = re.search(r"\x1b\[6;(\d+);(\d+)t", answer)
     if not found:
         return None
-    height, width = int(found.group(1)), int(found.group(2))
+    return _cell(int(found.group(2)), int(found.group(1)))
+
+
+def _cell(width: int, height: int, cols: int = 1, rows: int = 1) -> tuple[int, int] | None:
+    """A cell's pixels from a width and height in pixels over so many cells; None when unlikely."""
+    if not (cols and rows):
+        return None
+    width, height = width // cols, height // rows
     return (width, height) if 4 <= width <= 64 and 8 <= height <= 128 else None
+
+
+def window_cell() -> tuple[int, int] | None:
+    """The cell size from the window's size in pixels as the system keeps it with the terminal's
+    (TIOCGWINSZ): most terminals fill it in, some leave it at zero. Windows keeps no such thing."""
+    if sys.platform == "win32":
+        return None
+    try:
+        import fcntl
+        import struct
+        import termios
+    except ImportError:
+        return None
+    for stream in (sys.__stdin__, sys.__stdout__, sys.__stderr__):
+        try:
+            rows, cols, width, height = struct.unpack("HHHH", fcntl.ioctl(stream.fileno(), termios.TIOCGWINSZ,
+                                                                           bytes(8)))
+        except (AttributeError, OSError, ValueError):
+            continue
+        return _cell(width, height, cols, rows)
+    return None
+
+
+def resized(cols: int, rows: int, pixels: tuple[int, int] | None = None) -> bool:
+    """After the terminal changed size: its cell's pixels again, as it said with the resize
+    (pixels: the window's) or as the system has them. A font made bigger or smaller changes
+    them, and Bit is drawn to them. Windows Terminal counts 10x20 whatever the font, and nothing
+    says otherwise there: it stays. Whether the cell size changed."""
+    global _terminal
+    if _terminal is None:
+        return False
+    found = (_cell(*pixels, cols, rows) if pixels else None) or window_cell()
+    if found is None or found == _terminal.cell:
+        return False
+    _terminal = replace(_terminal, cell=found)
+    return True
 
 
 def _ask(question: str) -> str:
@@ -239,6 +283,18 @@ class SixelHost:
 
     def add_picture(self, picture: Picture) -> None:
         self._sixel_pictures().add(picture)
+
+    def on_resize(self, event) -> None:
+        """A font made bigger or smaller resizes the terminal: pictures drawn to the old cell size
+        are not sent again, and their widgets draw them anew. The screen is written again whole:
+        a picture shown before, bigger now than its cells, stays on beside them until text is
+        written there, and a terminal keeping its rows and columns (xterm) makes Textual write
+        nothing."""
+        pixels = getattr(event, "pixel_size", None)
+        if resized(event.size.width, event.size.height, (pixels.width, pixels.height) if pixels else None):
+            for picture in self._sixel_pictures():
+                picture.data = ""
+            self.refresh()  # type: ignore[attr-defined]
 
     def _display(self, screen, renderable) -> None:
         """Textual's update, and the pictures it wrote over sent again right behind it, in one

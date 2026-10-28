@@ -122,14 +122,16 @@ helmet with a dark visor, two eyes and a beacon on a springy antenna, a body wit
 on its chest, two arms and two legs. It takes up four rows and has no box of its own:
 around it is the list's background.
 
-Where the terminal draws Sixel images (Windows Terminal from 1.22, WezTerm, iTerm2,
+Where the terminal draws Sixel images (Windows Terminal from 1.22, foot, WezTerm, iTerm2,
 Konsole and others that say so), Bit is drawn in real pixels: 110x78 in Windows Terminal,
-in the same eleven cells by four rows. It moves a pixel at a time, squashes before a hop
-and stretches in the air, its eyes change with what it does (happy, wide, hearts, stars,
-dizzy rings...), and it handles things: a laptop, a mug, a clipboard, a box, a wrench. Its
-pictures are sent right after the dashboard's own updates, so it never covers a dialog.
-`tabmancer` asks the terminal when it starts; `TABMANCER_SIXEL=0` keeps Bit in block
-characters, `=1` asks for pixels where the terminal does not say it draws them.
+in the same eleven cells by four rows, to the size of the cells elsewhere. It moves a pixel
+at a time, squashes before a hop and stretches in the air, its eyes change with what it does
+(happy, wide, hearts, stars, dizzy rings...), and it handles things: a laptop, a mug, a
+clipboard, a box, a wrench. Its pictures are sent right after the dashboard's own updates, so
+it never covers a dialog. Made bigger or smaller with the font, it is drawn again to the new
+cells. `tabmancer` asks the terminal when it starts; `TABMANCER_SIXEL=0` keeps Bit in block
+characters, `=1` asks for pixels where the terminal does not say it draws them. xterm draws
+them when started as a VT340: `xterm -ti vt340`.
 
 Elsewhere Bit is pixel art in block characters. In Windows Terminal each cell holds 2x4
 pixels (Unicode block octants), so Bit is 22x15 pixels in a space eleven cells wide (the
