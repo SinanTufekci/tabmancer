@@ -177,6 +177,21 @@ async def test_a_members_row_keeps_the_keys_of_a_session(fake_home, tmp_path, mo
         assert isinstance(app.screen, HandoverDialog) and app.screen.session.session_id == "lead-1"
 
 
+async def test_a_member_in_the_background_looks_open_like_the_lead_not_closed(fake_home, tmp_path, monkeypatch):
+    shop(fake_home, tmp_path, monkeypatch, api_open=False)
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
+        {"sessionId": "lead-1", "kind": "interactive", "status": "idle"},
+        {"sessionId": "api-1", "kind": "background", "status": "busy"}])
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await ready(pilot, app, unfold=True)
+        marks = {key: app.table.get_row(key)[0].plain for key in ("lead-1", "api-1", "ui-1")}
+        assert marks == {"lead-1": "", "api-1": "", "ui-1": "[ ]"}  # only the closed one has a box
+        app.table.move_cursor(row=app.table.get_row_index("api-1"))
+        await pilot.press("space")  # still ticked to attach to it
+        assert app.table.get_row("api-1")[0].plain == "[x]"
+
+
 async def test_a_team_with_nobody_open_is_one_row_that_starts_it(fake_home, tmp_path, monkeypatch):
     from tabmancer import app as app_module
 

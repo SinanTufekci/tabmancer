@@ -803,6 +803,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             mark = Text("")
         elif session.session_id in self.selected:
             mark = Text("[x]", style=f"bold {self.accent()}")
+        elif session.status is Status.BACKGROUND:  # open too, though Space ticks it to attach to it:
+            mark = Text("")                        # a box would put it with the closed ones
         else:
             mark = Text("[ ]", style="#5a5a5a")
         open_here = session.status is Status.RUNNING  # open in a terminal: cannot be selected
