@@ -54,7 +54,7 @@ from .dialogs import frame, title
 from .handoverview import HandoverDialog, fill
 from .keysview import KEYS, KeysScreen
 from .launch import Launch, Mode, continue_prompt, default_mode, open_tabs, run_in_background
-from .mascot import Mascot
+from .mascot import Mascot, way_of
 from .safework import work
 from .sessions import (
     UNREADABLE,
@@ -582,8 +582,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         use_saved_theme(self)
         saved = read_json("config.json")
         self.mascot.accent = THEMES[self.theme][1]
-        self.mascot.set_class(isinstance(saved, dict) and saved.get("mascot") is False, "hidden")
-        self.place_mascot()
+        self.show_mascot(way_of(saved.get("mascot") if isinstance(saved, dict) else None))
         self.set_interval(SPIN_SECONDS, self.spin)
         self.refresh_usage()
         self.set_interval(USAGE_SECONDS, self.refresh_usage)
@@ -2094,16 +2093,27 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.inspector.styles.margin = (0 if shown else 1, 0, 0, 0)
 
     def action_toggle_mascot(self) -> None:
-        hidden = not self.mascot.has_class("hidden")
-        self.mascot.set_class(hidden, "hidden")
-        self.place_mascot()
+        """b: Bit in real pixels, then in block characters, then away, then back; pixels only where
+        the terminal draws them. Remembered."""
+        ways = (["pixels"] if sixel.terminal() else []) + ["blocks", "away"]
+        now = "away" if self.mascot.has_class("hidden") else "pixels" if self.mascot.picture else "blocks"
+        way = ways[(ways.index(now) + 1) % len(ways)]
+        self.show_mascot(way)
+        self.notify({"pixels": "Bit in real pixels.", "blocks": "Bit in block characters.",
+                     "away": "Bit is away: b brings it back."}[way], timeout=3)
         saved = read_json("config.json")
         saved = saved if isinstance(saved, dict) else {}
-        saved["mascot"] = not hidden
+        saved["mascot"] = way
         try:
             write_json("config.json", saved, indent=2)
         except OSError:
             pass
+
+    def show_mascot(self, way: str) -> None:
+        self.mascot.set_class(way == "away", "hidden")
+        if way != "away":
+            self.mascot.use_pixels(way == "pixels")
+        self.place_mascot()
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
         """Bit's eyes follow the mouse pointer, wherever it is over the dashboard."""

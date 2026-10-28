@@ -121,8 +121,16 @@ EYES = {
 TIPS = [
     "p writes to a session", "t switches the theme", "s asks Claude for a summary",
     "e opens a row", "w saves a workspace", "l shows only open sessions",
-    "/ filters the list", "b sends me away for a while", "T shows your teams",
+    "/ filters the list", "b changes how I look, or sends me away", "T shows your teams",
 ]
+
+
+def way_of(saved: object) -> str:
+    """How Bit is shown, from config.json's "mascot" (b chooses): "pixels" (where the terminal
+    draws them; block characters elsewhere), "blocks" or "away". False, from before, is away."""
+    if saved is False or saved == "away":
+        return "away"
+    return "blocks" if saved == "blocks" else "pixels"
 
 
 def _rgb(colour: str) -> bitart.Colour:
@@ -209,10 +217,22 @@ class Mascot(Widget):
 
     def on_mount(self) -> None:
         self.set_interval(TICK, self.tick)
-        found = sixel.terminal()
-        if found is not None and isinstance(self.app, sixel.SixelHost):
+        self.use_pixels(True)
+
+    def use_pixels(self, on: bool) -> None:
+        """Bit in real pixels, where the terminal draws them, or in block characters (b chooses)."""
+        host = self.app if isinstance(self.app, sixel.SixelHost) else None
+        if on and self.picture is None and sixel.terminal() is not None and host is not None:
             self.picture = sixel.Picture(self, self.picture_cells)
-            self.app.add_picture(self.picture)
+            host.add_picture(self.picture)
+        elif not on and self.picture is not None:
+            if host is not None:
+                host.remove_picture(self.picture)
+            self.picture = None
+        else:
+            return
+        self.drawn, self.shown = None, None
+        self.refresh()  # its cells written whole: the picture there goes, or the block characters do
 
     def base(self) -> str:
         """The octant pose that stands in for the action (bitmoves.TRAITS)."""

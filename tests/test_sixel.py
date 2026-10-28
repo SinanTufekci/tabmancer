@@ -340,7 +340,10 @@ async def test_after_a_resize_that_changes_the_cell_bit_is_drawn_to_the_new_one(
 async def test_bits_picture_takes_the_strips_shade_as_the_terminal_shows_it(fake_home, pixels_on, system, register):
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 40)) as pilot:
-        await pilot.pause(0.6)  # faded in
+        for _ in range(60):  # the dashboard fades in: until it has
+            await pilot.pause(0.05)
+            if app.mascot.backdrop().lower() == "#0b0b0b":
+                break
         app.console._color_system = system
         bit = app.mascot
         bit.drawn = None
@@ -552,3 +555,28 @@ def test_bit_does_many_things_and_calls_three_ways():
         robot.advance(80)
         ways.add(bitmoves.CALLS[robot.calls % len(bitmoves.CALLS)])
     assert ways == set(bitmoves.CALLS)
+
+
+async def test_b_shows_bit_in_pixels_then_blocks_then_sends_it_away_and_remembers(fake_home, pixels_on):
+    from tabmancer.config import read_json, write_json
+
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 40)) as pilot:
+        await pilot.pause(0.5)
+        bit = app.mascot
+        assert bit.picture is not None
+        await pilot.press("b")
+        assert bit.picture is None and not bit.has_class("hidden") and not list(app._sixel_pictures())
+        await pilot.pause(0.2)
+        assert any(line.plain.strip() for line in bit.lines(bit.size.width))  # in block characters
+        await pilot.press("b")
+        assert bit.has_class("hidden") and read_json("config.json")["mascot"] == "away"
+        await pilot.press("b")
+        assert bit.picture is not None and not bit.has_class("hidden")
+        await pilot.press("b")
+        assert read_json("config.json")["mascot"] == "blocks"
+    write_json("config.json", {"mascot": "blocks"})
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 40)) as pilot:
+        await pilot.pause(0.3)
+        assert app.mascot.picture is None and not app.mascot.has_class("hidden")  # as chosen last time

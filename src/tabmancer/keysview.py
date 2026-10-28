@@ -78,7 +78,7 @@ KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("Settings and the rest", [
         (",", "settings", "which CLIs to list: Claude Code, Codex, Antigravity"),
         ("t", "cycle_theme", "the next colour theme (remembered)"),
-        ("b", "toggle_mascot", "Bit on or off"),
+        ("b", "toggle_mascot", "Bit in pixels, in blocks, or away"),
         ("?", "keys", "this list"),
         ("Esc", "back", "clear the filter (a card's too); with no filter, quit"),
         ("q", "quit", "quit"),

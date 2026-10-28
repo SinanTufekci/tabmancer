@@ -6,15 +6,17 @@ whether recent transcripts still read the way tabmancer expects.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta
 
-from . import __version__, clis, summarize, tokens, workspaces
+from . import __version__, clis, sixel, summarize, tokens, workspaces
 from .config import config_dir, read_json
 from .launch import clean_env, terminal_kind
+from .mascot import way_of
 from .sessions import (
     CACHE_FILE,
     UNREADABLE,
@@ -153,11 +155,34 @@ def checks() -> list[Result]:
                                "sessions that ended together are ticked as open at the last shutdown "
                                "instead.")))
 
+    found.append(bit_check())
+
     cache = read_json(CACHE_FILE)
     cached = len(cache.get("entries", {})) if isinstance(cache, dict) else 0
     found.append(("ok", (f"Own files in {config_dir()}: {len(workspaces.load())} workspaces, "
                          f"{len(summarize.load_cache())} summaries, {cached} cached sessions.")))
     return found
+
+
+def bit_check() -> Result:
+    """How Bit is drawn in this terminal: in real pixels (and at what cell size), in block
+    characters (and why), or not at all. What to look at first when Bit looks wrong somewhere."""
+    saved = read_json("config.json")
+    way = way_of(saved.get("mascot") if isinstance(saved, dict) else None)
+    if way == "away":
+        return "ok", "Bit is away (b in the dashboard brings it back)."
+    if os.environ.get("TABMANCER_SIXEL") == "0":
+        return "ok", "Bit is drawn in block characters: TABMANCER_SIXEL=0."
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return "ok", "Bit: not run in a terminal here, so the terminal could not be asked about Sixel images."
+    found = sixel.probe()
+    if found is None:
+        return "ok", ("Bit is drawn in block characters: this terminal does not say it draws Sixel images, "
+                      "or not its cell size.")
+    cells = f"{found.cell[0]}x{found.cell[1]} pixel cells" + (", synchronized output" if found.sync else "")
+    if way == "blocks":
+        return "ok", f"Bit is drawn in block characters, as chosen with b; this terminal draws Sixel ({cells})."
+    return "ok", f"Bit is drawn in real pixels (Sixel, {cells})."
 
 
 def _transcript_checks(open_ids: set[str]) -> list[Result]:

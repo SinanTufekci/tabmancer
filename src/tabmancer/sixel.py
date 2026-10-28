@@ -284,6 +284,9 @@ class SixelHost:
     def add_picture(self, picture: Picture) -> None:
         self._sixel_pictures().add(picture)
 
+    def remove_picture(self, picture: Picture) -> None:
+        self._sixel_pictures().discard(picture)
+
     def on_resize(self, event) -> None:
         """A font made bigger or smaller resizes the terminal: pictures drawn to the old cell size
         are not sent again, and their widgets draw them anew. The screen is written again whole:

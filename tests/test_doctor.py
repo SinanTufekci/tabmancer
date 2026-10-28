@@ -131,3 +131,27 @@ def test_run_exit_code(monkeypatch, capsys):
     monkeypatch.setattr(doctor, "checks", lambda: [("ok", "fine")])
     assert doctor.run() == 0
     assert sessions  # imported for the conftest stub
+
+
+class Tty:
+    def isatty(self):
+        return True
+
+
+def test_doctor_says_how_bit_is_drawn(monkeypatch):
+    from tabmancer import sixel
+    from tabmancer.config import write_json
+
+    assert "TABMANCER_SIXEL=0" in doctor.bit_check()[1]  # as the tests run
+    monkeypatch.delenv("TABMANCER_SIXEL")
+    assert "not run in a terminal" in doctor.bit_check()[1]
+    monkeypatch.setattr(sys, "stdin", Tty())
+    monkeypatch.setattr(sys, "stdout", Tty())
+    monkeypatch.setattr(sixel, "probe", lambda: None)
+    assert "does not say it draws Sixel" in doctor.bit_check()[1]
+    monkeypatch.setattr(sixel, "probe", lambda: sixel.Terminal((9, 19), sync=True))
+    assert doctor.bit_check() == ("ok", "Bit is drawn in real pixels (Sixel, 9x19 pixel cells, synchronized output).")
+    write_json("config.json", {"mascot": "blocks"})
+    assert "as chosen with b" in doctor.bit_check()[1]
+    write_json("config.json", {"mascot": False})  # hidden, from before b chose among three
+    assert "away" in doctor.bit_check()[1]

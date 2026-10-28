@@ -87,7 +87,7 @@ the highlighted session the preview says what `Enter` will do with it, as it sta
 | `B` | background sessions: attach, stop, remove, clean up |
 | `,` | which CLIs to list: Claude Code, Codex, Antigravity |
 | `t` | next colour theme (remembered) |
-| `b` | Bit on or off (remembered) |
+| `b` | Bit in real pixels, in block characters, or away (remembered) |
 | `Tab` | move between the project sidebar and the session list |
 | `q`, `Esc` | quit (`Esc` first clears the filter, then a card's) |
 

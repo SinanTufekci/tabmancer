@@ -182,7 +182,10 @@ async def test_the_dashboard_creates_a_team_and_shows_it(fake_home, tmp_path, mo
         dialog.query_one("#team-folder").value = str(folder)
         dialog.query_one("#team-goal").text = "Add a checkout"
         await pilot.press("ctrl+s")
-        await pilot.pause(0.2)
+        for _ in range(60):  # a loaded machine takes a while
+            await pilot.pause(0.05)
+            if isinstance(app.screen, TeamScreen):
+                break
         assert isinstance(app.screen, TeamScreen)
         assert [launch.title for launch in opened] == ["shop: api", "shop: ui", "shop: tests", "shop: lead"]
         assert "shop" in teams.load()
