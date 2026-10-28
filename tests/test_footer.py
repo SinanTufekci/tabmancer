@@ -95,7 +95,11 @@ async def test_the_preview_says_what_enter_does_and_the_bar_keeps_the_ticks(fake
         assert app.enter_words(app.sessions["one"]) == "goes to its tab, to type there"
         two = app.sessions["two"]
         assert app.enter_words(two) == "resumes it in a new tab · m changes how"
-        app.table.move_cursor(row=app.table.get_row_index("two"))
+        for _ in range(40):  # on its row, and still there when m goes (a poll may make the rows again)
+            app.table.move_cursor(row=app.table.get_row_index("two"))
+            await pilot.pause(0.05)
+            if app.cursor_key() == "two":
+                break
         await pilot.press("m")  # resume → auto-continue
         assert app.enter_words(two).startswith("resumes it in a new tab and tells Claude to carry on")
         assert "tells Claude to carry on" in plain(app.detail.content)

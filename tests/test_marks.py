@@ -33,11 +33,22 @@ def keys(app) -> list[str]:
     return [row.key.value for row in app.table.ordered_rows]
 
 
+async def cursor_on(pilot, app, key: str) -> None:
+    """The cursor on a session's row, and still there when the key goes: a poll landing on a busy
+    machine may make the rows again in between."""
+    for _ in range(40):
+        app.table.move_cursor(row=keys(app).index(key))
+        await pilot.pause(0.05)
+        if app.cursor_key() == key:
+            return
+    raise AssertionError(f"the cursor never stayed on {key}")
+
+
 async def test_x_hides_a_session_and_x_on_it_brings_it_back(fake_home):
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: app.sessions)
-        app.table.move_cursor(row=keys(app).index("one"))
+        await cursor_on(pilot, app, "one")
         await pilot.press("x")
         assert keys(app) == ["two"] and "1 hidden (X shows them)" in app.sub_title
         assert read_json(marks.FILE)["hidden"] == ["one"]
@@ -45,7 +56,7 @@ async def test_x_hides_a_session_and_x_on_it_brings_it_back(fake_home):
         await pilot.press("X")  # shown again, marked as hidden
         assert "one" in keys(app) and str(app.table.get_cell("one", "title")).startswith("hidden · ")
         assert "showing 1 hidden" in app.sub_title
-        app.table.move_cursor(row=keys(app).index("one"))
+        await cursor_on(pilot, app, "one")
         await pilot.press("x")  # back in sight
         assert not app.marks.hidden
         await pilot.press("X")
@@ -63,7 +74,7 @@ async def test_x_hides_every_ticked_session_but_never_an_open_one(fake_home, mon
         await pilot.press("x")
         assert app.marks.hidden == {"one", "three"} and not app.selected
         assert [k for k in keys(app) if not k.startswith(HEADING)] == ["two"]
-        app.table.move_cursor(row=keys(app).index("two"))
+        await cursor_on(pilot, app, "two")
         await pilot.press("x")  # open: it stays
         assert "two" not in app.marks.hidden and "two" in keys(app)
         app.marks.hidden.add("two")  # hidden while it was closed, open again now: it shows
@@ -97,13 +108,13 @@ async def test_f_pins_a_session_above_the_rest(fake_home):
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: len(app.sessions) == 3)
-        app.table.move_cursor(row=keys(app).index("one"))
+        await cursor_on(pilot, app, "one")
         await pilot.press("f")
         assert keys(app)[:3] == [f"{HEADING}pinned", "one", f"{HEADING}rest"]
         assert str(app.table.get_cell(f"{HEADING}pinned", "project")) == "\n★ PINNED · 1"
         assert str(app.table.get_cell("one", "title")).startswith("★ ")
         assert marks.Marks.load().pinned == {"one"}
-        app.table.move_cursor(row=keys(app).index("one"))
+        await cursor_on(pilot, app, "one")
         await pilot.press("f")  # again: unpinned, no headings for one group
         assert not any(k.startswith(HEADING) for k in keys(app))
 
