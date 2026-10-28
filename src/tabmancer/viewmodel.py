@@ -87,11 +87,12 @@ def live_label(raw: str) -> tuple[str, str, int]:
 
 
 def at_limit(session: Session) -> bool:
-    """Stopped at a usage limit and still there: closed so, or open and idle since."""
+    """Stopped at a usage limit and still there: closed so, or open and idle since (a team member
+    too, idle otherwise: it is the limit it waits for, not its lead)."""
     if session.resets is None:
         return False
     if session.exit is Exit.RUNNING:
-        return live_label(session.live_state)[2] == 1
+        return live_label(session.live_state)[2] == 1 or session.live_state.lower() == "resting"
     return session.status is Status.LIMIT
 
 

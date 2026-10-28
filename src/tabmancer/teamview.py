@@ -19,7 +19,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import background, context, focus, teams, teamtree
+from . import background, context, focus, teams, teamtree, viewmodel
 from .dialogs import frame, title
 from .safework import work
 from .sessions import Exit, Session, Status
@@ -47,9 +47,12 @@ def colours(team: teams.Team, accent: str) -> dict[str, str]:
 
 def status_of(session: Session | None) -> tuple[str, str, bool]:
     """(label, style, spinning) for a member's card, in the dashboard's colours: blue works, red
-    waits for you; a member done for now is idle, quiet."""
+    waits for you, amber is stopped at a usage limit (as in the list); a member done for now is
+    idle, quiet."""
     if session is None:
         return "not started", MUTED, False
+    if viewmodel.at_limit(session):
+        return "at the limit", AMBER, False
     if session.exit is not Exit.RUNNING:
         return "closed", MUTED, False
     state = session.live_state.lower()

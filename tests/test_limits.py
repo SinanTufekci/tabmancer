@@ -8,7 +8,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from tabmancer import app as app_module
-from tabmancer import handover, sessions, typein
+from tabmancer import handover, sessions, teamview, typein, viewmodel
 from tabmancer.app import LimitDialog, SessionPicker
 from tabmancer.config import read_json, write_json
 from tabmancer.launch import CONTINUE_BECAUSE, Mode, continue_prompt, default_mode
@@ -111,6 +111,18 @@ async def choose(pilot, app, answer: str) -> list[str]:
     await pilot.press("enter")
     await pilot.pause(0.1)
     return ways
+
+
+def test_a_team_member_at_the_limit_is_at_the_limit_not_idle():
+    member = sessions.Session(session_id="api", path=None, exit=sessions.Exit.RUNNING, live_state="resting",
+                              resets=datetime.now() + timedelta(hours=2))
+    assert viewmodel.state_of(member)[0] == "at the limit" and viewmodel.state_id(member) == "limit"
+    assert teamview.status_of(member)[0] == "at the limit"  # its card in the team view says so too
+    member.resets = None  # done for now, nothing stopped it: idle, waiting for its lead
+    assert viewmodel.state_of(member)[0] == "idle" and teamview.status_of(member)[0] == "idle"
+    lead = sessions.Session(session_id="lead", path=None, exit=sessions.Exit.RUNNING, live_state="idle",
+                            resets=datetime.now() + timedelta(hours=2))
+    assert teamview.status_of(lead)[0] == "at the limit"  # not "waiting", which is red for you
 
 
 async def test_c_continues_them_when_the_limit_lifts(fake_home, monkeypatch):
