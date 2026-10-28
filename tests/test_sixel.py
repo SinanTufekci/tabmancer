@@ -4,7 +4,12 @@ after Textual's updates, never over a dialog."""
 import re
 
 import pytest
+from rich.console import Console
+from rich.segment import Segment
+from rich.style import Style
+from textual._compositor import ChopsUpdate
 from textual.geometry import Region
+from textual.strip import Strip
 
 from tabmancer import bitart, bitmoves, sixel
 from tabmancer import mascot as M
@@ -159,6 +164,100 @@ async def test_bit_in_real_pixels_leaves_its_cells_blank_and_sends_its_picture(f
             app._driver.write = write
 
 
+def cells_written(update) -> set[tuple[int, int]]:
+    """The cells an update of Textual's writes, read off what it writes to the terminal."""
+    out = update.render_segments(Console(force_terminal=True, color_system="truecolor"))
+    found, row, col = set(), 0, 0
+    for move, text in re.findall(r"\x1b\[(\d+;\d+)H|((?:\x1b\[[\d;]*m|[^\x1b\n])+)", out):
+        if move:
+            row, col = (int(v) - 1 for v in move.split(";"))
+            continue
+        for _ in re.sub(r"\x1b\[[\d;]*m", "", text):
+            found.add((row, col))
+            col += 1
+    return found
+
+
+def test_what_a_partial_update_writes_is_what_wrote_over_goes_by():
+    # Textual writes a widget's piece of a line from its start, though the span starts further on;
+    # another widget's piece on the line is a piece of its own.
+    style = Style(bgcolor="#101010")
+    chops = [{0: Strip([Segment(" " * 40, style)]), 40: Strip([Segment(" " * 20, style)])}]
+    cells = (10, 0, 11, 1)
+    found = []
+    for spans in ([(0, 30, 31)], [(0, 0, 10)], [(0, 45, 50)], [(0, 2, 3), (0, 50, 51)]):
+        update = ChopsUpdate(chops, spans, [[40, 60]])
+        assert sixel.wrote_over(update, cells) == any(10 <= x < 21 for _, x in cells_written(update)), spans
+        found.append(sixel.wrote_over(update, cells))
+    assert found == [True, False, False, False]
+
+
+async def test_bits_cells_always_show_its_picture_after_textuals_updates(fake_home, pixels_on, monkeypatch):
+    # A model of the terminal: which picture each cell shows. Textual's updates wipe the cells
+    # they write; a picture fills its own. Bit walks left and right, cell by cell.
+    shows: dict[tuple[int, int], tuple[int, int, str]] = {}
+    checked = []
+
+    def show(picture):
+        x, y, width, height = picture.place()
+        for r in range(y, y + height):
+            for c in range(x, x + width):
+                shows[(r, c)] = (x, y, picture.data)
+
+    def now(picture):
+        show(picture)
+        picture.fresh = False
+        return True
+
+    display = SessionPicker._display
+
+    def update(self, screen, renderable):
+        display(self, screen, renderable)  # headless: written nowhere, so the model plays the terminal
+        if not isinstance(renderable, ChopsUpdate) or self.mascot.picture is None:
+            return
+        for cell in cells_written(renderable):
+            shows.pop(cell, None)
+        written = []
+        write, self._driver.write = self._driver.write, written.append
+        try:
+            self.send_pictures(renderable)
+        finally:
+            self._driver.write = write
+        if any("\x1bP" in w for w in written):
+            show(self.mascot.picture)
+        cells = self.mascot.picture_cells()
+        if cells and self.mascot.picture.data:
+            x, y, width, height = cells
+            assert all(shows.get((r, c)) == (x, y, self.mascot.picture.data)
+                       for r in range(y, y + height) for c in range(x, x + width))
+            checked.append(x)
+
+    monkeypatch.setattr(SessionPicker, "_display", update)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 40)) as pilot:
+        monkeypatch.setattr(app, "send_now", now)
+        await pilot.pause(0.6)
+        bit = app.mascot
+        for direction in (-1, 1):
+            bit.bubbles.clear()
+            bit.start("walk", 10 ** 6)
+            bit.x, bit.direction = 120.0, direction
+            start = len(set(checked))
+            for _ in range(50):
+                await pilot.pause(0.1)
+                if len(set(checked)) >= start + 4:
+                    break
+        assert len(set(checked)) >= 6  # it walked cells both ways
+        bit.x = 20.0  # then near the left, so what it says goes on its right
+        await pilot.pause(0.3)
+        monkeypatch.setattr(bit, "advance", lambda width=None: None)  # standing still: the same picture
+        still = len(checked)
+        for n in range(4):
+            bit.say(f"note {n}")  # written right of it: Textual writes the line from the strip's start
+            await pilot.pause(0.2)
+        assert len(checked) > still
+
+
 def test_a_new_picture_never_wipes_bits_cells_only_the_ones_it_left(monkeypatch):
     # Written blank again, Bit's cells lose its picture until it is sent again: that blinked.
     monkeypatch.setattr(sixel, "_terminal", sixel.Terminal(bitart.WT_CELL))
@@ -225,6 +324,36 @@ class Host(sixel.SixelHost):
     def __init__(self):
         self.screen = Screen()
         self._driver = Driver()
+
+
+def test_a_picture_textual_writes_over_next_goes_with_that_update_not_also_at_once(monkeypatch):
+    # Textual writes a line of the strip from its start to the end of what is repainted on it:
+    # a cell repainted right of Bit runs over its picture, one left of it does not.
+    monkeypatch.setattr(sixel, "_terminal", sixel.Terminal(bitart.WT_CELL))
+    host = Host()
+    robot = M.Mascot(seed=1, fine=True)
+    host.screen.owner = robot
+    monkeypatch.setattr(M.Mascot, "is_attached", property(lambda self: True))
+    monkeypatch.setattr(M.Mascot, "app", property(lambda self: host))
+    monkeypatch.setattr(M.Mascot, "screen", property(lambda self: host.screen))
+    monkeypatch.setattr(robot, "refresh", lambda *regions: None)
+    monkeypatch.setattr(robot, "backdrop", lambda: "#101010")
+    robot.picture = sixel.Picture(robot, lambda: (robot.cell_x(60), 0, M.WIDTH, M.ROWS))
+    robot.start("walk", 10 ** 6)
+
+    def sent_at_once(x: float, *repainted: Region) -> bool:
+        before = len(host._driver.written)
+        robot.advance(60)
+        robot.x = x
+        robot.update_picture(60, list(repainted))
+        return len(host._driver.written) > before
+
+    assert sent_at_once(20.0)                                   # where it was: over the old one
+    assert sent_at_once(22.0)                                   # a cell right: the cell it left is left of it
+    assert not sent_at_once(20.0) and robot.picture.fresh       # a cell left: the cell it left is right of it
+    robot.picture.fresh = False
+    assert sent_at_once(20.0, Region(0, 0, 10, M.ROWS))         # what is left of it repainted
+    assert not sent_at_once(20.0, Region(30, 0, 30, M.ROWS))    # right of it: with Textual's update
 
 
 @pytest.mark.parametrize("sync", [True, False])

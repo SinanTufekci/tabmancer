@@ -352,14 +352,16 @@ class Mascot(Widget):
         self.advance()
         # Repaint only when the picture changed: sitting, dozing or standing still, most
         # frames are identical, and redrawing them would cost CPU for nothing.
-        frame = Text("\n").join(self.lines(self.size.width))
-        if frame != self.shown or self.shown_width != self.size.width:
-            whole = self.picture is None or self.shown_width != self.size.width
-            self.shown, self.shown_width = frame, self.size.width
-            # In real pixels Bit's own cells are blank and stay so: written again, they would wipe its
-            # picture until it is sent again, a blink. Only what is beside it is repainted.
-            self.refresh(*(() if whole else self.beside(self.size.width)))
-        self.update_picture(self.size.width)
+        width = self.size.width
+        frame = Text("\n").join(self.lines(width))
+        repainted: list[Region] = []
+        if frame != self.shown or self.shown_width != width:
+            whole = self.picture is None or self.shown_width != width
+            self.shown, self.shown_width = frame, width
+            # In real pixels Bit's own cells are blank and stay so: only what is beside them is repainted.
+            repainted = [Region(0, 0, width, ROWS)] if whole else self.beside(width)
+            self.refresh(*(() if whole else repainted))
+        self.update_picture(width, repainted)
 
     def beside(self, width: int) -> list[Region]:
         """The strip left and right of Bit's cells."""
@@ -518,10 +520,14 @@ class Mascot(Widget):
                                            colour=_rgb(p.colour)))
         return found
 
-    def update_picture(self, width: int) -> None:
-        """Bit in real pixels, drawn again only when it changed. The app sends it right after
-        Textual has written its cells again (sixel.SixelHost): they are refreshed for that, and
-        where it stood before too, so no old picture stays behind."""
+    def update_picture(self, width: int, repainted: list[Region] | None = None) -> None:
+        """Bit in real pixels, drawn again only when it changed, and sent over the old one at once;
+        the cells it left are written blank again, so no old picture stays behind there.
+
+        Textual writes a line of the strip from its start to the end of what is repainted on it
+        (sixel.wrote_over), so anything repainted right of Bit's first cell runs over its picture.
+        Then the picture goes right after that update instead, in the same frame (sixel.SixelHost):
+        sent now as well, it would go twice."""
         found = sixel.terminal()
         if self.picture is None or found is None or width < WIDTH:
             return
@@ -538,9 +544,13 @@ class Mascot(Widget):
         self.drawn = key
         self.picture.data = _picture(frame.pose, effects, shift, _rgb(back), found.cell)
         self.picture.fresh = True
+        repainted = list(repainted or ())
         if before != cell:  # the cells it left: written blank again, which wipes the old picture there
             left = [c for c in range(before, before + WIDTH) if not cell <= c < cell + WIDTH]
-            self.refresh(Region(min(left), 0, len(left), ROWS))
+            repainted.append(Region(min(left), 0, len(left), ROWS))
+            self.refresh(repainted[-1])
+        if any(region.right > cell for region in repainted):
+            return  # Textual writes over it next: it goes with that update
         if self.is_attached and isinstance(self.app, sixel.SixelHost):
             self.app.send_now(self.picture)  # over the old one, opaque: replaced, not wiped
 

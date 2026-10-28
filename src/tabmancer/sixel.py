@@ -305,15 +305,38 @@ class SixelHost:
 
 
 def wrote_over(update, cells: tuple[int, int, int, int]) -> bool:
-    """Whether an update Textual wrote touched these cells (unknown updates: yes)."""
+    """Whether an update Textual wrote touched these cells (unknown updates: yes).
+
+    A partial update writes more than its spans: a widget's piece of a line that a span reaches
+    into goes out from the piece's own start (Textual's ChopsUpdate.render_segments), so a cell
+    refreshed to the right of a picture writes over it too."""
     x, y, width, height = cells
     spans = getattr(update, "spans", None)  # a few pieces of lines (a partial update)
     if spans is not None:
-        return any(y <= row < y + height and x2 >= x and x1 < x + width for row, x1, x2 in spans)
+        if not any(y <= row < y + height for row, _, _ in spans):
+            return False
+        if hasattr(update, "chops"):
+            try:
+                spans = written(update)
+            except Exception:  # noqa: BLE001 - not what Textual writes after all: assume the worst
+                return True
+        return any(y <= row < y + height and end > x and start < x + width for row, start, end in spans)
     region = getattr(update, "region", None)  # a whole region (the layout)
     if region is not None:
         return not (region.x >= x + width or region.right <= x or region.y >= y + height or region.bottom <= y)
     return update is not None
+
+
+def written(update) -> list[tuple[int, int, int]]:
+    """The cells a partial update writes, as (row, start, end), the way render_segments writes
+    them: each piece a span reaches into, from the piece's start to its end or the span's."""
+    runs = []
+    for row, x1, x2 in update.spans:
+        for end, (x, strip) in zip(update.chop_ends[row], update.chops[row].items()):
+            if strip is None or x > x2 or end <= x1:
+                continue
+            runs.append((row, x, end if x2 > x >= x1 and end <= x2 else min(end, x2)))
+    return runs
 
 
 def in_view(app, picture: Picture, cells: tuple[int, int, int, int]) -> bool:
