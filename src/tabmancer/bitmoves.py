@@ -65,6 +65,11 @@ IDLE_CHOICES = (["walk"] * 5 + ["idle"] * 3 + ["look"] * 2 + ["sit"] * 2 + ["tap
                                                                           "skip", "wave", "jump"])
 WORK_CHOICES = ["walk"] * 2 + ["hurry"] * 2 + ["work"] * 4 + ["think"] * 2 + ["read"] * 2 + ["fix", "carry", "look"]
 CHEERS = ("cheer", "dance", "spin")
+# Calm (b): more standing still, no hops, spins or confetti. What it does instead, and what it chooses.
+CALM = {"cheer": "wave", "dance": "wave", "spin": "wave", "hurry": "walk", "skip": "walk", "jump": "idle",
+        "alarm": "look", "dizzy": "look", "whistle": "idle"}
+CALM_IDLE_CHOICES = ["idle"] * 4 + ["look"] * 2 + ["sit"] * 3 + ["coffee", "walk"]
+CALM_WORK_CHOICES = ["work"] * 4 + ["think"] * 2 + ["read"] * 2 + ["look"]
 CALLS = ("wave", "point", "bounce")  # the ways a call goes, one after the other
 
 

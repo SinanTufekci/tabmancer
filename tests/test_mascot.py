@@ -343,3 +343,25 @@ def test_bit_takes_what_the_dashboard_tells_with_a_move_that_goes_with_it():
     for _ in range(200):  # and back to what it does on its own
         robot.advance(80)
     assert robot.action not in ("worried", "carry")
+
+
+def test_a_calm_bit_never_hops_spins_dances_or_throws_confetti():
+    robot = M.Mascot(seed=4, fine=True)
+    robot.calm = True
+    seen = set()
+    for n in range(3000):
+        if n % 200 == 0:
+            robot.celebrate("web-app")
+        if n % 200 == 60:
+            robot.react("lifted", "the limit has lifted")
+        if n % 200 == 120:
+            robot.alert("api")
+        if n % 450 == 0:
+            for _ in range(3):
+                robot.on_click(None)  # clicked again and again
+        robot.advance(80)
+        seen.add(robot.action)
+        assert robot.height == 0 and not robot.particles, robot.action
+    assert not seen & {"cheer", "dance", "spin", "jump", "skip", "hurry", "alarm", "dizzy"}
+    assert {"idle", "wave"} <= seen  # it stands about, and waves where it would cheer
+    assert M.way_of("calm") == "calm"

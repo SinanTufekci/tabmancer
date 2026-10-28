@@ -136,10 +136,11 @@ TIPS = [
 
 def way_of(saved: object) -> str:
     """How Bit is shown, from config.json's "mascot" (b chooses): "pixels" (where the terminal
-    draws them; block characters elsewhere), "blocks" or "away". False, from before, is away."""
+    draws them; block characters elsewhere), "calm" (the same, with fewer moves), "blocks" or
+    "away". False, from before, is away."""
     if saved is False or saved == "away":
         return "away"
-    return "blocks" if saved == "blocks" else "pixels"
+    return saved if saved in ("blocks", "calm") else "pixels"
 
 
 def _rgb(colour: str) -> bitart.Colour:
@@ -222,6 +223,7 @@ class Mascot(Widget):
         self.following = False  # the eyes are on the pointer
         self.clicks: list[int] = []  # frames of the recent clicks on Bit
         self.calls = 0          # calls made: each goes another way (bitmoves.CALLS)
+        self.calm = False       # fewer moves: no hops, spins or confetti (b chooses)
         self.antenna = 0.0      # its sway, degrees, and how fast it swings (a spring)
         self.antenna_speed = 0.0
         self.picture: sixel.Picture | None = None  # Bit in real pixels, where the terminal draws them
@@ -353,6 +355,8 @@ class Mascot(Widget):
         self.look("alarm", 8)
 
     def start(self, action: str, frames: int) -> None:
+        if self.calm:
+            action = bitmoves.CALM.get(action, action)
         self.action, self.left, self.since = action, frames, self.frame
 
     def look(self, eyes: str, frames: int) -> None:
@@ -363,6 +367,8 @@ class Mascot(Widget):
         return width * 2
 
     def burst(self, colours: list[str], count: int, cx: float | None = None) -> None:
+        if self.calm:
+            return
         cx = self.x + SPRITE_W / 2 if cx is None else cx
         for _ in range(count):
             self.particles.append(Particle(cx, 4.0, self.rng.uniform(-1.1, 1.1), self.rng.uniform(-0.6, -0.15),
@@ -384,7 +390,10 @@ class Mascot(Widget):
         if self.action == "think" and self.rng.random() < 0.35:  # and then it has it
             action = "idea"
         else:
-            action = self.rng.choice(bitmoves.WORK_CHOICES if self.working else bitmoves.IDLE_CHOICES)
+            if self.calm:
+                action = self.rng.choice(bitmoves.CALM_WORK_CHOICES if self.working else bitmoves.CALM_IDLE_CHOICES)
+            else:
+                action = self.rng.choice(bitmoves.WORK_CHOICES if self.working else bitmoves.IDLE_CHOICES)
         self.start(action, self.rng.randint(*TRAITS[action].frames))
         if TRAITS[action].speed and self.rng.random() < 0.35:
             self.direction *= -1
@@ -446,6 +455,8 @@ class Mascot(Widget):
                 self.direction *= -1
                 self.x = max(0.0, min(self.x, float(span)))
 
+        if self.calm:
+            self.jumps_left = 0
         if self.jumps_left and self.height == 0 and self.velocity == 0:
             self.velocity = JUMP_SPEED
             self.jumps_left -= 1
@@ -550,7 +561,7 @@ class Mascot(Widget):
             beat=self.frame - self.since, frame=self.frame, direction=self.direction, distance=self.distance,
             height=self.height, eyes=eyes, antenna=self.antenna,
             beacon=(1.0 if self.frame % 10 < 5 else 0.15) if red else self.glow(), beacon_red=red,
-            chest=self.chest_glow(), working=bool(self.working), call=bitmoves.CALLS[self.calls % len(bitmoves.CALLS)],
+            chest=self.chest_glow(), working=bool(self.working), call="wave" if self.calm else bitmoves.CALLS[self.calls % len(bitmoves.CALLS)],
             effects=self.confetti(cell, shift, size))
         frame = bitmoves.frame(self.action, context)
         pose = bitart.themed(frame.pose, _rgb(self.accent))

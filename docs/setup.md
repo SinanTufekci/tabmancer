@@ -165,6 +165,7 @@ It talks in a bubble beside it:
   while background sessions sit idle.
 - Click it for a tip about the keys; click it again and again and it gets dizzy.
 
-Press `b` to change how Bit is drawn: in real pixels (where the terminal draws them), in block
-characters, or not at all, then back; it is remembered. `tabmancer doctor` says how it is drawn
+Press `b` to change how Bit is drawn: in real pixels (where the terminal draws them), calm
+(the same, standing about more, with no hops, spins or confetti), in block characters, or not
+at all, then back; it is remembered. `tabmancer doctor` says how it is drawn
 in the terminal it runs in, and why.

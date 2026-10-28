@@ -2102,13 +2102,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.inspector.styles.margin = (0 if shown else 1, 0, 0, 0)
 
     def action_toggle_mascot(self) -> None:
-        """b: Bit in real pixels, then in block characters, then away, then back; pixels only where
-        the terminal draws them. Remembered."""
-        ways = (["pixels"] if sixel.terminal() else []) + ["blocks", "away"]
-        now = "away" if self.mascot.has_class("hidden") else "pixels" if self.mascot.picture else "blocks"
+        """b: Bit in real pixels, then calm (fewer moves), then in block characters, then away,
+        then back; pixels only where the terminal draws them. Remembered."""
+        ways = (["pixels"] if sixel.terminal() else []) + ["calm", "blocks", "away"]
+        bit = self.mascot
+        now = "away" if bit.has_class("hidden") else "calm" if bit.calm else "pixels" if bit.picture else "blocks"
         way = ways[(ways.index(now) + 1) % len(ways)]
         self.show_mascot(way)
-        self.notify({"pixels": "Bit in real pixels.", "blocks": "Bit in block characters.",
+        self.notify({"pixels": "Bit in real pixels.", "calm": "Bit, calm: fewer moves, no confetti.",
+                     "blocks": "Bit in block characters.",
                      "away": "Bit is away: b brings it back."}[way], timeout=3)
         saved = read_json("config.json")
         saved = saved if isinstance(saved, dict) else {}
@@ -2120,8 +2122,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def show_mascot(self, way: str) -> None:
         self.mascot.set_class(way == "away", "hidden")
+        self.mascot.calm = way == "calm"
         if way != "away":
-            self.mascot.use_pixels(way == "pixels")
+            self.mascot.use_pixels(way in ("pixels", "calm"))
         self.place_mascot()
 
     def on_mouse_move(self, event: events.MouseMove) -> None:

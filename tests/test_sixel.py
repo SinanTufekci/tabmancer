@@ -557,29 +557,32 @@ def test_bit_does_many_things_and_calls_three_ways():
     assert ways == set(bitmoves.CALLS)
 
 
-async def test_b_shows_bit_in_pixels_then_blocks_then_sends_it_away_and_remembers(fake_home, pixels_on):
+async def test_b_shows_bit_in_pixels_then_calm_then_blocks_then_sends_it_away_and_remembers(fake_home, pixels_on):
     from tabmancer.config import read_json, write_json
 
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 40)) as pilot:
         await pilot.pause(0.5)
         bit = app.mascot
-        assert bit.picture is not None
+        assert bit.picture is not None and not bit.calm
         await pilot.press("b")
-        assert bit.picture is None and not bit.has_class("hidden") and not list(app._sixel_pictures())
+        assert bit.calm and bit.picture is not None and read_json("config.json")["mascot"] == "calm"
+        await pilot.press("b")
+        assert not bit.calm and bit.picture is None and not bit.has_class("hidden")
+        assert not list(app._sixel_pictures())
         await pilot.pause(0.2)
         assert any(line.plain.strip() for line in bit.lines(bit.size.width))  # in block characters
         await pilot.press("b")
         assert bit.has_class("hidden") and read_json("config.json")["mascot"] == "away"
         await pilot.press("b")
-        assert bit.picture is not None and not bit.has_class("hidden")
-        await pilot.press("b")
-        assert read_json("config.json")["mascot"] == "blocks"
-    write_json("config.json", {"mascot": "blocks"})
-    app = SessionPicker(days=14)
-    async with app.run_test(size=(150, 40)) as pilot:
-        await pilot.pause(0.3)
-        assert app.mascot.picture is None and not app.mascot.has_class("hidden")  # as chosen last time
+        assert bit.picture is not None and not bit.has_class("hidden") and not bit.calm
+    for saved, picture, calm in (("blocks", False, False), ("calm", True, True)):
+        write_json("config.json", {"mascot": saved})
+        app = SessionPicker(days=14)
+        async with app.run_test(size=(150, 40)) as pilot:
+            await pilot.pause(0.3)
+            bit = app.mascot  # as chosen last time
+            assert (bit.picture is not None, bit.calm, bit.has_class("hidden")) == (picture, calm, False)
 
 
 def test_a_kitty_picture_carries_its_pixels_clear_around_them_and_its_id():
