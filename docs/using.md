@@ -30,6 +30,16 @@ and asks what to do with the ticked ones (all to begin with; `Tab` to the list, 
 - **Continue them when the limit lifts.** The dashboard has to be open at that time; the plan
   is kept if you restart it. `c` again can call it off.
 
+### Another account
+
+`A` (or a click on the account in the top bar) lists the Claude accounts you have used, with
+their plans: Enter on one opens Claude Code's own sign-in in a new tab (`claude auth login
+--email`), and your browser opens with that account filled in. tabmancer never touches a
+sign-in itself; it keeps only the emails it has seen Claude Code signed in with. Once the
+switch lands, every session goes on with the new account, and the sessions a usage limit
+stopped on the other one say `◐ signed in again`: `c` continues them now, and those waiting
+for their limit go on at once.
+
 Sign in with another account in a session stopped at a limit (`/login` in it) and it says
 `◐ signed in again`: `c` continues it now, and if it was waiting for its limit to lift it goes
 on right away.

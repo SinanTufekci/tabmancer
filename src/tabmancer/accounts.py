@@ -103,6 +103,61 @@ def signed_in() -> list[Account]:
     return [account for account in found if account is not None]
 
 
+# --- the Claude accounts you use (A switches between them) -----------------------------------------
+# tabmancer's own file keeps the accounts it has seen Claude Code signed in with, their email and plan
+# and nothing more (a sign-in itself stays Claude Code's: A runs `claude auth login --email`), and on
+# which of them each session stopped at a usage limit: signed in with another since, it can go on.
+KNOWN = "accounts.json"
+
+
+def _known_file() -> dict:
+    from .config import read_json
+
+    saved = read_json(KNOWN)
+    return saved if isinstance(saved, dict) else {}
+
+
+def _save_known(saved: dict) -> None:
+    from .config import write_json
+
+    try:
+        write_json(KNOWN, saved, indent=2)
+    except OSError:
+        pass  # a read-only config folder: the list is not kept, nothing else is lost
+
+
+def remember(account: Account | None, when: str) -> None:
+    """Claude Code's account as it is now, first in the list of those seen (when: an ISO time)."""
+    if account is None or account.cli != "claude" or "@" not in account.email:
+        return
+    saved = _known_file()
+    seen = [e for e in saved.get("claude", []) if isinstance(e, dict) and e.get("email")]
+    if seen and seen[0].get("email") == account.email and seen[0].get("plan") == account.plan:
+        return  # as it was: no write every few seconds
+    saved["claude"] = [{"email": account.email, "plan": account.plan, "seen": when},
+                       *(e for e in seen if e.get("email") != account.email)]
+    _save_known(saved)
+
+
+def known() -> list[tuple[Account, str]]:
+    """The Claude accounts seen signed in, the latest first, each with when it was last seen (ISO)."""
+    return [(Account("claude", str(e["email"]), str(e.get("plan") or "")), str(e.get("seen") or ""))
+            for e in _known_file().get("claude", []) if isinstance(e, dict) and e.get("email")]
+
+
+def limited_on() -> dict[str, str]:
+    """Session id -> the account it was signed in with when it stopped at a usage limit."""
+    found = _known_file().get("limited", {})
+    return {str(k): str(v) for k, v in found.items()} if isinstance(found, dict) else {}
+
+
+def keep_limited(limited: dict[str, str]) -> None:
+    saved = _known_file()
+    if saved.get("limited") != limited:
+        saved["limited"] = limited
+        _save_known(saved)
+
+
 def words(account: Account, room: int) -> str:
     """The account in at most room cells: the email with its plan; the email whole, without the
     plan (the email tells accounts apart); the email cut in the middle; "" when not even that fits."""

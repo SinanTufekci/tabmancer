@@ -269,6 +269,11 @@ class TopBar(Horizontal):
                 self.widths[part] = width
                 self.fit_accounts()
 
+    def on_click(self, event: events.Click) -> None:
+        """The account in the top bar: the accounts you use, to switch (A)."""
+        if getattr(event.widget, "id", None) == "account" and hasattr(self.app, "action_accounts"):
+            self.app.action_accounts()
+
     def show_accounts(self, found: list[Account]) -> None:
         if found != self.accounts:
             self.accounts = found

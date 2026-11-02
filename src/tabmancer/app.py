@@ -510,6 +510,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         Binding("l", "toggle_live", "Live"),
         Binding("u", "tokens", "Stats"),
         Binding("T", "teams", "Teams"),
+        Binding("A", "accounts", "Accounts", show=False),
         Binding("w", "save_workspace", "Save workspace", show=False),
         Binding("o", "open_workspace", "Workspaces", show=False),
         Binding("X", "toggle_hidden", "Show hidden", show=False),  # the status line says it when any are
@@ -549,6 +550,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.armed: dict[str, datetime] = {}  # c: session id -> when it continues (its limit lifts)
         self.told_limit: set[str] = set()  # sessions Bit has said are stopped at a limit
         self.told_update: str | None = None  # the newer tabmancer already told of
+        self.signed_as: str | None = None  # the Claude account Claude Code is signed in with, as last read
         self.limited: set[str] = set()  # the sessions at a limit when the footer last heard of it
         self.search = search.Index.load()  # what was said in each session, for the filter
         self.search_version = 0  # goes up when the index has read more
@@ -2138,8 +2140,57 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def show_accounts(self) -> None:
         """The accounts in the top bar, beside the plan limits: read from the CLIs' own files, again
-        only when they changed."""
-        self.topbar.show_accounts(accounts.signed_in())
+        only when they changed. Claude Code's is remembered for A, and a switch to another one frees
+        the sessions a usage limit stopped on the other."""
+        found = accounts.signed_in()
+        self.topbar.show_accounts(found)
+        account = next((a for a in found if a.cli == "claude"), None)
+        email = account.email if account is not None else None
+        if email != self.signed_as:
+            switched = self.signed_as is not None and email is not None
+            self.signed_as = email
+            accounts.remember(account, datetime.now().isoformat(timespec="seconds"))
+            if switched:
+                self.signed_in_elsewhere()
+
+    def signed_in_elsewhere(self) -> None:
+        """Claude Code is signed in with another account now: its plan limits are read again, and
+        the sessions a limit stopped on the other account can go on (c, or at once if waiting)."""
+        self.refresh_usage()
+        self.check_limits()
+        free = [s for s in self.sessions.values() if at_limit(s) and s.signed_in_again]
+        if free:
+            self.mascot.react("lifted", f"Signed in as {self.signed_as}: {len(free)} stopped at a limit can go on. "
+                              "c continues them", AMBER, seconds=10)
+            for session in free:
+                self.update_row(session)
+            self.update_detail()
+        else:
+            self.mascot.say(f"Signed in as {self.signed_as}", self.accent(), seconds=6)
+
+    def action_accounts(self) -> None:
+        """A: the Claude accounts you use, to sign in with another (Claude Code's own sign-in, in a tab)."""
+        from .accountsview import AccountsDialog
+
+        current = accounts.claude()
+        seen = accounts.known()
+        if current is not None and not any(a.email == current.email for a, _ in seen):
+            seen.insert(0, (current, ""))
+        stopped = sum(1 for s in self.sessions.values() if at_limit(s))
+
+        def chosen(email: str | None) -> None:
+            if email is None:
+                return
+            login = Launch(title=f"Sign in{f': {email}' if email else ''}", cwd=str(Path.home()), mode=Mode.NEW,
+                           session_id="", options=("auth", "login", *(("--email", email) if email else ())))
+            left = open_tabs([login])
+            if left:
+                self.notify(f"No terminal to open it in. Run it yourself: {left[0]}", timeout=15)
+            else:
+                self.notify(f"Signing in{f' as {email}' if email else ''} in a new tab: finish it in your browser. "
+                            "The top bar says when it is done.", timeout=8)
+
+        self.push_screen(AccountsDialog(current, seen, stopped), chosen)
 
     @work(thread=True, exclusive=True, group="updates")
     def check_updates(self) -> None:
@@ -2567,6 +2618,19 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def check_limits(self) -> None:
         """Forget the sessions gone on from a limit; once per session, Bit says which ones a
         usage limit stopped and that c continues them."""
+        # On which account each stopped: signed in with another since, it can go on (signed_in_again).
+        limited, current = accounts.limited_on(), self.signed_as
+        kept = {}
+        for session in self.sessions.values():
+            if not at_limit(session):
+                continue
+            stopped_on = limited.get(session.session_id) or current
+            if stopped_on:
+                kept[session.session_id] = stopped_on
+            if stopped_on and current and stopped_on != current:
+                session.signed_in_again = True
+        if self.sessions:
+            accounts.keep_limited(kept)
         at = {s.session_id for s in self.sessions.values() if at_limit(s)}
         self.told_limit &= at
         if self.sessions and not self.armed.keys() <= at:

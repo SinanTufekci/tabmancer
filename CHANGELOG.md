@@ -15,6 +15,9 @@
   line of its own; the footer's keys sit two cells apart where they fit; the column with an open
   session's context is headed Context; a team's row puts each member's sign before its name; the
   stats' bars stand apart.
+- **Switch accounts from the dashboard.** `A` (or a click on the account in the top bar) lists the
+  Claude accounts you use and opens Claude Code's own sign-in for the one you pick; once it
+  lands, the sessions a usage limit stopped on the other account can go on at once.
 - **What going on costs, said.** `c` lists the sessions stopped at a limit with how full each
   one's context is and what going on with the ticked ones costs on another account (each
   writes its whole context into the new account's cache), goes on with the ticked ones only,

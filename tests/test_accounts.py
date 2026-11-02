@@ -109,3 +109,74 @@ def test_doctor_says_who_claude_code_is_signed_in_as(tmp_path, monkeypatch):
     claude_signed_in(tmp_path)
     said = [message for _, message in doctor.checks()]
     assert "Signed in as you@example.com (Max 20x)" in said
+
+
+def test_the_accounts_you_use_are_remembered_the_latest_first_and_nothing_but_who():
+    from tabmancer.config import config_dir
+
+    accounts.remember(Account("claude", "a@example.com", "Max 5x"), "2026-11-02T09:00:00")
+    accounts.remember(Account("claude", "b@example.com", "Team"), "2026-11-02T10:00:00")
+    accounts.remember(Account("claude", "a@example.com", "Max 5x"), "2026-11-02T11:00:00")
+    assert [(a.email, a.plan, when) for a, when in accounts.known()] == [
+        ("a@example.com", "Max 5x", "2026-11-02T11:00:00"), ("b@example.com", "Team", "2026-11-02T10:00:00")]
+    accounts.remember(Account("claude", "a@example.com", "Max 5x"), "2026-11-02T12:00:00")
+    assert accounts.known()[0][1] == "2026-11-02T11:00:00"  # as it was: not written again every few seconds
+    accounts.remember(Account("codex", "c@example.com", "plus"), "2026-11-02T12:00:00")  # Claude Code's only
+    accounts.remember(Account("claude", "API key"), "2026-11-02T12:00:00")
+    assert len(accounts.known()) == 2
+    saved = json.loads((config_dir() / accounts.KNOWN).read_text(encoding="utf-8"))
+    assert set(saved) == {"claude"} and all(set(entry) == {"email", "plan", "seen"} for entry in saved["claude"])
+
+
+async def test_signed_in_with_another_account_the_sessions_a_limit_stopped_can_go_on(fake_home, monkeypatch):
+    from test_limits import stopped_at, write
+
+    from tabmancer import viewmodel
+
+    claude_signed_in(fake_home, "a@example.com")
+    write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if "lim" in app.sessions and accounts.limited_on():
+                break
+        assert app.signed_as == "a@example.com" and accounts.limited_on() == {"lim": "a@example.com"}
+        assert not app.sessions["lim"].signed_in_again  # stopped on the account signed in now: it waits
+        claude_signed_in(fake_home, "b@example.com")  # A, or claude auth login, or /login anywhere
+        os.utime(fake_home / ".claude.json", (1, 2))
+        app.show_accounts()
+        await pilot.pause(0.1)
+        assert app.sessions["lim"].signed_in_again and accounts.limited_on() == {"lim": "a@example.com"}
+        assert viewmodel.limit_words(app.sessions["lim"])[0] == "◐ signed in again"
+        assert any("can go on" in saying.text for saying in app.mascot.bubbles)
+
+
+async def test_a_signs_in_with_another_account_through_claude_codes_own_sign_in(fake_home, monkeypatch):
+    from textual.widgets import OptionList
+
+    from tabmancer import app as app_module
+    from tabmancer.accountsview import AccountsDialog
+
+    claude_signed_in(fake_home, "a@example.com")
+    accounts.remember(Account("claude", "b@example.com", "Team"), "2026-11-01T10:00:00")
+    opened = []
+    monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("A")
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if isinstance(app.screen, AccountsDialog):
+                break
+        options = app.screen.query_one(OptionList)
+        ids = [options.get_option_at_index(i).id for i in range(options.option_count)]
+        assert ids == ["a@example.com", "b@example.com", "+"] and options.get_option_at_index(0).disabled
+        assert options.highlighted == 1  # the first one to switch to
+        await pilot.press("enter")
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if opened:
+                break
+        assert opened[0].argv == ["claude", "auth", "login", "--email", "b@example.com"]  # its own sign-in

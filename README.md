@@ -105,7 +105,8 @@ tabmancer runs on your machine and talks to no server of its own. It reads the t
 the agents already keep (`~/.claude`, `~/.codex`, `~/.gemini`) and asks the `claude` CLI
 which sessions are open and how full your plan limits are (`/usage`, a local command). It
 reads which account you are signed in with (its email and plan) from `~/.claude.json` and
-Codex's `auth.json`, to show it in the top bar. Once a day it asks PyPI which version of
+Codex's `auth.json`, to show it in the top bar, and remembers the emails of the Claude accounts it
+has seen, in its own folder, to offer them when you switch (`A`). Once a day it asks PyPI which version of
 tabmancer is the latest, to tell you of a newer one (`tabmancer updates off` stops it). A model
 is called only when you ask for one, through your own CLI
 and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats). It types into
