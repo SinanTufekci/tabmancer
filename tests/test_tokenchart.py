@@ -75,3 +75,54 @@ async def test_elsewhere_the_chart_is_textuals_sparkline(monkeypatch):
         chart = app.query_one(TokenChart)
         await pilot.pause(0.1)
         assert chart.picture is None and isinstance(chart.render(), SparklineRenderable)
+
+
+NOW, FLOOR = (230, 230, 230), (38, 38, 38)
+
+
+def test_the_cards_hours_take_a_place_each_of_the_whole_day_the_hour_now_in_white():
+    from tabmancer.tokenchart import HOURS, draw_hours
+
+    hours = [0] * 9 + [500, 0, 1500]  # midnight to 11:00, used at 9 and now
+    palette, rows = draw_hours(hours, 240, 60, QUIET, NOW, FLOOR)
+    found = bars(rows)
+    assert len(found) == 2 and found[1][2] == 60 - 3 and abs(found[0][2] - found[1][2] / 3) <= 1
+    pitch = 240 / HOURS
+    assert round(found[0][0] / pitch - 0.25) == 9 and round(found[1][0] / pitch - 0.25) == 11  # in their hours' places
+    assert palette[rows[-3][found[1][0] + 2]] == NOW and palette[rows[-3][found[0][0] + 2]] == QUIET
+    floor_ends = max(x for x, n in enumerate(rows[-1]) if n == 1)
+    assert floor_ends == round(len(hours) * pitch) - 1 and palette[1] == FLOOR  # under the hours gone by only
+    assert not any(any(row[floor_ends + 1:]) for row in rows)  # the hours to come: nothing yet
+
+
+class Card(App, sixel.SixelHost):
+    def compose(self):
+        from tabmancer.widgets import HourChart
+
+        yield HourChart("", id="beside")
+
+
+async def test_beside_a_card_the_hours_are_a_picture_and_words_stay_words(monkeypatch):
+    from rich.text import Text
+
+    from tabmancer.widgets import HourBars, HourChart
+
+    monkeypatch.setattr(sixel, "_terminal", sixel.Terminal(bitart.WT_CELL))
+    app = Card()
+    async with app.run_test(size=(40, 10)) as pilot:
+        beside = app.query_one(HourChart)
+        beside.styles.height = 3
+        beside.update(HourBars([0, 200, 900]))
+        await pilot.pause(0.1)
+        assert beside.picture is not None and beside.picture.data.startswith("\x1bP")
+        assert str(beside.render()).strip() == ""  # its cells blank under the picture
+        beside.update(Text("4 waiting for you"))  # another card's words: no picture
+        await pilot.pause(0.1)
+        assert beside.picture is None and "4 waiting for you" in str(beside.render())
+    monkeypatch.setattr(sixel, "_terminal", None)  # no pixels: the hours in block characters
+    app = Card()
+    async with app.run_test(size=(40, 10)) as pilot:
+        beside = app.query_one(HourChart)
+        beside.update(HourBars([0, 200, 900]))
+        await pilot.pause(0.1)
+        assert beside.picture is None and isinstance(beside.content, HourBars)

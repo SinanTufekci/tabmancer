@@ -11,6 +11,7 @@ from rich.table import Table
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
+from textual.color import Color
 from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.reactive import reactive
@@ -19,8 +20,10 @@ from textual.widgets.option_list import Option
 
 from . import accounts
 from .accounts import Account
+from .bitart import Colour
 from .sessions import INTERRUPTED, Exit, Session, Status, _shorten, folder_key  # noqa: F401  (re-exported)
 from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, mix
+from .tokenchart import PixelPicture, draw_hours
 from .usage import Limit, until
 
 ALL_PROJECTS = "*"
@@ -56,6 +59,10 @@ def big(number: str) -> str:
     return "\n".join(rows)
 
 
+HOUR_NOW = "#e6e6e6"    # the hour now on the TOKENS TODAY card, the others in MUTED
+HOUR_FLOOR = "#262626"  # under the hours with none
+
+
 class HourBars:
     """Today's tokens per hour as bars three rows high; the latest hours when not all fit."""
 
@@ -73,10 +80,36 @@ class HourBars:
                 part = min(8, max(0, level - row * 8))
                 now = index == len(levels) - 1
                 if part:
-                    line.append(BARS[part], style="#e6e6e6" if now else MUTED)
+                    line.append(BARS[part], style=HOUR_NOW if now else MUTED)
                 else:
-                    line.append("▁" if row == 0 else " ", style="#262626")  # the hours with none
+                    line.append("▁" if row == 0 else " ", style=HOUR_FLOOR)  # the hours with none
             yield line
+
+
+class HourChart(PixelPicture, Static):
+    """Beside a card's number: what it is given, and today's tokens by the hour (HourBars) in real
+    pixels where the terminal draws them (tokenchart.draw_hours: the whole day, the hour now in
+    white), in block characters elsewhere."""
+
+    hours: list[int] | None = None
+
+    def update(self, content="", *, layout: bool = True) -> None:
+        self.hours = list(content.hours) if isinstance(content, HourBars) else None
+        if self.hours is not None and self.start_pixels():
+            super().update("", layout=layout)  # its cells blank: the picture goes over them
+            self.draw_picture()
+        else:
+            self.stop_pixels()
+            super().update(content, layout=layout)
+
+    def colours(self) -> tuple[Colour, Colour, Colour]:
+        return tuple(self.shown(Color.parse(c)) for c in (MUTED, HOUR_NOW, HOUR_FLOOR))  # type: ignore[return-value]
+
+    def picture_key(self) -> tuple:
+        return tuple(self.hours or ()), self.colours()
+
+    def picture_rows(self, width: int, height: int) -> tuple[list[Colour | None], list[bytes]]:
+        return draw_hours([float(h) for h in self.hours or ()], width, height, *self.colours())
 
 
 class StatCard(Vertical):
@@ -125,7 +158,7 @@ class StatCard(Vertical):
 
     def compose(self) -> ComposeResult:
         self.number = Static(big(f"{0:.{self.decimals}f}"), classes="number")
-        self.beside = Static("", classes="beside")
+        self.beside = HourChart("", classes="beside")  # the tokens card's hours, in pixels where it can be
         yield Label(self.title_text, classes="title")
         with Horizontal():
             yield self.number
