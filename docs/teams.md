@@ -34,7 +34,7 @@ team view shows them join.
 ![A team heading OPEN NOW as one row: each member a name with a sign of what it is doing, and its preview with each member's wire and the messages along it](team-rows.png)
 
 While any of its members is open, the team heads OPEN NOW in the dashboard's own list, as
-one row: the team's name, then each member's name with a sign of what it is doing (red `●`
+one row: the team's name, then each member's name after a sign of what it is doing (red `●`
 when it waits for you, `!` when it needs you, Claude's turning star while it works, a grey
 `●` when it is idle, waiting for its lead, amber `◐` when it stopped at a usage limit, `▲`
 when it was cut off), what the open ones are doing in all (`● 1  ✶ 2`, with the same signs),

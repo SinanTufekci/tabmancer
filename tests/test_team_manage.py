@@ -87,11 +87,11 @@ def test_a_summary_does_not_repeat_the_name_shown_beside_it():
 def test_chips_cut_long_names_before_they_count_the_quietest():
     members = [("lead", True, "●", "", "", 1), ("common-gcode-common-geom", False, "✶", "", "", 2),
                ("perf", False, "✶", "", "", 2), ("docs", False, "●", "", "", 1)]
-    assert teamtree.chips(members, 80, "").plain == "★lead●  common-gcode-common-geom✶  perf✶  docs●"
+    assert teamtree.chips(members, 80, "").plain == "● ★lead  ✶ common-gcode-common-geom  ✶ perf  ● docs"
     cut = teamtree.chips(members, 40, "").plain
-    assert len(cut) <= 40 and cut.startswith("★lead●  common") and "…✶  perf✶  docs●" in cut
+    assert len(cut) <= 40 and cut.startswith("● ★lead  ✶ common") and "…  ✶ perf  ● docs" in cut
     # no room for all: the lead and whoever waits for you keep their names, in the team's order
-    assert teamtree.chips(members, 20, "").plain == "★lead●  docs●  +2"
+    assert teamtree.chips(members, 20, "").plain == "● ★lead  ● docs  +2"
 
 
 async def test_keys_on_an_open_teams_row(fake_home, tmp_path, monkeypatch):

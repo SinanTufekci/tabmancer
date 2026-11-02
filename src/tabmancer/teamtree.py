@@ -146,8 +146,9 @@ def tree(state: TeamState, width: int, looks: dict[str, tuple[str, str]], colour
 
 
 def chips(members: list[tuple[str, bool, str, str, str, int]], width: int, lead_style: str) -> Text:
-    """A team's members on its one row, each its name and a sign of what it is doing:
-    '★lead●  api✶  ui◦'. members: (name, lead, sign, sign's style, name's style, rank: 0 needs you,
+    """A team's members on its one row, each a sign of what it is doing and its name, as the status
+    column puts them: '● ★lead  ✶ api  ◦ ui' (stuck to the name after it, 'api✶  ui◦' read as
+    'api', then '✶ ui'). members: (name, lead, sign, sign's style, name's style, rank: 0 needs you,
     1 waits for you, then the quieter ones). Long names are cut until the line fits; when even that
     is not enough, the quietest are counted instead ('+2'), so the ones waiting for you stay named."""
 
@@ -159,10 +160,12 @@ def chips(members: list[tuple[str, bool, str, str, str, int]], width: int, lead_
                 continue
             if line:
                 line.append(CHIP_GAP)
+            if sign:
+                line.append(sign, style=sign_style)
+                line.append(" ")
             if lead:
                 line.append("★", style=lead_style)
             line.append(name if len(name) <= most else name[: most - 1] + "…", style=name_style)
-            line.append(sign, style=sign_style)
         if keep < len(members):  # red when one of those counted waits for you too
             waiting = any(m[5] <= 1 for i, m in enumerate(members) if i not in kept)
             line.append(f"{CHIP_GAP}+{len(members) - keep}", style=f"bold {RED}" if waiting else MUTED)

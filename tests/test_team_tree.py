@@ -97,7 +97,8 @@ async def test_a_team_is_one_row_of_chips_till_unfolded(fake_home, tmp_path, mon
         heading = app.table.get_row(f"{TEAM_ROW}shop")
         assert heading[0].plain == "▸" and heading[1].plain == "TEAM shop"
         chips = heading[2].plain  # the lead waits for you, api works (its star turns), ui is closed
-        assert chips.startswith("★lead●  api") and chips.endswith("  ui") and "✶ 1" in heading[3].plain
+        assert chips.startswith("● ★lead  ") and chips.split("  ")[1].endswith(" api") and chips.endswith("  ui")
+        assert "✶ 1" in heading[3].plain
         app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
         await pilot.press("e")
         assert app.table.get_row(f"{TEAM_ROW}shop")[0].plain == "▾" and "lead-1" in app.table.rows
