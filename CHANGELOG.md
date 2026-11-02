@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
 - **A newer tabmancer is told of.** Once a day the dashboard asks PyPI for the latest version
   and, when a newer one is out, shows it beside its name in the top bar and once in a note with
@@ -8,6 +8,16 @@
   stand; `tabmancer updates off` stops the question.
 - **Releases on GitHub.** Each version gets a release with its notes from this changelog: watch
   the repository's releases to hear of them.
+- **The token chart in real pixels.** Where the terminal draws Bit in pixels, the sidebar's
+  14-day chart is drawn in them too: a bar a day, all as wide, with a gap between them.
+- **A tidier dashboard.** Key hints wrap between keys, never inside one, and a team's keys
+  always show; the preview's status words hang under themselves, and how long a session ran is a
+  line of its own; the footer's keys sit two cells apart where they fit; the column with an open
+  session's context is headed Context; a team's row puts each member's sign before its name; the
+  stats' bars stand apart.
+- **Fixed.** Clicking Bit again and again no longer lights up its strip (it was taken for text to
+  select). Pictures in real pixels take the exact shade around them: Sixel colours were rounded
+  down, a shade darker than the sidebar.
 
 ## 0.1.0
 
