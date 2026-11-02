@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **A newer tabmancer is told of.** Once a day the dashboard asks PyPI for the latest version
+  and, when a newer one is out, shows it beside its name in the top bar and once in a note with
+  the command that upgrades it the way you installed it. `tabmancer updates` says where you
+  stand; `tabmancer updates off` stops the question.
+- **Releases on GitHub.** Each version gets a release with its notes from this changelog: watch
+  the repository's releases to hear of them.
+
 ## 0.1.0
 
 The first release.

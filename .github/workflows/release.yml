@@ -1,8 +1,9 @@
 name: release
 
-# Publishes to PyPI when a version tag such as v0.1.0 is pushed. PyPI trusts this
-# workflow (trusted publishing), so no token is stored anywhere. One-time setup on
-# pypi.org: add a publisher for project tabmancer, repository SinanTufekci/tabmancer,
+# Publishes to PyPI when a version tag such as v0.1.0 is pushed, then makes a release on GitHub
+# with the version's part of the CHANGELOG (whoever watches the repository's releases hears of
+# it). PyPI trusts this workflow (trusted publishing), so no token is stored anywhere. One-time
+# setup on pypi.org: add a publisher for project tabmancer, repository SinanTufekci/tabmancer,
 # workflow release.yml, environment pypi.
 on:
   push:
@@ -13,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      contents: read  # the checkout, while the repository is private
+      contents: read  # the checkout
       id-token: write  # proves to PyPI that this workflow is the one it trusts
     steps:
       # Pinned to commits: this job can publish, so what it runs must not change underneath it.
@@ -25,8 +26,28 @@ jobs:
           enable-cache: false
       - name: The tag matches the version
         run: test "${GITHUB_REF_NAME#v}" = "$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/tabmancer/__init__.py)"
+      - name: The CHANGELOG has the version
+        run: grep -qx "## ${GITHUB_REF_NAME#v}" CHANGELOG.md
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run pytest -q
       - run: uv build
       - run: uv publish --trusted-publishing always
+
+  github:
+    needs: pypi  # only once PyPI has it: the release says it can be installed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # to make the release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - name: The version's notes from the CHANGELOG
+        run: |
+          awk -v heading="## ${GITHUB_REF_NAME#v}" '$0 == heading {on = 1; next} /^## / {on = 0} on' CHANGELOG.md > notes.md
+          test -s notes.md
+      - name: A release on GitHub
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "tabmancer ${GITHUB_REF_NAME#v}" --notes-file notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
