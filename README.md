@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.webp" alt="Coding agents at work in their tabs, Windows restarts and they are gone, Bit calls them back, and the tabmancer dashboard shows them all" width="100%">
+  <img src="docs/banner.svg" alt="Bit, tabmancer's robot, beside a small dashboard of coding-agent sessions (one waits for you, one works, one was cut off, one stopped at a usage limit, one is done) and a chart of the tokens they used over 14 days" width="100%">
 </p>
 
 <p align="center">
