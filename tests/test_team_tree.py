@@ -148,11 +148,18 @@ async def test_the_team_preview_shows_every_key_each_whole(fake_home, tmp_path, 
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await ready(pilot, app, unfold=True)
-        app.show_team(app.team_states["shop"])
-        await pilot.pause(0.2)
-        visible = app.inspector.content_region.bottom - app.meta.region.y  # the preview cuts the rest off
-        shown = app.meta.render_lines(app.meta.region.reset_offset)[:visible]
-        text = "\n".join("".join(segment.text for segment in line) for line in shown)
+        app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))  # its preview, not a session's
+
+        def shown() -> str:
+            visible = app.inspector.content_region.bottom - app.meta.region.y  # the preview cuts the rest off
+            lines = app.meta.render_lines(app.meta.region.reset_offset)[:visible]
+            return "\n".join("".join(segment.text for segment in line) for line in lines)
+
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if "MESSAGES" in shown() and "message 0" in shown():
+                break
+        text = shown()
         assert "start the rest" in text and "T  teams" in text
         assert not any(line.strip().startswith("rest") for line in text.split("\n"))
 
