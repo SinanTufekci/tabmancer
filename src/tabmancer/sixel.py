@@ -31,6 +31,8 @@ import weakref
 import zlib
 from dataclasses import dataclass, replace
 
+from rich.color import Color, ColorSystem
+
 from .bitart import WT_CELL, Colour
 
 WAIT = 0.35  # seconds to wait for the terminal's answers
@@ -254,7 +256,9 @@ def encode_indexed(palette: list[Colour | None], rows: list[bytes], background: 
         table[n] = r
     numbered = [bytes(row).translate(table) for row in rows]
     out = [f'\x1bP0;1;0q"1;1;{width};{height}']
-    out += [f"#{n};2;{r * 100 // 255};{g * 100 // 255};{b * 100 // 255}" for n, (r, g, b) in enumerate(defined)]
+    # Registers take percents: rounded, not cut down, so a colour comes back as near as a percent goes
+    # (cut, #0a0a0a came back #080808: the token chart a shade darker than the sidebar around it).
+    out += [f"#{n};2;{_percent(r)};{_percent(g)};{_percent(b)}" for n, (r, g, b) in enumerate(defined)]
     for top in range(0, height, 6):
         band = numbered[top:top + 6]
         passes = []
@@ -270,6 +274,10 @@ def encode_indexed(palette: list[Colour | None], rows: list[bytes], background: 
         out.append("-")
     out.append("\x1b\\")
     return "".join(out)
+
+
+def _percent(level: int) -> int:
+    return round(level * 100 / 255)
 
 
 def _nearest(colour: Colour, defined: list[Colour]) -> int:
@@ -304,6 +312,16 @@ def kitty_delete(image: int) -> str:
 
 
 # --- the app's side -------------------------------------------------------------------------------
+
+def as_shown(widget, colour: str) -> str:
+    """A colour as the terminal shows a widget's: where Textual writes 256 colours or 16 (xterm says
+    nothing of true colour), the one of those it becomes, so that a picture in true colour, opaque
+    on it, is not a box of another shade."""
+    system = widget.app.console._color_system if widget.is_attached else None
+    if system in (None, ColorSystem.TRUECOLOR):
+        return colour
+    return Color.parse(colour).downgrade(system).get_truecolor().hex
+
 
 _numbers = itertools.count(7301)
 

@@ -58,7 +58,9 @@ tabmancer tokens                # only the tokens
 
 The **TOKENS TODAY** card counts what every session used today, with a bar for each hour
 beside the number (the hour now in white), and the chart under the
-project list shows the last 14 days, for the project you pick there. The preview shows
+project list shows the last 14 days, for the project you pick there: a bar a day, drawn in
+real pixels where the terminal draws Bit in them (Sixel or kitty graphics), in block
+characters elsewhere. The preview shows
 each session's total.
 
 The counts come from the usage figures Claude Code writes into each transcript with

@@ -24,7 +24,6 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
-from rich.color import Color, ColorSystem
 from rich.style import Style
 from rich.text import Text
 from textual import events
@@ -640,13 +639,9 @@ class Mascot(Widget):
             self.app.send_now(self.picture)  # over the old one, opaque: replaced, not wiped
 
     def as_shown(self, colour: str) -> str:
-        """A colour as the terminal shows the strip's: where Textual writes 256 colours or 16 (xterm
-        says nothing of true colour), the one of those it becomes, so that Bit's picture, in true
-        colour, is not a box of another shade around it."""
-        system = self.app.console._color_system if self.is_attached else None
-        if system in (None, ColorSystem.TRUECOLOR):
-            return colour
-        return Color.parse(colour).downgrade(system).get_truecolor().hex
+        """The strip's colour as the terminal shows it (sixel.as_shown): Bit's picture is not a box
+        of another shade around it."""
+        return sixel.as_shown(self, colour)
 
     def eye_colour(self) -> str:
         # In octants the helmet's own colour, so a cell holding eye, visor and helmet needs

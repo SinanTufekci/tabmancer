@@ -47,7 +47,7 @@ def decode(data: str) -> tuple[list[list[tuple[int, int, int]]], int, int]:
 
 
 def percent(colour):
-    return tuple(c * 100 // 255 for c in colour)
+    return tuple(round(c * 100 / 255) for c in colour)
 
 
 def test_an_image_decodes_back_to_its_pixels():
@@ -181,13 +181,13 @@ async def test_bit_in_real_pixels_leaves_its_cells_blank_and_sends_its_picture(f
         write = app._driver.write
         app._driver.write = written.append
 
-        def pictures():  # Textual writes through the driver too (the pointer's shape): the pictures only
-            return [w for w in written if '\x1bP' in w]
+        def pictures():  # Bit's only: Textual writes through the driver too (the pointer's shape), and the
+            return [w for w in written if w.startswith(f"\x1b7\x1b[{y + 1};{x + 1}H\x1bP")]  # chart has its own
 
         try:
             bit.picture.fresh = True
             app.send_pictures(None)
-            assert len(pictures()) == 1 and pictures()[0].startswith(f"\x1b7\x1b[{y + 1};{x + 1}H\x1bP")
+            assert len(pictures()) == 1  # at its cells
             app.send_pictures(None)  # nothing new, nothing written over: not again
             assert len(pictures()) == 1
             app.send_pictures(Spans([(y + 1, x, x + 2)]))  # Textual wrote over its cells: again
@@ -569,7 +569,7 @@ async def test_b_shows_bit_in_pixels_then_calm_then_blocks_then_sends_it_away_an
         assert bit.calm and bit.picture is not None and read_json("config.json")["mascot"] == "calm"
         await pilot.press("b")
         assert not bit.calm and bit.picture is None and not bit.has_class("hidden")
-        assert not list(app._sixel_pictures())
+        assert not [p for p in app._sixel_pictures() if p.owner is bit]  # the token chart's stays
         await pilot.pause(0.2)
         assert any(line.plain.strip() for line in bit.lines(bit.size.width))  # in block characters
         await pilot.press("b")

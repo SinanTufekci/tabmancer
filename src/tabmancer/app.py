@@ -104,6 +104,7 @@ from .theme import (
     mix,
     use_saved_theme,
 )
+from .tokenchart import TokenChart
 from .tokens import duration, human
 from .widgets import (
     ALL_PROJECTS,
@@ -536,7 +537,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 yield ProjectList(id="projects")
                 yield Static(LEGEND, classes="legend")
                 yield Label(f"TOKENS · {CHART_DAYS} DAYS", classes="heading")
-                yield Sparkline([0] * CHART_DAYS, id="activity")
+                yield TokenChart([0] * CHART_DAYS, id="activity")  # in real pixels where it can be
             with Vertical(id="main"):
                 yield Input(placeholder="Find by project, title or anything said in a session", id="filter")
                 # The cursor lights the row but keeps each cell's own colours (status, mode).
