@@ -131,6 +131,24 @@ def test_fine_blocks_follow_the_terminal(monkeypatch):
     assert M.fine_blocks()
 
 
+async def test_clicking_bit_again_and_again_selects_nothing(fake_home):
+    """A double click took the strip for text to select (lit whole), a triple one the list and the
+    preview around it: clicking Bit is for Bit."""
+    from tabmancer.app import SessionPicker
+
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await pilot.pause(0.3)
+        robot = app.mascot
+        on_bit = (robot.cell_x(robot.size.width) + 5, 2)
+        await pilot.click(robot, offset=on_bit, times=3)
+        await pilot.pause(0.1)
+        assert not app.screen.selections and robot.action == "dizzy"  # Bit still takes the clicks
+        await pilot.click(robot, offset=on_bit, times=2)
+        await pilot.pause(0.1)
+        assert not app.screen.selections
+
+
 async def test_bit_lives_in_the_dashboard(fake_home):
     from tabmancer.app import SessionPicker
 

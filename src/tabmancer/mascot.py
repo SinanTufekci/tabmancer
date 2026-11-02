@@ -189,6 +189,10 @@ class Mascot(Widget):
     DEFAULT_CSS = f"""
     Mascot {{ height: {ROWS}; }}
     """
+    # Clicked again and again, Bit gets dizzy: Textual would take a double click for selecting the
+    # strip as text (lit whole, Bit's picture a dark box on it) and a triple one for everything
+    # around it. Nothing on the strip is text to copy.
+    ALLOW_SELECT = False
 
     def __init__(self, seed: int | None = None, accent: str = AMBER, fine: bool | None = None,
                  **kwargs) -> None:
