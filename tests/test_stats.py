@@ -202,3 +202,11 @@ def test_stats_command(home, capsys):
     main(["stats", "--days", "7"])
     shown = capsys.readouterr().out
     assert "WHEN YOU WORK" in shown and "TOOLS AND FILES" in shown and "PLAN LIMITS" in shown
+
+
+def test_bars_under_each_other_keep_apart_and_show_any_value():
+    from tabmancer.statsview import bar
+
+    assert bar(10, 10, 24) == "▇" * 24 and bar(5, 10, 24) == "▇" * 12  # seven eighths high: a sliver between rows
+    assert bar(0.01, 10, 24) == "▇"  # anything above nothing shows
+    assert bar(0, 10) == "" and bar(3, 0) == ""

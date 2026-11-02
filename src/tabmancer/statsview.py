@@ -30,7 +30,6 @@ from .tokens import Report, Tokens, duration, human
 
 TOP = 10
 BAR = 24
-EIGHTHS = " ▏▎▍▌▋▊▉"
 LEVELS = "▁▂▃▄▅▆▇█"
 CHART = 84  # columns of a limit's history
 UNLISTED = "(not in the session list)"
@@ -40,11 +39,12 @@ TAB_LABELS = ("Tokens", "When you work", "Tools and files", "Plan limits", "Repo
 
 
 def bar(value: float, peak: float, width: int = BAR) -> str:
-    """A bar in eighths of a cell, so small differences still show."""
+    """A bar of whole cells, seven eighths high: rows of bars under each other keep a sliver apart,
+    each its own bar (full height, they ran into one block). Its value is written beside it; any
+    value above nothing shows a cell."""
     if peak <= 0 or value <= 0:
         return ""
-    full, part = divmod(max(1, round(value / peak * width * 8)), 8)
-    return "█" * full + (EIGHTHS[part] if part else "")
+    return "▇" * max(1, round(value / peak * width))
 
 
 def _share(part: float, whole: float) -> str:
