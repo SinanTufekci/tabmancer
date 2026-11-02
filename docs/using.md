@@ -14,6 +14,7 @@
 | ○ unanswered | your last message never got a reply |
 | × error | the last reply was an API error |
 | ◐ limit · 16:00 | stopped at a usage limit, which lifts at 16:00 (then: `limit lifted`) |
+| ◐ signed in again | stopped at a usage limit, then signed in with another account in it: it can go on now |
 | × connection lost | the connection to the API dropped, so the reply never came |
 
 A session stopped at a usage limit says when the limit lifts, whether it is still open or
@@ -23,6 +24,10 @@ not, and does not count as waiting for you. `c` asks what to do with all of them
   limit has lifted.
 - **Continue them when the limit lifts.** The dashboard has to be open at that time; the plan
   is kept if you restart it. `c` again can call it off.
+
+Sign in with another account in a session stopped at a limit (`/login` in it) and it says
+`◐ signed in again`: `c` continues it now, and if it was waiting for its limit to lift it goes
+on right away.
 
 Either way a closed session opens in a new tab, and an open one gets the prompt in its own
 tab, as if you had typed it there: on Windows it goes into that tab's console, and no window

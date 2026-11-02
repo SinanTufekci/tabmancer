@@ -125,6 +125,60 @@ def test_a_team_member_at_the_limit_is_at_the_limit_not_idle():
     assert teamview.status_of(lead)[0] == "at the limit"  # not "waiting", which is red for you
 
 
+def local(command: str, output: str) -> list[dict]:
+    """A command typed in Claude Code itself (/login, /usage), as its transcript keeps it."""
+    return [{"type": "user", "cwd": CWD, "isMeta": True, "message": {"content": "<local-command-caveat>…</local-command-caveat>"}},
+            {"type": "user", "cwd": CWD, "message": {"content": f"<command-name>/{command}</command-name>"}},
+            {"type": "user", "cwd": CWD, "message": {"content": f"<local-command-stdout>{output}</local-command-stdout>"}}]
+
+
+def write_records(home, sid: str, records: list[dict]) -> None:
+    folder = home / "projects" / "C--work-demo"
+    folder.mkdir(parents=True, exist_ok=True)
+    records = [{"type": "user", "cwd": CWD, "entrypoint": "cli", "message": {"content": f"do {sid}"}}, *records]
+    (folder / f"{sid}.jsonl").write_text("\n".join(json.dumps(r, separators=(",", ":")) for r in records) + "\n",
+                                         encoding="utf-8")
+
+
+def test_a_login_after_a_limit_lets_it_go_on_now_and_other_commands_hide_nothing(fake_home):
+    limit = stopped_at("You've hit your 5-hour limit · resets 11:59pm")
+    write_records(fake_home, "relogged", [limit, *local("login", "Login successful")])
+    write_records(fake_home, "looked", [limit, *local("usage", "Current session: 100% used")])
+    reply = {"type": "assistant", "cwd": CWD, "message": {"content": [{"type": "text", "text": "Done."}],
+                                                         "stop_reason": "end_turn"}}
+    write_records(fake_home, "went-on", [limit, {"type": "user", "cwd": CWD, "message": {"content": "go on"}}, reply,
+                                         *local("login", "Login successful")])
+    folder = fake_home / "projects" / "C--work-demo"
+    relogged, looked, went_on = (read_session(folder / f"{sid}.jsonl") for sid in ("relogged", "looked", "went-on"))
+    # A /login in it used to be taken for how it ended (done): the limit was gone, and c had nothing to continue.
+    assert relogged.status is Status.LIMIT and relogged.signed_in_again
+    assert viewmodel.limit_words(relogged) == ("◐ signed in again", "to-continue!")
+    assert "c continues it now" in viewmodel.limit_help(relogged) and viewmodel.free_at(relogged) <= datetime.now()
+    assert looked.status is Status.LIMIT and not looked.signed_in_again  # still the limit, till it lifts
+    assert viewmodel.free_at(looked) == looked.resets
+    assert went_on.status is Status.DONE and not went_on.signed_in_again  # gone on past it before the login
+    cached = _from_cache(_to_cache(relogged))
+    assert cached.signed_in_again and cached.status is Status.LIMIT
+
+
+async def test_signed_in_again_a_session_waiting_for_its_limit_goes_on_now(fake_home, monkeypatch):
+    write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
+        {"sessionId": "open", "kind": "interactive", "status": "idle"}])
+    typed = []
+    monkeypatch.setattr(typein, "type_into", lambda session_id, text: typed.append((session_id, text)) or True)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
+        await choose(pilot, app, "lift")
+        app.continue_due()
+        assert not typed and app.armed  # waiting for 23:59
+        app.sessions["open"].signed_in_again = True  # /login in it, another account
+        app.continue_due()
+        await wait_for(pilot, lambda: typed)
+        assert typed == [("open", continue_prompt(Status.LIMIT))] and not app.armed
+
+
 async def test_c_continues_them_when_the_limit_lifts(fake_home, monkeypatch):
     write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
     write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))

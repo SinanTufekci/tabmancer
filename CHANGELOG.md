@@ -15,6 +15,10 @@
   line of its own; the footer's keys sit two cells apart where they fit; the column with an open
   session's context is headed Context; a team's row puts each member's sign before its name; the
   stats' bars stand apart.
+- **Signed in again, on at once.** A session stopped at a usage limit in which you sign in with
+  another account (`/login`) says so (`◐ signed in again`): `c` continues it now, and one waiting
+  for its limit to lift goes on right away. The `/login` used to be taken for how it ended, and the
+  limit was forgotten.
 - **Fixed.** Clicking Bit again and again no longer lights up its strip (it was taken for text to
   select). Pictures in real pixels take the exact shade around them: Sixel colours were rounded
   down, a shade darker than the sidebar.

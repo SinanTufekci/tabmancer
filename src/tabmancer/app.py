@@ -2417,7 +2417,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if not stopped:
             self.notify("No session is stopped at a usage limit.", timeout=4)
             return
-        soon = min(s.resets or datetime.now() for s in stopped)
+        soon = min(VM.free_at(s) or datetime.now() for s in stopped)
         when = "now" if soon <= datetime.now() else f"at {lifts(soon)}"
         # The plan as last read (/usage, every few minutes): room on it means the limit no longer stands
         # in the way (another account, or it lifted), and continuing now comes first.
@@ -2476,7 +2476,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         the prompt typed into its own tab, which is never closed. One gone on by hand meanwhile is
         left alone."""
         now = datetime.now()
-        due = [sid for sid, moment in self.armed.items() if moment + LIMIT_MARGIN <= now]
+        # Signed in again in it (/login, another account): it goes on now, not when the limit lifts.
+        due = [sid for sid, moment in self.armed.items()
+               if moment + LIMIT_MARGIN <= now or getattr(self.sessions.get(sid), "signed_in_again", False)]
         if not due:
             return
         lifted = []
@@ -2521,9 +2523,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             return
         self.told_limit.update(s.session_id for s in stopped)
         names = ", ".join(sorted({s.project for s in stopped})[:3])
-        soon = min((s.resets for s in stopped if s.resets), default=None)
+        soon = min((VM.free_at(s) for s in stopped if VM.free_at(s)), default=None)
         if soon and soon > datetime.now():
             self.mascot.say(f"{names}: limit until {lifts(soon)}. c continues then", AMBER, seconds=10)
+        elif any(s.signed_in_again for s in stopped):
+            self.mascot.react("lifted", f"{names}: signed in again. c continues now", AMBER, seconds=10)
         else:
             self.mascot.react("lifted", f"{names}: the limit has lifted. c continues now", AMBER, seconds=10)
 

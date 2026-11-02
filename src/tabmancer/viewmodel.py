@@ -119,14 +119,24 @@ def lifts(moment: datetime) -> str:
     return f"{moment:%H:%M}" if moment - datetime.now() < timedelta(hours=20) else f"{moment:%a %H:%M}"
 
 
+def free_at(session: Session) -> datetime | None:
+    """When a session stopped at a usage limit can go on: when the limit lifts, or now, signed in
+    again in it since (/login: another account, whose limit it is not)."""
+    return datetime.now() if session.signed_in_again else session.resets
+
+
 def limit_words(session: Session) -> tuple[str, str]:
     """'◐ limit · 16:00' until the limit lifts, then '◐ limit lifted', loud: (words, tone)."""
+    if session.signed_in_again:
+        return "◐ signed in again", "to-continue!"
     if session.resets is not None and session.resets > datetime.now():
         return f"◐ limit · {lifts(session.resets)}", "to-continue"
     return "◐ limit lifted", "to-continue!"
 
 
 def limit_help(session: Session) -> str:
+    if session.signed_in_again:
+        return "Stopped at a usage limit, then signed in again (/login): another account. c continues it now."
     if session.resets is not None and session.resets > datetime.now():
         left = duration((session.resets - datetime.now()).total_seconds())
         return f"Stopped at a usage limit, which lifts at {lifts(session.resets)} (in {left}). c continues it then."

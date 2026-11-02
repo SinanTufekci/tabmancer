@@ -25,7 +25,7 @@ from . import __version__
 from .config import read_json, write_json
 
 CACHE_FILE = "index.json"
-CACHE_FORMAT = 4  # bump when Session or the parser changes shape
+CACHE_FORMAT = 5  # bump when Session or the parser changes shape
 HEAD_BYTES = 512 * 1024
 TAIL_BYTES = 2 * 1024 * 1024
 MAX_HEAD_BYTES = 8 * 1024 * 1024
@@ -92,6 +92,7 @@ class Session:
     context: int = 0  # tokens the last reply was sent with: how full the context window is
     model: str = ""   # the model of the last reply
     resets: datetime | None = None  # stopped at a usage limit (open or not): when the limit lifts
+    signed_in_again: bool = False  # ...and /login in it since: another account, so it can go on now
 
     @property
     def project(self) -> str:
@@ -372,7 +373,8 @@ def _read_tail(f, size: int, session: Session) -> None:
         span *= 4  # a few huge trailing records pushed the conversation out of view
 
     custom_title = ai_title = ""
-    last_conversation = None
+    last_conversation = last_local = None
+    signed_in = False  # a /login since the last of the conversation
     last_activity = last_cost = -1
     cost_state = last_prompt_record = None
     files: dict[str, None] = {}
@@ -395,7 +397,12 @@ def _read_tail(f, size: int, session: Session) -> None:
             if record.get("isMeta") or (record.get("isVisibleInTranscriptOnly")
                                         and not record.get("isCompactSummary")):
                 continue
-            last_conversation = record
+            said = _text((record.get("message") or {}).get("content")).lstrip() if kind == "user" else ""
+            if said.startswith(LOCAL_PREFIXES):  # /login, /usage, a ! command: not how the session stands
+                last_local = record
+                signed_in = signed_in or "Login successful" in said
+                continue
+            last_conversation, signed_in = record, False
             content = (record.get("message") or {}).get("content")
             if kind == "assistant":
                 usage = (record.get("message") or {}).get("usage")
@@ -432,9 +439,11 @@ def _read_tail(f, size: int, session: Session) -> None:
 
     session.title = _shorten(custom_title or ai_title or session.first_prompt, 80)
     session.files = _relative(list(reversed(files)), session.cwd)[:8]
+    last_conversation = last_conversation or last_local  # nothing but local commands: they are all there is
     session.status = _conversation_status(last_conversation) if last_conversation else Status.UNKNOWN
     if session.status is Status.ERROR and last_conversation.get("error") == "rate_limit":
         session.status, session.resets = Status.LIMIT, _limit_resets(last_conversation)
+        session.signed_in_again = signed_in
     elif session.status is Status.ERROR and last_conversation.get("error") == "server_error":
         session.status = Status.DROPPED  # "Can't reach the API server", "Connection dropped" and the like
     session.exit = Exit.CLEAN if last_cost > last_activity else Exit.KILLED
