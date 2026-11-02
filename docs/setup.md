@@ -123,7 +123,8 @@ on its chest, two arms and two legs. It takes up four rows and has no box of its
 around it is the list's background.
 
 Where the terminal draws Sixel images (Windows Terminal from 1.22, foot, WezTerm, iTerm2,
-Konsole and others that say so), Bit is drawn in real pixels: 110x78 in Windows Terminal,
+Konsole and others that say so), and in kitty and Ghostty with their own graphics protocol,
+Bit is drawn in real pixels: 110x78 in Windows Terminal,
 in the same eleven cells by four rows, to the size of the cells elsewhere. It moves a pixel
 at a time, squashes before a hop and stretches in the air, its eyes change with what it does
 (happy, wide, hearts, stars, dizzy rings...), and it handles things: a laptop, a mug, a
