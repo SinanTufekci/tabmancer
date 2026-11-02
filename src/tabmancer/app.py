@@ -100,6 +100,7 @@ from .theme import (
     TEXT,
     THEMES,
     keys,
+    keys_in,
     mix,
     use_saved_theme,
 )
@@ -1335,19 +1336,18 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.show_team(state)
             return
         self.inspector.remove_class("team-only")
-        head = Text()
-        head.append(session.title + "\n", style=f"bold {TEXT}")
+        head = Text(session.title, style=f"bold {TEXT}")
         label, style = (STATUS_LABEL[session.status] if session.exit is not Exit.RUNNING
                         else state_of(session)[:2])
         agent = clis.label(session.cli).split()[0]  # Claude, Codex, Antigravity
+        status = Table.grid(padding=(0, 2))  # what it means beside the status, wrapped under itself
+        status.add_column(no_wrap=True)
+        status.add_column(style=MUTED, overflow="fold")
         if at_limit(session):
-            head.append(limit_cell(session))
-            head.append("  " + limit_help(session), style=MUTED)
+            status.add_row(limit_cell(session), limit_help(session))
         else:
-            head.append(label, style=style)
-            head.append("  " + STATUS_HELP[session.status].replace("Claude", agent), style=MUTED)
-        head.append("\n")
-        head.append_text(Text.assemble(("⏎ ", f"bold {self.accent()}"), (self.enter_words(session), self.accent())))
+            status.add_row(Text(label, style=style), STATUS_HELP[session.status].replace("Claude", agent))
+        enter = Text.assemble(("⏎ ", f"bold {self.accent()}"), (self.enter_words(session), self.accent()))
         # Quiet labels on the left, the words themselves bright and indented beside them,
         # each cut to a few lines of the room there is, so the reply still shows when narrow.
         room = max(24, (detail.content_size.width or 74) - 14)
@@ -1377,7 +1377,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             said.add_row(agent, _clip(session.last_reply, min(320, 4 * room)))
         if session.files:
             said.add_row("Files edited", _clip(", ".join(session.files), 2 * room))
-        detail.update(Group(head, Text(""), said))
+        detail.update(Group(head, status, enter, Text(""), said))
         self.meta.update(self.meta_table(session))
 
     def enter_words(self, session: Session) -> str:
@@ -1419,6 +1419,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if session.started:
             grid.add_row("Started", f"{session.started:%d %b %H:%M}")
         grid.add_row("Last active", f"{session.last_active:%d %b %H:%M}  ({ago(session.last_active)} ago)")
+        if session.started:
+            running = session.exit is Exit.RUNNING
+            took = (datetime.now() if running else session.last_active) - session.started
+            grid.add_row("Going for" if running else "Ran for", duration(took.total_seconds()))
         if session.lines_added is not None:
             grid.add_row("Lines", Text.assemble((f"+{session.lines_added}", GREEN), "  ",
                                                 (f"−{session.lines_removed or 0}", RED)))
@@ -1426,7 +1430,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if use is not None and use.total:
             grid.add_row("Tokens", Text.assemble((human(use.total), TEXT), (f"  ·  {human(use.output)} out", MUTED)))
         if session.context and session.cli == "claude":
-            grid.add_row("Context", fill(session))
+            grid.add_row("Context", fill(session, timed=False))
             if context.crowded(session):  # the two ways on, in a line: the same work, or a new phase
                 grid.add_row("", Text.assemble(("/compact", f"bold {AMBER}"), (": go on · ", AMBER),
                                                ("h", f"bold {AMBER}"), (": new phase", AMBER)))
@@ -1881,20 +1885,25 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.detail.update(Text("\n").join([*lines, hint]))
             return
         self.detail.update(Text("\n").join(lines))
-        room = max(2, (self.inspector.content_size.height or 8) - 4)
+        beside = max(20, (self.meta.content_size.width or 44) - 2)
+        hint = keys_in(beside, *self.team_key_pairs(state))
+        # The messages take what the heading, a blank line and the keys leave, so the keys always show.
+        room = max(2, (self.inspector.content_size.height or 8) - 2 - len(hint.split()))
         self.meta.update(Group(Text("MESSAGES", style=f"bold {MUTED}"),
-                               teamtree.latest(state, colours, room, max(20, (self.meta.content_size.width or 44) - 2)),
-                               Text(""), hint))
+                               teamtree.latest(state, colours, room, beside), Text(""), hint))
 
     def team_keys(self, state: teamtree.TeamState) -> Text:
         """The keys of a team's row as it stands: closed, folded or unfolded."""
+        return keys(*self.team_key_pairs(state))
+
+    def team_key_pairs(self, state: teamtree.TeamState) -> tuple[tuple[str, str], ...]:
         name = state.team.name
         if not self.team_open(name):
-            return keys(("Enter", "team view"), ("s", "start the team"), ("e", "members"), ("Space", "tick"),
-                        ("a", "add"), ("x", "hide"), ("T", "teams"))
+            return (("Enter", "team view"), ("s", "start the team"), ("e", "members"), ("Space", "tick"),
+                    ("a", "add"), ("x", "hide"), ("T", "teams"))
         unfolded = name in self.unfolded
-        return keys(("Enter", "team view"), ("e", "fold" if unfolded else "unfold"),
-                    ("s", "start the rest"), ("a", "add"), ("x", "close"), ("T", "teams"))
+        return (("Enter", "team view"), ("e", "fold" if unfolded else "unfold"),
+                ("s", "start the rest"), ("a", "add"), ("x", "close"), ("T", "teams"))
 
     def member_messages(self, session: Session, room: int) -> Text:
         """'3 in · 2 out · ← lead 2m: Heads-up…' for a member's own preview."""

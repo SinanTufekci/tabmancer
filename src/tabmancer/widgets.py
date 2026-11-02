@@ -401,7 +401,10 @@ class KeysFooter(Footer):
     KeysFooter.-rows { layout: grid; grid-columns: auto; grid-gutter: 0 1; }
     KeysFooter.-rows.-compact FooterKey { margin: 0; }
     KeysFooter FooterKey.-group-start { padding-left: 2; }
+    KeysFooter.-roomy-row.-compact FooterKey { margin-right: 2; }
+    KeysFooter.-rows.-roomy-grid { grid-gutter: 0 2; }
     """
+    ROOMY = 2  # cells between the keys where they fit (one where they do not): "Select m Mode" read as one
     GROUP_GAP = 2
     MOST_ROWS = 4
 
@@ -448,6 +451,11 @@ class KeysFooter(Footer):
         width = width or self.size.width or (self.app.size.width if self.is_attached else 0)
         rows = self.rows_for(width) if width and self.widths else 1
         self.set_class(rows > 1, "-rows")
+        columns = math.ceil(len(self.widths) / rows) if self.widths else 1
+        need = sum(max(self.widths[c::columns]) for c in range(columns)) if self.widths else 0
+        roomy = bool(width) and need + self.ROOMY * (columns - 1) <= width
+        self.set_class(roomy and rows == 1, "-roomy-row")
+        self.set_class(roomy and rows > 1, "-roomy-grid")
         self.styles.height = rows
         if rows > 1:
             self.styles.grid_size_columns = math.ceil(len(self.widths) / rows)

@@ -12,7 +12,7 @@ from rich.console import Console
 from tabmancer import sessions
 from tabmancer.app import LIVE_STATES, STATUS_LABEL, SessionPicker
 from tabmancer.sessions import Exit, Status
-from tabmancer.theme import AMBER, BLUE, RED
+from tabmancer.theme import AMBER, BLUE, RED, keys, keys_in
 from tabmancer.tokens import Event, Report, Tokens
 from tabmancer.widgets import INTERRUPTED, HourBars, big, project_line, tally
 
@@ -108,6 +108,34 @@ async def test_cards_say_what_they_count_and_the_sidebar_marks_who_waits(fake_ho
         closed = replace(app.sessions["two"], exit=Exit.CLEAN, status=Status.CUT_OFF)
         assert str(app.cells(closed)[0]) == "[ ]"
         assert AMBER in str(app.status_cell(closed).style)
+
+
+def test_a_key_line_wraps_between_keys_never_inside_one():
+    pairs = (("Enter", "team view"), ("e", "fold"), ("s", "start the rest"), ("a", "add"), ("x", "close"),
+             ("T", "teams"))
+    for width in (20, 30, 42, 60, 200):
+        lines = keys_in(width, *pairs).plain.split("\n")
+        assert all(len(line) <= width or " · " not in line for line in lines), width  # a pair alone may be wider
+        assert " · ".join(lines) == keys(*pairs).plain, width  # every key, in order, whole
+        assert not any(line.startswith(("rest", "the", "view")) for line in lines)
+    assert len(keys_in(200, *pairs).plain.split("\n")) == 1
+
+
+async def test_the_preview_hangs_the_status_words_and_says_how_long_it_ran(fake_home):
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: app.sessions)
+        session = app.current()
+        session.status, session.exit = Status.CUT_OFF, Exit.KILLED
+        session.started = session.last_active - timedelta(hours=1, minutes=5)
+        app.update_detail()
+        lines = plain(app.detail.content, width=50).split("\n")
+        start = next(i for i, line in enumerate(lines) if line.startswith(STATUS_LABEL[Status.CUT_OFF][0]))
+        column = lines[start].index("Closed")
+        assert lines[start + 1][:column].strip() == "" and lines[start + 1][column] != " "  # under the words
+        facts = plain(app.meta.content, width=40)
+        assert "Ran for" in facts and "1h 05m" in facts.split("Ran for")[1].split("\n")[0]
+        assert "ran for" not in facts  # no longer at the end of the context, where it broke in two
 
 
 async def test_the_preview_indents_the_words_beside_their_labels(fake_home):

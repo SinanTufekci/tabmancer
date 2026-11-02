@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from rich.console import Console
+from rich.text import Text
 
 from tabmancer import app as app_module
 from tabmancer import sessions, teams, teamtree
@@ -134,6 +135,25 @@ async def test_an_idle_member_and_one_at_the_limit_have_signs_of_their_own(fake_
         assert status.plain == "◐ 1  ● 1"  # they shared ◐ once: an idle member looked stopped at a limit
         assert [str(span.style) for span in status.spans] == [app_module.AMBER, app_module.MUTED]
         assert app.member_look(lead)[0] == "◐ at the limit" and app.member_look(api)[0] == "● idle"
+
+
+async def test_the_team_preview_shows_every_key_each_whole(fake_home, tmp_path, monkeypatch):
+    """Beside the tree, the keys wrapped as words ('s start the' / 'rest'); taking the lines they
+    need, the last of them was cut off under the messages."""
+    shop(fake_home, tmp_path, monkeypatch)
+    # A busy team: its messages fill all the room they are given.
+    monkeypatch.setattr(teamtree, "latest", lambda state, colours, room, width: Text(
+        "\n".join(f"message {n}" for n in range(room))))
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await ready(pilot, app, unfold=True)
+        app.show_team(app.team_states["shop"])
+        await pilot.pause(0.2)
+        visible = app.inspector.content_region.bottom - app.meta.region.y  # the preview cuts the rest off
+        shown = app.meta.render_lines(app.meta.region.reset_offset)[:visible]
+        text = "\n".join("".join(segment.text for segment in line) for line in shown)
+        assert "start the rest" in text and "T  teams" in text
+        assert not any(line.strip().startswith("rest") for line in text.split("\n"))
 
 
 async def test_e_folds_a_team_and_its_row_opens_the_team_view(fake_home, tmp_path, monkeypatch):

@@ -40,6 +40,20 @@ def keys(*pairs: tuple[str, str]) -> Text:
     return out
 
 
+def keys_in(width: int, *pairs: tuple[str, str]) -> Text:
+    """The key line on as many lines as it needs in this width, a key never parted from what it
+    does: wrapped as words, 'start the rest' went on with 'rest' alone on the next line."""
+    lines: list[Text] = []
+    for pair in pairs:
+        one = keys(pair)
+        if lines and lines[-1].cell_len + 3 + one.cell_len <= width:
+            lines[-1].append(" · ", style=MUTED)
+            lines[-1].append_text(one)
+        else:
+            lines.append(one)
+    return Text("\n").join(lines)
+
+
 # Layers, no frames: the list on black, what sits around it a tone up (the top bar, the cards, the
 # preview, the footer), the sidebar in between. The highlighted row takes the theme's own colour.
 SURFACE = "#101010"

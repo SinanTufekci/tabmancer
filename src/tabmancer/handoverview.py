@@ -21,14 +21,17 @@ from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, keys
 from .tokens import duration, human
 
 
-def fill(session: Session) -> Text:
-    """'917K of 1M (92%) · going for 6h 12m', coloured by how full it is."""
+def fill(session: Session, timed: bool = True) -> Text:
+    """'917K of 1M (92%) · going for 6h 12m', coloured by how full it is (without the time, where it
+    has a line of its own)."""
     if not session.context:
         return Text("context size not known yet", style=MUTED)
     share = context.share(session)
     colour = GREEN if share < context.WARN_SHARE else AMBER if share < 0.85 else RED
     out = Text.assemble((f"{human(session.context)} of {human(context.window(session.model, session.context))} ",
                          TEXT), (f"({share:.0%})", f"bold {colour}"))
+    if not timed:
+        return out
     if session.started and session.exit is Exit.RUNNING:
         out.append(f" · going for {duration((datetime.now() - session.started).total_seconds())}", style=MUTED)
     elif session.started:
