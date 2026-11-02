@@ -105,7 +105,7 @@ async def choose(pilot, app, answer: str) -> list[str]:
 
     await pilot.press("c")
     await wait_for(pilot, lambda: isinstance(app.screen, LimitDialog))
-    options = app.screen.query_one(OptionList)
+    options = app.screen.query_one("#ways", OptionList)  # the ways; the sessions are a list above them
     ways = [options.get_option_at_index(i).id for i in range(options.option_count)]
     options.highlighted = ways.index(answer)
     await pilot.press("enter")
@@ -161,6 +161,42 @@ def test_a_login_after_a_limit_lets_it_go_on_now_and_other_commands_hide_nothing
     assert cached.signed_in_again and cached.status is Status.LIMIT
 
 
+async def test_c_says_what_going_on_costs_and_goes_on_with_the_ticked_or_hands_them_over(fake_home, monkeypatch):
+    from textual.widgets import Label, OptionList, SelectionList
+
+    write(fake_home, "big", stopped_at("You've hit your session limit · resets 11:59pm"))
+    write(fake_home, "small", stopped_at("You've hit your session limit · resets 11:59pm"))
+    opened, handed = [], []
+    monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
+    app = SessionPicker(days=14)
+    monkeypatch.setattr(app, "open_handover", lambda session, how=None: handed.append((session.session_id, how)))
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: {"big", "small"} <= set(app.sessions))
+        app.sessions["big"].context, app.sessions["small"].context = 612_000, 40_000
+        await pilot.press("c")
+        await wait_for(pilot, lambda: isinstance(app.screen, LimitDialog))
+        dialog = app.screen
+        which = dialog.query_one("#which", SelectionList)
+        lines = {which.get_option_at_index(i).value: str(which.get_option_at_index(i).prompt) for i in range(2)}
+        assert "612k context" in lines["big"] and "40k context" in lines["small"]
+        assert "652k tokens" in str(dialog.query_one(".cost", Label).render())  # both ticked to begin with
+        which.deselect("big")
+        await pilot.pause(0.1)
+        assert "40k tokens" in str(dialog.query_one(".cost", Label).render())
+        ways = dialog.query_one("#ways", OptionList)
+        ways.highlighted = [ways.get_option_at_index(i).id for i in range(ways.option_count)].index("now")
+        await pilot.press("enter")
+        await wait_for(pilot, lambda: opened)
+        assert [launch.session_id for launch in opened] == ["small"]  # the big one waits
+        await pilot.press("c")
+        await wait_for(pilot, lambda: isinstance(app.screen, LimitDialog))
+        ways = app.screen.query_one("#ways", OptionList)
+        ways.highlighted = [ways.get_option_at_index(i).id for i in range(ways.option_count)].index("handover")
+        await pilot.press("enter")
+        await wait_for(pilot, lambda: handed)
+        assert sorted(handed) == [("big", "transcript"), ("small", "transcript")]  # written from the transcript
+
+
 async def test_signed_in_again_a_session_waiting_for_its_limit_goes_on_now(fake_home, monkeypatch):
     write(fake_home, "open", stopped_at("You've hit your session limit · resets 11:59pm"))
     monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
@@ -191,12 +227,12 @@ async def test_c_continues_them_when_the_limit_lifts(fake_home, monkeypatch):
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
-        assert await choose(pilot, app, "lift") == ["lift", "now"]  # no reading of the plan: waiting comes first
+        assert await choose(pilot, app, "lift") == ["lift", "now", "handover"]  # no reading of the plan: waiting first
         assert set(app.armed) == {"lim", "open"}
         cell = str(app.mode_cell(app.sessions["lim"]))
         assert cell.startswith("▶ at ") and cell.endswith("23:59")
         assert set(read_json("config.json")["continue_at_reset"]) == {"lim", "open"}  # kept over a restart
-        assert await choose(pilot, app, "off") == ["lift", "now", "off"]
+        assert await choose(pilot, app, "off") == ["lift", "now", "handover", "off"]
         assert not app.armed and read_json("config.json")["continue_at_reset"] == {}
         await choose(pilot, app, "lift")
         app.continue_due()  # not yet: nothing opens
@@ -240,7 +276,7 @@ async def test_c_continues_them_now_after_signing_in_with_another_account(fake_h
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: app.sessions.get("open") and app.sessions["open"].live_state)
         app.limits = [Limit("session", 12, None, ""), Limit("week", 40, None, "")]
-        assert await choose(pilot, app, "now") == ["now", "lift"]  # room on the plan: now comes first
+        assert await choose(pilot, app, "now") == ["now", "lift", "handover"]  # room on the plan: now comes first
         await wait_for(pilot, lambda: opened and typed)
         # The open one goes on in its own tab: a prompt is all it needs to carry on, on the new account.
         assert typed == [("open", continue_prompt(Status.LIMIT))] and not closed_tabs

@@ -24,8 +24,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Input, Label, OptionList, Sparkline, Static
+from textual.widgets import DataTable, Input, Label, OptionList, SelectionList, Sparkline, Static
 from textual.widgets.option_list import Option
+from textual.widgets.selection_list import Selection
 
 from . import (
     __version__,
@@ -271,42 +272,91 @@ class PromptDialog(ModalScreen[tuple[str, str] | None]):
         self.dismiss(None)
 
 
-class LimitDialog(ModalScreen[str | None]):
-    """c: what becomes of the sessions stopped at a usage limit. Now, for when you have signed in
-    with another account (or the limit has lifted); when the limit lifts; or no longer by themselves."""
+BIG_CONTEXT = 300_000  # tokens: going on with this much on another account costs much of its limit
+
+
+class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
+    """c: what becomes of the sessions stopped at a usage limit, the ticked ones: on now (signed in
+    with another account, or the limit has lifted), when the limit lifts, handed over to fresh
+    sessions, or no longer by themselves. Each says how full its context is: on another account a
+    session goes on by writing all of it into the cache again, which costs much of the limit (seen:
+    716k tokens written by one session's first reply, a third of a 5-hour limit for a few at once)."""
 
     DEFAULT_CSS = frame("LimitDialog") + """
     LimitDialog OptionList { height: auto; margin-top: 1; background: $surface; border: none; }
-    LimitDialog .plan { color: $text-muted; margin-top: 1; }
+    LimitDialog SelectionList { height: auto; max-height: 10; margin-top: 1; }
+    LimitDialog .plan, LimitDialog .cost { color: $text-muted; margin-top: 1; }
     """
     BINDINGS: ClassVar[list[Binding]] = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, count: int, when: str, armed: bool, plan: str, room: bool) -> None:
+    def __init__(self, stopped: list[Session], when: str, armed: bool, plan: str, room: bool) -> None:
         super().__init__()
-        self.count, self.when, self.armed, self.plan, self.room = count, when, armed, plan, room
+        self.stopped, self.when, self.armed, self.plan, self.room = stopped, when, armed, plan, room
 
     def compose(self) -> ComposeResult:
-        them = "it" if self.count == 1 else "them"
         now = Option(Text.assemble(
-            (f"Continue {them} now", f"bold {TEXT}"), ("  you signed in with another account, or the limit has lifted\n", MUTED),
+            ("Continue the ticked now", f"bold {TEXT}"), ("  you signed in with another account, or the limit has lifted\n", MUTED),
             ("  an open one gets the prompt in its tab, a closed one opens in a new tab", MUTED)), id="now")
         later = Option(Text.assemble(
-            (f"Continue {them} when the limit lifts", f"bold {TEXT}"), (f"  {self.when}\n", MUTED),
+            ("Continue the ticked when the limit lifts", f"bold {TEXT}"), (f"  {self.when}\n", MUTED),
             ("  leave the dashboard open; each goes on by itself then", MUTED)), id="lift")
-        options = [now, later] if self.room else [later, now]
+        over = Option(Text.assemble(
+            ("Hand the ticked over", f"bold {TEXT}"),
+            ("  each a fresh session, its handover written from the transcript\n", MUTED),
+            ("  cheap on another account: the old context is not sent again", MUTED)), id="handover")
+        options = [now, later, over] if self.room else [later, now, over]
         if self.armed:
-            options.append(Option(Text.assemble((f"Do not continue {them} by themselves", f"bold {TEXT}"),
+            options.append(Option(Text.assemble(("Do not continue them by themselves", f"bold {TEXT}"),
                                                 ("  they wait for you", MUTED)), id="off"))
-        sessions_ = f"{self.count} session{'' if self.count == 1 else 's'}"
+        count = len(self.stopped)
         with Vertical():
-            yield Label(title("Stopped at a usage limit", sessions_, f"it lifts {self.when}"))
+            yield Label(title("Stopped at a usage limit", f"{count} session{'' if count == 1 else 's'}",
+                              f"it lifts {self.when}"))
             if self.plan:
                 yield Label(self.plan, classes="plan")
-            yield OptionList(*options)
-            yield Label(keys(("Enter", "choose"), ("↑↓", "the other ways"), ("Esc", "cancel")), classes="hint")
+            biggest = sorted(self.stopped, key=lambda s: -s.context)  # what costs most to go on with first
+            yield SelectionList(*[Selection(self.line(s), s.session_id, True) for s in biggest], id="which")
+            yield Label(self.cost(), classes="cost")
+            yield OptionList(*options, id="ways")
+            yield Label(keys(("Space", "tick"), ("Tab", "the sessions or the ways"), ("Enter", "choose"),
+                             ("Esc", "cancel")), classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#ways", OptionList).focus()
+
+    def line(self, session: Session) -> Text:
+        """'web-app  Fix the login loop  612k context', a big context in amber."""
+        size = session.context
+        return Text.assemble((f"{_clip(session.project, 18):<18}  ", TEXT), (f"{_clip(session.title, 36):<36}  ", MUTED),
+                             (f"{human(size)} context" if size else "", AMBER if size >= BIG_CONTEXT else MUTED))
+
+    def ticked(self) -> list[str]:
+        return list(self.query_one("#which", SelectionList).selected) if self.is_mounted else \
+            [s.session_id for s in self.stopped]
+
+    def cost(self) -> Text:
+        """What going on costs on another account, for the ticked ones."""
+        ticked = set(self.ticked())
+        total = sum(s.context for s in self.stopped if s.session_id in ticked)
+        if not total:
+            return Text("")
+        return Text.assemble(
+            "On another account each one goes on by writing its whole context into the cache again: ",
+            (f"{human(total)} tokens", f"bold {AMBER}" if total >= BIG_CONTEXT else f"bold {TEXT}"),
+            " for the ticked ones, much of a 5-hour limit at once. Handed over, a session starts afresh "
+            "with a short handover.", style=MUTED)
+
+    def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
+        self.query_one(".cost", Label).update(self.cost())
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        self.dismiss(event.option.id)
+        if event.option_list.id != "ways":
+            return
+        ticked = self.ticked()
+        if not ticked and event.option.id != "off":
+            self.notify("Tick a session first (Space, after Tab).", timeout=4)
+            return
+        self.dismiss((event.option.id, ticked))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -2426,15 +2476,23 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                                                  if limit.label in ("session", "week"))) if self.limits else ""
         room = session_limit is not None and session_limit.percent < 95
 
-        def chosen(answer: str | None) -> None:
-            if answer == "now":
-                self.armed = {sid: moment for sid, moment in self.armed.items() if sid not in {s.session_id for s in stopped}}
+        def chosen(picked: tuple[str, list[str]] | None) -> None:
+            if picked is None:
+                return
+            answer, ids = picked
+            these = [s for s in stopped if s.session_id in ids]
+            if answer in ("now", "handover"):
+                self.armed = {sid: moment for sid, moment in self.armed.items() if sid not in ids}
                 self.save_armed()
-                self.continue_these(stopped)
+                if answer == "now":
+                    self.continue_these(these)
+                else:  # from the transcript: the old context is not sent again on the new account
+                    for session in these:
+                        self.open_handover(session, how="transcript")
                 return
             if answer == "lift":
-                self.armed = {s.session_id: s.resets or datetime.now() for s in stopped}
-                self.notify(f"{len(stopped)} {'session continues' if len(stopped) == 1 else 'sessions continue'} "
+                self.armed = {s.session_id: s.resets or datetime.now() for s in these}
+                self.notify(f"{len(these)} {'session continues' if len(these) == 1 else 'sessions continue'} "
                             f"{when}, when the limit lifts. Leave the dashboard open.", timeout=8)
             elif answer == "off":
                 self.armed.clear()
@@ -2446,8 +2504,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.update_row(session)
             self.update_detail()
 
-        self.push_screen(LimitDialog(len(stopped), when, all(s.session_id in self.armed for s in stopped), plan,
-                                     room), chosen)
+        self.push_screen(LimitDialog(stopped, when, all(s.session_id in self.armed for s in stopped), plan, room),
+                         chosen)
 
     def continue_these(self, stopped: list[Session]) -> None:
         """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt

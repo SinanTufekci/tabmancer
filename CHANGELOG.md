@@ -15,6 +15,10 @@
   line of its own; the footer's keys sit two cells apart where they fit; the column with an open
   session's context is headed Context; a team's row puts each member's sign before its name; the
   stats' bars stand apart.
+- **What going on costs, said.** `c` lists the sessions stopped at a limit with how full each
+  one's context is and what going on with the ticked ones costs on another account (each
+  writes its whole context into the new account's cache), goes on with the ticked ones only,
+  or hands them over to fresh sessions, the cheap way on.
 - **Signed in again, on at once.** A session stopped at a usage limit in which you sign in with
   another account (`/login`) says so (`◐ signed in again`): `c` continues it now, and one waiting
   for its limit to lift goes on right away. The `/login` used to be taken for how it ended, and the

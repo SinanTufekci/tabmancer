@@ -18,10 +18,15 @@
 | × connection lost | the connection to the API dropped, so the reply never came |
 
 A session stopped at a usage limit says when the limit lifts, whether it is still open or
-not, and does not count as waiting for you. `c` asks what to do with all of them:
+not, and does not count as waiting for you. `c` lists them, each with how full its context is,
+and asks what to do with the ticked ones (all to begin with; `Tab` to the list, `Space` ticks):
 
 - **Continue them now.** For when you have signed in with another account (`/login`), or the
   limit has lifted.
+- **Hand them over.** Each starts afresh with a handover Claude writes from its transcript.
+  On another account this is the cheap way on: a session that goes on writes its whole
+  context into the new account's cache with its first reply (hundreds of thousands of tokens
+  for a big one, a large part of a 5-hour limit); a handover is a few thousand.
 - **Continue them when the limit lifts.** The dashboard has to be open at that time; the plan
   is kept if you restart it. `c` again can call it off.
 
