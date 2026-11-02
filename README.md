@@ -35,7 +35,9 @@ uv tool install tabmancer    # or: pipx install tabmancer
 tabmancer                    # the dashboard
 ```
 
-It needs Python 3.10+ and Claude Code's `claude` on your PATH. `?` lists every key and runs
+It needs Python 3.10+ and Claude Code's `claude` on your PATH. Upgrade it with
+`uv tool upgrade tabmancer` (or `pipx upgrade tabmancer`): the dashboard says when a newer
+version is out ([updating](docs/setup.md#updating)). `?` lists every key and runs
 the one you pick; the footer shows the common ones and what they do on the row you are on.
 On Windows, `tabmancer shortcut` adds a desktop shortcut and `tabmancer startup on` opens the
 picker at login when sessions were left open.
@@ -103,7 +105,8 @@ tabmancer runs on your machine and talks to no server of its own. It reads the t
 the agents already keep (`~/.claude`, `~/.codex`, `~/.gemini`) and asks the `claude` CLI
 which sessions are open and how full your plan limits are (`/usage`, a local command). It
 reads which account you are signed in with (its email and plan) from `~/.claude.json` and
-Codex's `auth.json`, to show it in the top bar. A model
+Codex's `auth.json`, to show it in the top bar. Once a day it asks PyPI which version of
+tabmancer is the latest, to tell you of a newer one (`tabmancer updates off` stops it). A model
 is called only when you ask for one, through your own CLI
 and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats). It types into
 an open session only when you have it continue the ones stopped at a usage limit (`c`).

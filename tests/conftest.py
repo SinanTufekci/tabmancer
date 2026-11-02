@@ -54,6 +54,9 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "open_tabs", lambda launches: [])
     monkeypatch.setattr(app_module, "run_in_background", no_background)
     monkeypatch.setattr(toast, "show", lambda title, body, dashboard: toast.FAILED)  # no real toasts
+    from tabmancer import updates
+
+    monkeypatch.setattr(updates, "ask_pypi", lambda timeout=5: None)  # never PyPI
     monkeypatch.setenv("TABMANCER_CONFIG_DIR", str(tmp_path / "tabmancer-config"))
     # An empty ~/.claude unless a test builds one: never read the real transcripts.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-home"))

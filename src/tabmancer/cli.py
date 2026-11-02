@@ -86,6 +86,8 @@ def main(argv: list[str] | None = None) -> None:
     teaming.add_argument("members", help='"name: area @model; name: area" (the model is optional)')
     telling = sub.add_parser("notifications", help="desktop notifications when a session wants you back")
     telling.add_argument("action", nargs="?", choices=["on", "off", "test"])
+    checking = sub.add_parser("updates", help="say when a newer tabmancer is out (PyPI, once a day): on or off")
+    checking.add_argument("action", nargs="?", choices=["on", "off"])
     # What the login shortcut runs when there is no windowless gui launcher.
     sub.add_parser("startup-run", help="(used by the login shortcut)")
     args = parser.parse_args(argv)
@@ -130,6 +132,8 @@ def main(argv: list[str] | None = None) -> None:
         manage_startup(args.action)
     elif args.command == "notifications":
         manage_notifications(args.action)
+    elif args.command == "updates":
+        manage_updates(args.action)
     elif args.command == "team":
         sys.exit(add_to_team(args.team, args.members))
     elif args.command == "startup-run":
@@ -228,6 +232,28 @@ def manage_notifications(action: str | None) -> None:
         return
     print(f"Desktop notifications are {'on' if toast.enabled() else 'off'}: a session that stops working "
           "and waits for you, or stops at a usage limit, is told outside the dashboard too.")
+
+
+def manage_updates(action: str | None) -> None:
+    from . import __version__, updates
+
+    if action in ("on", "off"):
+        updates.set_enabled(action == "on")
+    if not updates.enabled():
+        print(f"tabmancer {__version__}. The update check is off: the dashboard never asks PyPI for a "
+              "newer version (tabmancer updates on turns it on).")
+        return
+    command = updates.upgrade_command()
+    if command is None:
+        print(f"tabmancer {__version__}, run from its source: git pull brings it up to date.")
+        return
+    found = updates.latest()
+    if found and updates.newer(found):
+        print(f"tabmancer {__version__}; {found} is out. To upgrade: {command}")
+    else:
+        print(f"tabmancer {__version__}" + (", the latest." if found else ": PyPI did not answer.")
+              + " The dashboard asks PyPI once a day and says when a newer one is out "
+              "(tabmancer updates off turns that off).")
 
 
 def manage_continue_prompt(text: str | None, reset: bool) -> None:

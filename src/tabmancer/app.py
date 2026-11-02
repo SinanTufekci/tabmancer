@@ -28,6 +28,7 @@ from textual.widgets import DataTable, Input, Label, OptionList, Sparkline, Stat
 from textual.widgets.option_list import Option
 
 from . import (
+    __version__,
     accounts,
     background,
     clis,
@@ -46,6 +47,7 @@ from . import (
     toast,
     tokens,
     typein,
+    updates,
     usage,
     workspaces,
 )
@@ -150,6 +152,7 @@ TIMER_THREADS = 64  # Windows: a thread for every timer at once, the team view's
 USAGE_SECONDS = 300  # plan limits change slowly; `claude -p /usage` is cheap but not free
 TOKENS_SECONDS = 60  # token counts: only what transcripts gained since the last count is read
 ACCOUNTS_SECONDS = 5  # who the CLIs are signed in as: /login in any session switches it
+UPDATES_SECONDS = 6 * 3600  # a dashboard left open for days hears of a new tabmancer (PyPI: once a day)
 GIT_SECONDS = 60  # where each project's folder stands in git (git status: local, no network)
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
@@ -493,6 +496,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.waiting_turn = 0  # j goes round the sessions waiting for you
         self.armed: dict[str, datetime] = {}  # c: session id -> when it continues (its limit lifts)
         self.told_limit: set[str] = set()  # sessions Bit has said are stopped at a limit
+        self.told_update: str | None = None  # the newer tabmancer already told of
         self.limited: set[str] = set()  # the sessions at a limit when the footer last heard of it
         self.search = search.Index.load()  # what was said in each session, for the filter
         self.search_version = 0  # goes up when the index has read more
@@ -596,6 +600,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.set_interval(TOKENS_SECONDS, self.refresh_tokens)
         self.show_accounts()
         self.set_interval(ACCOUNTS_SECONDS, self.show_accounts)
+        self.check_updates()
+        self.set_interval(UPDATES_SECONDS, self.check_updates)
         armed = saved.get("continue_at_reset") if isinstance(saved, dict) else None
         for sid, moment in (armed.items() if isinstance(armed, dict) else ()):
             try:
@@ -2071,6 +2077,22 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """The accounts in the top bar, beside the plan limits: read from the CLIs' own files, again
         only when they changed."""
         self.topbar.show_accounts(accounts.signed_in())
+
+    @work(thread=True, exclusive=True, group="updates")
+    def check_updates(self) -> None:
+        """A newer tabmancer on PyPI (updates.news: asked once a day at most), told once."""
+        found = updates.news()
+        if found and found[0] != self.told_update:
+            self.call_from_thread(self.tell_update, *found)
+
+    def tell_update(self, version: str, command: str) -> None:
+        """A newer tabmancer: beside the name in the top bar while the dashboard is open, and once in
+        a note with the command that upgrades it, which Bit announces too."""
+        self.told_update = version
+        self.topbar.put("brand", Text.assemble("◆ tabmancer", (f"  ↑ {version}", f"bold {GREEN}")))
+        self.notify(f"tabmancer {version} is out (you have {__version__}). To upgrade: {command}",
+                    title="A newer tabmancer", timeout=30)
+        self.mascot.say(f"tabmancer {version} is out!", GREEN, seconds=8)
 
     def show_usage(self, limits: list[usage.Limit]) -> None:
         self.limits = limits

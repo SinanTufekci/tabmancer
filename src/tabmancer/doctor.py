@@ -13,7 +13,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-from . import __version__, accounts, clis, sixel, summarize, tokens, workspaces
+from . import __version__, accounts, clis, sixel, summarize, tokens, updates, workspaces
 from .config import config_dir, read_json
 from .launch import clean_env, terminal_kind
 from .mascot import way_of
@@ -104,7 +104,7 @@ def missing_from_cli(claude: str) -> list[str] | None:
 
 
 def checks() -> list[Result]:
-    found: list[Result] = []
+    found: list[Result] = [update_check()]
     claude = shutil.which("claude")
     if claude:
         found.append(version_check(_claude_version(claude) or claude))
@@ -165,6 +165,19 @@ def checks() -> list[Result]:
     found.append(("ok", (f"Own files in {config_dir()}: {len(workspaces.load())} workspaces, "
                          f"{len(summarize.load_cache())} summaries, {cached} cached sessions.")))
     return found
+
+
+def update_check() -> Result:
+    """tabmancer's own version, and whether a newer one is out (updates: PyPI, once a day)."""
+    if not updates.enabled():
+        return "ok", f"tabmancer {__version__} (the update check is off: tabmancer updates on)."
+    command = updates.upgrade_command()
+    if command is None:
+        return "ok", f"tabmancer {__version__}, run from its source (git pull updates it)."
+    found = updates.latest()
+    if found and updates.newer(found):
+        return "warn", f"tabmancer {__version__}; {found} is out. To upgrade: {command}"
+    return "ok", f"tabmancer {__version__}" + (", the latest." if found else " (PyPI did not answer).")
 
 
 def bit_check() -> Result:

@@ -293,6 +293,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         summarize,
         toast,
         typein,
+        updates,
         usage,
     )
     from . import app as app_module
@@ -341,6 +342,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         (summarize, "ask", answer),
         (usage, "read_usage", lambda: list(limits)),
         (usage, "read_codex", lambda now=None: []),
+        (updates, "news", lambda now=None, ask=None: None),  # PyPI is not asked for a newer tabmancer
         (agy, "home", lambda: home / "gemini"),
         (gitstate, "read", git),
         (report, "save", lambda entry, folder=None: save_report(entry, home)),

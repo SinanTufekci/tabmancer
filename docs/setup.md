@@ -16,6 +16,26 @@ tabmancer shortcut           # Windows: adds a "tabmancer" shortcut to the deskt
 Or run `tabmancer` from any terminal. For the latest from GitHub:
 `uv tool install git+https://github.com/SinanTufekci/tabmancer`.
 
+## Updating
+
+```sh
+uv tool upgrade tabmancer    # or: pipx upgrade tabmancer
+```
+
+`uvx tabmancer@latest` runs the newest without installing it. Once a day the dashboard asks
+PyPI which version is the latest (that question only, nothing of yours goes with it), and when
+a newer one is out it says so: beside its name in the top bar and once in a note with the
+command that upgrades it the way you installed it. `tabmancer doctor` says it too.
+
+```sh
+tabmancer updates        # this version, and whether a newer one is out
+tabmancer updates off    # never ask PyPI (on again with: on); TABMANCER_UPDATE_CHECK=0 does it too
+```
+
+What changed in each version: [CHANGELOG](../CHANGELOG.md), and the
+[releases](https://github.com/SinanTufekci/tabmancer/releases) on GitHub (Watch → Custom →
+Releases tells you of each one).
+
 ## Other commands
 
 ```sh
@@ -26,6 +46,7 @@ tabmancer report         # a report of the week, written by Claude (--save)
 tabmancer --days 30      # look further back (default 14)
 tabmancer --all          # include claude -p, desktop app and IDE sessions
 tabmancer doctor         # check that everything tabmancer relies on still works
+tabmancer updates        # whether a newer tabmancer is out (off: never ask PyPI)
 tabmancer --demo         # the dashboard over made-up sessions: nothing of yours is touched
 ```
 
