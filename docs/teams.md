@@ -35,8 +35,10 @@ team view shows them join.
 
 While any of its members is open, the team heads OPEN NOW in the dashboard's own list, as
 one row: the team's name, then each member's name with a sign of what it is doing (red `●`
-when it waits for you, `!` when it needs you, Claude's turning star while it works, `▲` when
-it was cut off), what the open ones are doing in all, and the tokens it has used. When the
+when it waits for you, `!` when it needs you, Claude's turning star while it works, a grey
+`●` when it is idle, waiting for its lead, amber `◐` when it stopped at a usage limit, `▲`
+when it was cut off), what the open ones are doing in all (`● 1  ✶ 2`, with the same signs),
+and the tokens it has used. When the
 names do not fit, the quietest are counted (`+2`, red if one of them waits for you too), so
 whoever waits for you stays named. `j` goes to the next member waiting for you and shows its
 team's members. With the team's row highlighted, the preview shows who talks to whom: each

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import textwrap
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -126,7 +127,10 @@ MODE_LABEL = {Mode.RESUME: "resume", Mode.AUTO: "▶ auto", Mode.FORK: "fork", M
 # Raw states from `claude agents --json` -> label, style, sort rank (lowest first).
 LIVE_STATES = {raw: (label, TONE[tone], rank) for raw, (label, tone, rank, _) in VM.LIVE.items()}
 SPINNING = {"busy", "working"}
-TEAM_GLYPHS = {0: ("!", f"bold {RED}"), 1: ("●", RED), 2: ("✶", BLUE), 3: ("◐", AMBER)}  # a team's row, by rank
+# A team's members, counted on its row by what each does (VM.state_id), in this order: an idle one
+# grey as on its chip, ◐ only for one stopped at a usage limit, as in the list.
+TEAM_GLYPHS = {"needs-you": ("!", f"bold {RED}"), "waiting": ("●", RED), "working": ("✶", BLUE),
+               "limit": ("◐", AMBER), "idle": ("●", MUTED), "shell": ("◦", CYAN)}
 TEAM_MESSAGES_FROM = 150  # columns from which a team's preview lists its messages beside the tree
 # The sidebar's marks, said once under its projects (two lines of the sidebar's width).
 LEGEND = Text.assemble(("● ", RED), ("your turn  ", MUTED), ("● ", GREEN), ("open\n", MUTED),
@@ -1163,15 +1167,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         else:
             title = self.team_chips(state)
         if opened:
-            ranks: dict[int, int] = {}
-            for _, session in members:
-                if session.exit is Exit.RUNNING:
-                    rank = state_of(session)[2]
-                    ranks[rank] = ranks.get(rank, 0) + 1
+            doing = Counter(VM.state_id(s) for _, s in members if s.exit is Exit.RUNNING)
             status = Text()
-            for rank in sorted(ranks):
-                glyph, style = TEAM_GLYPHS.get(rank, ("●", MUTED))
-                status.append(f"{'  ' if status else ''}{glyph} {ranks[rank]}", style=style)
+            for what in sorted(doing, key=lambda s: list(TEAM_GLYPHS).index(s) if s in TEAM_GLYPHS else len(TEAM_GLYPHS)):
+                glyph, style = TEAM_GLYPHS.get(what, ("●", MUTED))
+                status.append(f"{'  ' if status else ''}{glyph} {doing[what]}", style=style)
             last = ago(state.said[-1].at) if state.said else ""
         else:
             stopped = sum(s.status in INTERRUPTED for _, s in members)
@@ -1847,8 +1847,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             return "not started", MUTED
         if session.exit is not Exit.RUNNING:
             return STATUS_LABEL[session.status]
-        label, style, rank = state_of(session)
-        glyph = TEAM_GLYPHS.get(rank, ("●", ""))[0]
+        label, style, _ = state_of(session)
+        glyph = TEAM_GLYPHS.get(VM.state_id(session), ("●", ""))[0]
         return f"{glyph} {label}", style
 
     def show_team(self, state: teamtree.TeamState) -> None:

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from rich.console import Console
 
+from tabmancer import app as app_module
 from tabmancer import sessions, teams, teamtree
 from tabmancer.app import HEADING, TEAM_ROW, SessionPicker
 from tabmancer.handoverview import HandoverDialog
@@ -119,6 +120,20 @@ async def test_a_team_heads_its_members_in_open_now(fake_home, tmp_path, monkeyp
         assert heading[1].plain == "TEAM shop" and "2 messages" in heading[2].plain
         assert "● 1" in heading[3].plain and "✶ 1" in heading[3].plain  # the lead waits, api works
         assert app.table.get_row(f"{HEADING}open")[1].plain.strip().endswith("· 3")  # open ones only
+
+
+async def test_an_idle_member_and_one_at_the_limit_have_signs_of_their_own(fake_home, tmp_path, monkeypatch):
+    shop(fake_home, tmp_path, monkeypatch)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await ready(pilot, app)
+        lead, api = app.sessions["lead-1"], app.sessions["api-1"]
+        lead.resets = datetime.now() + timedelta(hours=2)  # the lead, idle, stopped at a usage limit
+        api.live_state = "resting"  # api done for now: idle, waiting for its lead
+        status = app.team_cells(f"{TEAM_ROW}shop")[3]
+        assert status.plain == "◐ 1  ● 1"  # they shared ◐ once: an idle member looked stopped at a limit
+        assert [str(span.style) for span in status.spans] == [app_module.AMBER, app_module.MUTED]
+        assert app.member_look(lead)[0] == "◐ at the limit" and app.member_look(api)[0] == "● idle"
 
 
 async def test_e_folds_a_team_and_its_row_opens_the_team_view(fake_home, tmp_path, monkeypatch):
