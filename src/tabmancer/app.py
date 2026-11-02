@@ -725,7 +725,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def setup_columns(self) -> None:
         labels = (["", "Project", "Title", "State", "Kind", "Last activity", "ctx"] if self.live_mode
-                  else ["", "Project", "Title", "Status", "Process", "Last", "Open as"])
+                  else ["", "Project", "Title", "Status", "Context", "Last", "Open as"])
         self.table.clear(columns=True)
         for key, label in zip(("sel", "project", "title", "status", "exit", "active", "mode"), labels):
             self.table.add_column(label, key=key)
@@ -1098,13 +1098,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def heading_cells(self, key: str) -> tuple[Text, ...]:
         group = key.removeprefix(HEADING)
+        items = dict(self.groups()).get(group, [])
         # OPEN NOW counts the open ones: a team shows its closed members there too.
-        count = {name: sum(s.exit is Exit.RUNNING for s in items) if name == "open" else len(items)
-                 for name, items in self.groups()}.get(group, 0)
+        count = sum(s.exit is Exit.RUNNING for s in items) if group == "open" else len(items)
         title, style = {"open": ("OPEN NOW", f"bold {GREEN}"), "pinned": ("★ PINNED", f"bold {self.accent()}"),
                         "rest": ("EARLIER", f"bold {TEXT}")}[group]
         label = Text.assemble("\n", (title, style), (f" · {count}", MUTED))
-        return (Text(""), label, *(Text("") for _ in range(5)))
+        # The Context column shows how a closed session's process ended: said where its sessions are.
+        closed = group == "rest" or (bool(items) and all(s.exit is not Exit.RUNNING for s in items))
+        caption = Text("\nprocess", style=MUTED) if closed else Text("")
+        return (Text(""), label, Text(""), Text(""), caption, Text(""), Text(""))
 
     def refresh_rows(self) -> None:
         table = self.table

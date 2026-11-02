@@ -33,7 +33,8 @@ continuing now is offered first. Auto-continue tells Claude what stopped the ses
 shutdown, a usage limit or a dropped connection), unless you set a prompt of your own.
 
 The list keeps the open sessions under **OPEN NOW** and the rest under **EARLIER**. For an
-open session the **Process** column shows how full its context is. For a closed one it is
+open session the **Context** column shows how full its context is. For a closed one (under
+EARLIER, where the column says `process`) it shows how its process ended: it is
 empty when the Claude process closed normally (exit, a closed window or an OS shutdown;
 the preview says `clean`) and says `killed` when it died without cleaning up (a crash,
 power loss, killed from Task Manager). **Open as** is shown only when a session would not

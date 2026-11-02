@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from rich.console import Console
 
 from tabmancer import sessions
-from tabmancer.app import LIVE_STATES, STATUS_LABEL, SessionPicker
+from tabmancer.app import HEADING, LIVE_STATES, STATUS_LABEL, SessionPicker
 from tabmancer.sessions import Exit, Status
 from tabmancer.theme import AMBER, BLUE, RED, keys, keys_in
 from tabmancer.tokens import Event, Report, Tokens
@@ -108,6 +108,17 @@ async def test_cards_say_what_they_count_and_the_sidebar_marks_who_waits(fake_ho
         closed = replace(app.sessions["two"], exit=Exit.CLEAN, status=Status.CUT_OFF)
         assert str(app.cells(closed)[0]) == "[ ]"
         assert AMBER in str(app.status_cell(closed).style)
+
+
+async def test_the_context_column_says_what_it_shows_where(fake_home):
+    """Headed Process, the column showed open sessions' context; EARLIER says it shows the process."""
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: app.sessions)
+        labels = [str(column.label) for column in app.table.columns.values()]
+        assert "Context" in labels and "Process" not in labels
+        assert app.heading_cells(f"{HEADING}rest")[4].plain.strip() == "process"
+        assert app.heading_cells(f"{HEADING}open")[4].plain.strip() == ""
 
 
 def test_a_key_line_wraps_between_keys_never_inside_one():
