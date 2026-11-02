@@ -30,10 +30,16 @@ def test_shortcuts_call_windows_terminal_by_its_alias_not_its_versioned_folder(t
     assert shortcuts.picker_argv([])[0] == str(alias)
 
 
-def test_picker_argv_without_terminal_or_exe(tools):
+def test_picker_argv_without_terminal_or_exe(tools, monkeypatch):
     del tools["wt"], tools["tabmancer"]
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")  # no terminal to open a window in: the command itself
+    assert shortcuts.picker_argv([])[1:] == ["-m", "tabmancer"]
+    monkeypatch.setattr(sys, "platform", "darwin")  # on a Mac, Terminal runs it
     argv = shortcuts.picker_argv([])
-    assert argv[1:] == ["-m", "tabmancer"]
+    assert argv[0] == "osascript" and argv[-1].startswith('tell application "Terminal" to do script "')
+    assert argv[-1].endswith(' -m tabmancer"')
 
 
 def test_login_does_nothing_without_sessions_left_open(tools, monkeypatch):
