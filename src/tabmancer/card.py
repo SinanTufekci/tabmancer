@@ -47,6 +47,7 @@ _GLYPHS = {
     "!": "00100 00100 00100 00100 00100 00000 00100", "?": "01110 10001 00001 00010 00100 00000 00100",
     "#": "01010 01010 11111 01010 11111 01010 01010", "&": "01100 10010 10100 01000 10101 10010 01101",
     "–": "00000 00000 00000 11111 00000 00000 00000", "_": "00000 00000 00000 00000 00000 00000 11111",
+    "~": "00000 00000 01000 10101 00010 00000 00000",
 }
 FONT: dict[str, list[str]] = {char: rows.split() for char, rows in _GLYPHS.items()}
 
@@ -93,9 +94,9 @@ class Canvas:
             if edge < radius:
                 off = radius - edge - 0.5
                 cut = radius - int((radius * radius - off * off) ** 0.5 + 0.5)
-            row = self.rows[y + dy]
-            for px in range(max(0, x + cut), min(self.width, x + width - cut)):
-                row[px] = n
+            left, right = max(0, x + cut), min(self.width, x + width - cut)
+            if right > left:  # a slice at a time: the story card's panel is close to a million pixels
+                self.rows[y + dy][left:right] = bytes([n]) * (right - left)
 
     def text(self, x: int, y: int, text: str, colour: Colour, size: int = 1) -> int:
         """Capitals at (x, y), their top left; a character the font has not drawn is left a gap.

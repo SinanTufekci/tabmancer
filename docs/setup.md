@@ -43,7 +43,7 @@ tabmancer list           # print recent sessions; * marks the ones open at the l
 tabmancer list --json    # the same as JSON
 tabmancer stats          # tokens, working hours, tools and limits (--json, --csv)
 tabmancer report         # a report of the week, written by Claude (--save)
-tabmancer wrapped        # your week as a picture to share, in Downloads (--out); off: no word on Fridays
+tabmancer wrapped        # your week as a picture to share, in Downloads (--out, --story, --share x); off: no word on Fridays
 tabmancer --days 30      # look further back (default 14)
 tabmancer --all          # include claude -p, desktop app and IDE sessions
 tabmancer doctor         # check that everything tabmancer relies on still works

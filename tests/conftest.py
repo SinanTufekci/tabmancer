@@ -54,6 +54,13 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "open_tabs", lambda launches: [])
     monkeypatch.setattr(app_module, "run_in_background", no_background)
     monkeypatch.setattr(toast, "show", lambda title, body, dashboard: toast.FAILED)  # no real toasts
+    from tabmancer import share
+
+    monkeypatch.setattr(share, "open_page", lambda address: None)  # never a real browser
+    monkeypatch.setattr(share, "reveal", lambda path: None)  # nor a real folder window
+    from tabmancer import card
+
+    monkeypatch.setattr(card, "copy_picture", lambda canvas: False)  # nor your clipboard
     from tabmancer import updates
 
     monkeypatch.setattr(updates, "ask_pypi", lambda timeout=5: None)  # never PyPI

@@ -96,6 +96,9 @@ def main(argv: list[str] | None = None) -> None:
                                               "on or off: the dashboard's word on Fridays")
     wrapping.add_argument("action", nargs="?", choices=["on", "off"])
     wrapping.add_argument("--out", help="where to save the picture (default: Downloads)")
+    wrapping.add_argument("--story", action="store_true", help="the tall card for stories (1080x1920), not the wide one")
+    wrapping.add_argument("--share", choices=["x", "bluesky", "threads", "instagram"],
+                          help="save and copy the card, and open a new post there with the words in it")
     # What the login shortcut runs when there is no windowless gui launcher.
     sub.add_parser("startup-run", help="(used by the login shortcut)")
     args = parser.parse_args(argv)
@@ -143,7 +146,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "updates":
         manage_updates(args.action)
     elif args.command == "wrapped":
-        save_wrapped(args.action, args.out)
+        save_wrapped(args.action, args.out, "story" if args.story else "wide", args.share)
     elif args.command == "team":
         sys.exit(add_to_team(args.team, args.members))
     elif args.command == "startup-run":
@@ -366,11 +369,12 @@ def print_report(days: float, save: bool) -> None:
         print(f"Saved {report.save(entry)}", file=sys.stderr)
 
 
-def save_wrapped(action: str | None, out: str | None) -> None:
-    """Claude Code Wrapped: the last seven days saved as a picture; on/off: the Friday word."""
+def save_wrapped(action: str | None, out: str | None, shape: str = "wide", where: str | None = None) -> None:
+    """Claude Code Wrapped: the last seven days saved as a picture, or taken where it is shared;
+    on/off: the Friday word."""
     from pathlib import Path
 
-    from . import card, tokens, wrapped
+    from . import card, share, tokens, wrapped
     from .theme import DEFAULT_THEME, THEMES
 
     if action:
@@ -380,18 +384,28 @@ def save_wrapped(action: str | None, out: str | None) -> None:
         return
     week = wrapped.week(tokens.collect(14), {s.session_id: s for s in find_sessions(14, include_all=True, quick=True)})
     accent = THEMES[DEFAULT_THEME][1].lstrip("#")
-    canvas = wrapped.draw(week, (int(accent[0:2], 16), int(accent[2:4], 16), int(accent[4:6], 16)))
+    colour = (int(accent[0:2], 16), int(accent[2:4], 16), int(accent[4:6], 16))
     target = Path(out).expanduser() if out else None
+    name, why = wrapped.persona(week)
+    if where:
+        place = next(p for p in share.PLACES if p.label.lower() == where)
+        folder = target if target is not None and target.suffix.lower() != ".png" else None
+        done = share.share(place, week, colour, folder)
+        print(f"Claude Code Wrapped, {wrapped.span(week).lower()}: saved as {done.path}\n{done.note}")
+        return
+    canvas = wrapped.draw(week, colour, shape=shape)
     if target is not None and target.suffix.lower() != ".png":  # a folder
-        path = card.save(canvas, wrapped.filename(week), target)
+        path = card.save(canvas, wrapped.filename(week, shape), target)
     elif target is not None:
         target.write_bytes(canvas.png())
         path = target
     else:
-        path = card.save(canvas, wrapped.filename(week))
+        path = card.save(canvas, wrapped.filename(week, shape))
     print(f"Claude Code Wrapped, {wrapped.span(week).lower()}: saved as {path}")
+    print(f"  I'm {name.title()}: {why.lower()}")
     for what, number, note in wrapped.tiles(week):
-        print(f"  {what.lower():<14}{number:<12}{note.lower()}")
+        print(f"  {what.lower():<17}{number:<14}{note.lower()}")
+    print(f"\nTo post it: tabmancer wrapped --share x (or bluesky, threads, instagram). The words:\n{wrapped.words(week)}")
 
 
 def print_stats(days: float, as_json: bool, as_csv: bool) -> None:

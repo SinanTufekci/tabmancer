@@ -67,10 +67,8 @@ picker at login when sessions were left open.
   as its first message.
 - **Counts.** Tokens, when you work, tools and files, plan limits with a forecast, and a
   written report of the week to share.
-- **Wraps your week up.** Claude Code Wrapped: on Fridays the dashboard says your week is
-  ready, and `W` shows it as a card to share (tokens, time at work, how many sessions worked
-  side by side, the ones brought back where they left off), in pixels like Bit; `s` saves it
-  as a picture, `c` copies it. Counts only: no project names.
+- **Wraps your week up.** [Claude Code Wrapped](#claude-code-wrapped): your week as a card to
+  post on X, Bluesky, Threads or your Instagram story.
 - **Finds.** `/` finds a session by anything you or Claude said in it.
 - **Codex and Antigravity too**, if you use them.
 
@@ -78,6 +76,27 @@ picker at login when sessions were left open.
 status means, every key, writing to a session, background sessions, workspaces) ·
 [teams](docs/teams.md) · [handing over](docs/handover.md) · [stats and reports](docs/stats.md) ·
 [setup and commands](docs/setup.md) · [how it works](docs/how-it-works.md)
+
+## Claude Code Wrapped
+
+<p align="center">
+  <img src="docs/wrapped.png" alt="A Claude Code Wrapped card from the demo: I'm the Comeback Kid, 4 sessions brought back; 55.8M tokens, 14h 14m at work over 7 days, 13 sessions, 4 side by side, Claude wrote about 8 novels; Bit in confetti and the tokens of each day" width="64%">
+  <img src="docs/wrapped-story.png" alt="The same week as a story card: every number, the models used, the longest session, the top tool and the hours of the day the work was done in" width="20%">
+</p>
+
+Your week with Claude Code as a card worth posting, drawn in pixels like Bit. On Fridays Bit
+says it is ready, and `W` shows it any day: who the week made you (the Conductor, the Night
+Owl, the Marathoner, the Comeback Kid and more, each with the number behind it), the tokens
+against last week, the time at work, the sessions side by side, what Claude wrote in novels'
+worth, the files edited, the models, the longest session and the hours you worked. `f` turns it
+into a story card. `p` shares it: X, Bluesky or Threads open a new post with the words already
+written and the card on your clipboard to paste in; for Instagram the story card is saved and
+its folder opened, to send to your phone. Nothing is posted until you post it, and the card
+holds counts only: no project names, nothing said in a session.
+
+```sh
+tabmancer wrapped --share x    # or bluesky, threads, instagram; --story saves the tall card
+```
 
 ## Keys
 
@@ -94,7 +113,7 @@ status means, every key, writing to a session, background sessions, workspaces) 
 | `h` | hand a session over to a fresh one |
 | `c` | continue the sessions stopped at a usage limit |
 | `u` | stats |
-| `W` | Claude Code Wrapped: your week as a card to share |
+| `W` | Claude Code Wrapped: your week as a card; `p` shares it, `f` makes it a story |
 | `?` | every key, explained; `Enter` runs the one picked |
 
 [All the keys](docs/using.md#keys).
@@ -124,6 +143,8 @@ tabmancer is the latest, to tell you of a newer one (`tabmancer updates off` sto
 is called only when you ask for one, through your own CLI
 and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats). It types into
 an open session only when you have it continue the ones stopped at a usage limit (`c`).
+Sharing your week's card (`p` on it) opens the platform's own page for a new post in your
+browser, with the words written in: you post it, or not.
 Nothing is sent anywhere else, and there is no telemetry.
 
 ## Trademarks

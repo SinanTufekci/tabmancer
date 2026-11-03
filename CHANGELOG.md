@@ -8,6 +8,14 @@
   session at your default effort, so tabmancer gives the sessions it opens with an effort their
   id and passes that effort again when it resumes, forks or hands them over. The preview has a
   Model row.
+- **Claude Code Wrapped, to post.** The card now says who the week made you (the Conductor,
+  the Night Owl, the Early Bird, the Weekend Warrior, the Marathoner, the Comeback Kid, the
+  Steady Hand, the Toolsmith, or the Builder), with the number behind it, and what Claude wrote
+  in novels' worth. A story card (1080x1920, `f`) adds the files edited, the models, the longest
+  session, the top tool and the hours of the day you worked. `p` shares it: X, Bluesky or Threads
+  open a new post with the words in it and the card on the clipboard to paste; for Instagram the
+  story card is saved and its folder opened. `tabmancer wrapped --story` and `--share`. On the
+  wide card the top tool gave its place to what Claude wrote; it is on the story card.
 
 ## 0.1.2
 

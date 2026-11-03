@@ -88,20 +88,56 @@ count stays current every minute at next to no cost.
 
 ## Claude Code Wrapped
 
-Your last seven days as a card to share, drawn in pixels like Bit: the tokens and how they
-compare with the week before, the time at work, the sessions and in how many projects, how
-many worked **side by side** at most (each in its own tab, at work at the same time), the
-sessions tabmancer **brought back** where they left off (opened again, or told to carry on,
-after a reboot or a usage limit) and the tool called most, with a bar for each day.
+Your last seven days as a card to share, drawn in pixels like Bit.
+
+**Who the week made you.** Across the top, a name and the number behind it, the strongest of
+these, each against the bar it has to clear: *the Conductor* (4 or more sessions at work at
+once), *the Night Owl* (30% of the time at work between 22:00 and 5:00), *the Early Bird* (25%
+before 9:00), *the Weekend Warrior* (35% on Saturday and Sunday), *the Marathoner* (one session
+at work for 4 hours or more), *the Comeback Kid* (3 or more sessions brought back), *the Steady
+Hand* (7 days in a row), *the Toolsmith* (10,000 tool calls). None cleared: *the Builder*. The
+shares need 2 hours at work to count.
+
+**The numbers.** The tokens and how they compare with the week before; the time at work; the
+sessions and in how many projects; how many worked **side by side** at most (each in its own
+tab, at work at the same time); what **Claude wrote**, its output tokens (its thinking among
+them) and what that comes to in novels (about 120,000 tokens a novel of 90,000 words) or pages;
+the **files edited** and the tool calls; the **models** it ran on, by share of the tokens; the
+sessions tabmancer **brought back** where they left off (opened again, or told to carry on after
+a reboot or a usage limit), or else the days at work in a row, or else the busiest day; the
+**longest session** (its time at work in the week); and the tool called most.
+
+**Two shapes.** The wide card (1200x675, for posts) has the name, Bit, a bar for each day and
+six of the numbers, roomy enough to read at half size in a feed. The story card (1080x1920, for
+Instagram and other stories; `f` turns the card) has all of them and a bar for each hour of the
+day: when you worked.
 
 On Fridays from noon, or the first time the dashboard is open over the weekend after, Bit
-says your week is ready, once a week. `W` shows the card at any time: `s` saves it as a
-1200x675 PNG in your Downloads, `c` copies it to paste where you share it. In a terminal
-that draws no pictures, its numbers are shown in words; `s` still saves the picture.
+says your week is ready, once a week. `W` shows the card at any time: `s` saves it as a PNG in
+your Downloads, `c` copies it. In a terminal that draws no pictures (or a window too small for
+the story card), its numbers are shown in words; `s` still saves the picture.
+
+**Sharing it.** `p` lists the places, and a letter goes straight there:
+
+| Key | Place | What happens |
+|---|---|---|
+| `x` | X | the wide card saved and copied; a new post opens in your browser with the words in it; paste the card in (`Ctrl+V`) |
+| `b` | Bluesky | the same, in Bluesky's new post |
+| `t` | Threads | the same, in Threads' new post |
+| `i` | Instagram | the story card saved and copied, and its folder opened, with instagram.com: Instagram has no link for a new post, and stories are mostly posted from the phone |
+| `w` | the words | copies what the post says, for anywhere else |
+
+The words say the week in a line and the name it gave you, with `#ClaudeCodeWrapped` and where
+the card comes from; they fit X's 280 characters and Bluesky's 300. No platform takes a
+picture through a link, which is why the card goes on the clipboard. Nothing is posted until you
+post it. LinkedIn is not in the list: it has no documented way to start a post with words in it
+(save the card with `s` and copy the words with `p` `w`).
 
 ```sh
-tabmancer wrapped                 # save this week's card (--out a folder or a .png)
-tabmancer wrapped off             # no word on Fridays (on again with: on)
+tabmancer wrapped                  # save this week's card (--out a folder or a .png)
+tabmancer wrapped --story          # the story card
+tabmancer wrapped --share x        # or bluesky, threads, instagram
+tabmancer wrapped off              # no word on Fridays (on again with: on)
 ```
 
 The card holds counts only: no project names, no titles, nothing said in a session. The

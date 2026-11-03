@@ -289,6 +289,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         rename,
         report,
         sessions,
+        share,
         stats,
         summarize,
         toast,
@@ -347,6 +348,9 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         (gitstate, "read", git),
         (report, "save", lambda entry, folder=None: save_report(entry, home)),
         (stats, "write_files", lambda numbers, listed, folder=None: save_stats(numbers, listed, home)),
+        # The made-up week is not posted anywhere: the page that would open is only named.
+        (share, "open_page", lambda address: tell(f"Nothing opens in the demo. For real, this would: {address[:120]}")),
+        (share, "reveal", lambda path: None),
     ]
 
 

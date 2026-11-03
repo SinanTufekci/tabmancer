@@ -21,6 +21,11 @@
   Counted from the session files on disk; no model call.
 - **A report to share.** Claude writes up what got done and what is open in each
   project over the week, with the numbers, as Markdown you can paste anywhere.
+- **Claude Code Wrapped.** Your week as a card to post: who it made you (the Conductor, the
+  Night Owl, the Marathoner...), the tokens against last week, the time at work, sessions side
+  by side, what Claude wrote in novels' worth, the models, the hours you worked; wide for posts,
+  tall for stories. `p` opens a new post on X, Bluesky or Threads with the words in it and the
+  card on your clipboard, or saves the story card for Instagram.
 - **Find any conversation.** `/` finds a session by anything you or Claude said in it,
   and the preview shows where.
 - **Where each project stands in git.** `±` in the sidebar when a project's folder has

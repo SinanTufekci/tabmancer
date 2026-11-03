@@ -27,8 +27,11 @@ def home(tmp_path, monkeypatch):
 def test_the_font_draws_every_character_the_card_writes_and_a_letter_as_it_looks():
     week = wrapped.Week(date(2026, 12, 29), date(2027, 1, 4), 12_345_678, 1_000_000, 50_000.0, 6, 31, 12, 7,
                         (1, 9000.0), ("mcp__kicad__run_drc (MCP)", 1234), 9, 1, [5, 0, 3, 9, 1, 7, 2])
-    written = [wrapped.span(week), "CLAUDE CODE WRAPPED", "MY WEEK · ", "TOKENS A DAY", "MTWTFSS",
-               "TABMANCER · GITHUB.COM/SINANTUFEKCI/TABMANCER", *(part for tile in wrapped.tiles(week) for part in tile)]
+    week.models, week.output, week.files, week.calls = [("opus", 0.86), ("sonnet", 0.11), ("haiku", 0.03)], 991_000, 35, 432
+    personas = [persona for sample in persona_weeks() for persona in wrapped.persona(sample)]
+    written = [wrapped.span(week), "CLAUDE CODE WRAPPED", "I'M ", "TOKENS A DAY", "MTWTFSS", "WHEN I WORKED",
+               "0 6 12 18", wrapped.TAG, "TABMANCER · " + wrapped.REPO, *personas,
+               *(part for tile in wrapped.tiles(week) for part in tile)]
     missing = {char for words in written for char in words.upper()} - set(card.FONT)
     assert not missing
     canvas = card.Canvas(20, 20, (0, 0, 0))
@@ -109,19 +112,79 @@ def test_the_numbers_say_what_they_compare_with():
     assert tiles[1] == ("AT WORK", "1 MIN", "OVER 1 DAY")  # not 1M, which beside the tokens reads as a million
     week.seconds = 3 * 3600 + 5 * 60
     assert wrapped.tiles(week)[1][1] == "3H 05M"
-    assert tiles[4] == ("BUSIEST DAY", "-", "") and tiles[5] == ("TOP TOOL", "-", "")
+    assert tiles[4] == ("CLAUDE WROTE", "-", "") and tiles[6] == ("MODELS", "-", "")
+    assert tiles[7] == ("BUSIEST DAY", "-", "") and tiles[9] == ("TOP TOOL", "-", "")
     week.before, week.brought_back, week.carried_on = 0, 2, 1
-    assert wrapped.tiles(week)[0][2] == "NEW THIS WEEK" and wrapped.tiles(week)[4][2] == "1 ON ITS OWN"
+    assert wrapped.tiles(week)[0][2] == "NEW THIS WEEK" and wrapped.tiles(week)[7][2] == "1 ON ITS OWN"
     week.before = 100
     assert wrapped.tiles(week)[0][2] == "+100% ON LAST WEEK"
+    week.brought_back, week.streak = 0, 5  # nothing brought back: a streak, when there is one
+    assert wrapped.tiles(week)[7] == ("STREAK", "5 DAYS", "AT WORK IN A ROW")
+    week.output, week.files, week.calls = 991_000, 35, 432
+    week.models = [("opus", 0.86), ("sonnet", 0.11), ("haiku", 0.004)]
+    tiles = wrapped.tiles(week)
+    assert tiles[4] == ("CLAUDE WROTE", "991K", "~8 NOVELS") and tiles[5] == ("FILES EDITED", "35", "432 TOOL CALLS")
+    assert tiles[6] == ("MODELS", "OPUS 86%", "SONNET 11%")  # under one percent is left out
+    assert wrapped.worth(30_000) == "~75 PAGES" and wrapped.worth(0) == "" and wrapped.worth(100_000) == "~1 NOVEL"
+
+
+def persona_weeks() -> list[wrapped.Week]:
+    """A week for each name, and the builder's."""
+    def plain(**more) -> wrapped.Week:
+        week = wrapped.Week(date(2026, 10, 28), date(2026, 11, 3), 1000, None, 3600.0, 2, 3, 2, 1, None, None, 0, 0,
+                            [0] * 7)
+        for name, value in more.items():
+            setattr(week, name, value)
+        return week
+
+    def hours(**at) -> list[float]:
+        out = [0.0] * 24
+        for hour, seconds in at.items():
+            out[int(hour[1:])] = seconds
+        return out
+
+    return [plain(at_once=5), plain(hours=hours(h23=3 * 3600, h14=3600)), plain(hours=hours(h6=2 * 3600, h14=3600)),
+            plain(hours=hours(h14=3 * 3600), weekend=2 * 3600), plain(longest=5 * 3600), plain(brought_back=4),
+            plain(streak=9), plain(calls=12_500), plain(), plain(sessions=0)]
+
+
+def test_the_week_gets_a_name_from_its_numbers_and_the_post_says_it():
+    names = [wrapped.persona(week) for week in persona_weeks()]
+    assert names == [
+        ("THE CONDUCTOR", "5 SESSIONS AT WORK AT ONCE"), ("THE NIGHT OWL", "75% OF THE WORK AT NIGHT"),
+        ("THE EARLY BIRD", "67% OF THE WORK BEFORE 9:00"), ("THE WEEKEND WARRIOR", "67% OF THE WORK ON THE WEEKEND"),
+        ("THE MARATHONER", "ONE SESSION AT WORK FOR 5H 00M"), ("THE COMEBACK KID", "4 SESSIONS BROUGHT BACK"),
+        ("THE STEADY HAND", "9 DAYS IN A ROW"), ("THE TOOLSMITH", "12,500 TOOL CALLS"),
+        ("THE BUILDER", "3 SESSIONS IN 2 PROJECTS"), ("THE WELL RESTED", "NO SESSIONS THIS WEEK")]
+    week = persona_weeks()[0]
+    week.tokens, week.seconds = 55_757_442, 51_266.0
+    post = wrapped.words(week)
+    assert post.startswith("My week with Claude Code: 55.8M tokens, 14h 14m at work, 5 sessions side by side. "
+                           "I'm The Conductor. #ClaudeCodeWrapped")
+    assert post.endswith("https://github.com/SinanTufekci/tabmancer") and len(post) <= 280  # X's limit; Bluesky's is 300
+
+
+def test_time_at_work_by_hour_counts_side_by_side_sessions_once():
+    start = datetime(2026, 11, 1, 23, 0).timestamp()  # a Sunday night
+    spans = {"a": [[start, start + 3600]], "b": [[start + 1800, start + 5400]]}
+    hours, weekend, longest = wrapped.at_work(spans)
+    assert hours[23] == 3600 and hours[0] == 1800 and sum(hours) == 5400  # the half hour both worked, once
+    assert weekend == 3600 and longest == 3600  # Monday's half hour is not the weekend
+    assert wrapped.most_at_once(spans) == 2
+    assert wrapped.in_a_row([0, 5, 5, 5, 0], 4) == 3  # today not begun: the run to yesterday
+    assert wrapped.in_a_row([5, 0, 5, 5, 5], 4) == 3 and wrapped.in_a_row([5, 5, 0], 2) == 2
+    assert wrapped.in_a_row([0, 0, 5, 0, 0], 4) == 0
 
 
 def test_the_card_is_drawn_at_a_size_of_units(home):
     week = wrapped.week(T.collect(14), {}, opened=[])
     small, large = wrapped.draw(week, ACCENT, 1), wrapped.draw(week, ACCENT, 3)
     assert (small.width, small.height) == (400, 225) and (large.width, large.height) == (1200, 675)
-    assert large.rgb(16 * 3 + 1, 12 * 3 + 1) == wrapped.TEXT  # the top of the title's C, three times larger
+    assert large.rgb(16 * 3 + 1, 10 * 3 + 1) == wrapped.TEXT  # the top of the title's C, three times larger
     assert large.rgb(0, 0) == wrapped.GROUND and len(large.palette) <= 256
+    story = wrapped.draw(week, ACCENT, shape="story")
+    assert (story.width, story.height) == (1080, 1920) and len(story.palette) <= 256
+    assert wrapped.filename(week, "story").endswith("-story.png") and not wrapped.filename(week).endswith("-story.png")
 
 
 async def test_w_shows_the_card_in_pixels_saves_and_copies_it(fake_home, monkeypatch):
@@ -149,6 +212,71 @@ async def test_w_shows_the_card_in_pixels_saves_and_copies_it(fake_home, monkeyp
         assert saved == [(1200, f"claude-code-wrapped-{date.today().isoformat()}.png")] and copied == [675]
         await pilot.press("escape")
         assert not isinstance(app.screen, WrappedScreen)
+
+
+async def test_f_turns_the_card_to_a_story_and_p_takes_it_where_it_is_shared(fake_home, monkeypatch):
+    from tabmancer import bitart, share, sixel
+    from tabmancer.app import SessionPicker
+    from tabmancer.wrappedview import CardPicture, ShareMenu, WrappedScreen
+
+    monkeypatch.setattr(sixel, "_terminal", sixel.Terminal(bitart.WT_CELL))
+    saved, copied, pages, shown = [], [], [], []
+    monkeypatch.setattr(card, "save", lambda canvas, name, folder=None: saved.append((canvas.height, name)) or
+                        fake_home / name)
+    monkeypatch.setattr(card, "copy_picture", lambda canvas: copied.append(canvas.height) or True)
+    monkeypatch.setattr(share, "open_page", pages.append)
+    monkeypatch.setattr(share, "reveal", shown.append)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(160, 50)) as pilot:
+        for _ in range(80):
+            await pilot.pause(0.05)
+            if app.token_report is not None:
+                break
+        await pilot.press("W")
+        await pilot.pause(0.3)
+        screen = app.screen
+        assert isinstance(screen, WrappedScreen)
+        await pilot.press("f")  # the story: 640 design pixels down, too tall for 50 rows at three a pixel
+        picture = screen.query_one(CardPicture)
+        assert screen.shape == "story" and picture.shape == "story" and 0 < picture.unit() < 3
+        await pilot.press("s")
+        await pilot.pause(0.1)
+        assert saved[-1] == (1920, f"claude-code-wrapped-{date.today().isoformat()}-story.png")
+        await pilot.press("p")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ShareMenu) and "#ClaudeCodeWrapped" in str(app.screen.query_one("#share-words").render())
+        await pilot.press("x")  # X: the wide card, whatever the screen shows, and a new post with the words
+        await pilot.pause(0.2)
+        assert app.screen is screen and saved[-1][0] == 675 and copied[-1] == 675
+        assert pages[-1].startswith("https://x.com/intent/post?text=My+week+with+Claude+Code") and not shown
+        await pilot.press("p", "i")  # Instagram: the story card, its folder shown, instagram.com
+        await pilot.pause(0.2)
+        assert saved[-1][0] == 1920 and pages[-1] == "https://www.instagram.com/" and shown
+
+
+def test_each_place_opens_its_new_post_with_the_words_in_it():
+    from urllib.parse import parse_qs, urlparse
+
+    from tabmancer import share
+
+    words = "My week: 5 sessions & more #ClaudeCodeWrapped"
+    for key, host in (("x", "x.com"), ("b", "bsky.app"), ("t", "www.threads.com")):
+        place = next(p for p in share.PLACES if p.key == key)
+        address = urlparse(share.page(place, words))
+        assert address.netloc == host and parse_qs(address.query) == {"text": [words]}
+    assert share.page(next(p for p in share.PLACES if p.key == "i"), words) == "https://www.instagram.com/"
+
+
+def test_tabmancer_wrapped_saves_a_story_and_shares(home, tmp_path, capsys, monkeypatch):
+    from tabmancer import cli, share
+
+    pages = []
+    monkeypatch.setattr(share, "open_page", pages.append)
+    cli.main(["wrapped", "--story", "--out", str(tmp_path)])
+    assert (tmp_path / f"claude-code-wrapped-{date.today().isoformat()}-story.png").exists()
+    assert "I'm The" in capsys.readouterr().out
+    cli.main(["wrapped", "--share", "bluesky", "--out", str(tmp_path)])
+    assert pages[-1].startswith("https://bsky.app/intent/compose?text=") and "Bluesky is open" in capsys.readouterr().out
 
 
 async def test_without_pixels_the_card_is_its_numbers_in_words(fake_home):
