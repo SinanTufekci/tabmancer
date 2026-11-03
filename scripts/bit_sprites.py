@@ -19,6 +19,7 @@ from tabmancer.mascot import FPS, GREEN, Mascot
 CELL = bitart.WT_CELL
 FRAME_W, FRAME_H = bitart.size(CELL)
 SHEET_COLUMNS = 10
+GUTTER = 2  # see-through pixels between frames: scaled up, a frame's clip took in a sliver of the next
 
 
 @dataclass
@@ -69,12 +70,13 @@ def sheet(shown: list[tuple[int, tuple]]) -> Sheet:
     for _, key in shown:
         order.setdefault(key, len(order))
     rows_down = (len(order) + SHEET_COLUMNS - 1) // SHEET_COLUMNS
-    canvas = card.Canvas(SHEET_COLUMNS * FRAME_W, rows_down * FRAME_H, (0, 0, 0))
+    pitch_x, pitch_y = FRAME_W + GUTTER, FRAME_H + GUTTER
+    canvas = card.Canvas(SHEET_COLUMNS * pitch_x, rows_down * pitch_y, (0, 0, 0))
     for (pose, effects, shift), n in order.items():
         frame = bitart.Frame(pose, [bitart.Effect(*e) for e in effects])
         palette, rows = bitart.indexed(frame, CELL, shift)
-        canvas.blit((n % SHEET_COLUMNS) * FRAME_W, (n // SHEET_COLUMNS) * FRAME_H, palette, rows)
-    places = [((order[key] % SHEET_COLUMNS) * FRAME_W, (order[key] // SHEET_COLUMNS) * FRAME_H) for _, key in shown]
+        canvas.blit((n % SHEET_COLUMNS) * pitch_x, (n // SHEET_COLUMNS) * pitch_y, palette, rows)
+    places = [((order[key] % SHEET_COLUMNS) * pitch_x, (order[key] // SHEET_COLUMNS) * pitch_y) for _, key in shown]
     data = card.png(canvas.width, canvas.height, canvas.palette, canvas.rows, clear=True)
     return Sheet(data, canvas.width, canvas.height, places, [cell for cell, _ in shown])
 
