@@ -11,7 +11,9 @@ folders you have worked in), a goal and its members, one a line as `name: what t
 on`. The line-ups ready to use (feature team, bug hunt, write and review) are shown by
 name, and `Ctrl+T` goes from one to the next. The lead's line is there too: leave it, or
 change what it does. `@sonnet` (or any model Claude Code takes) at the end of a line runs
-that member on that model, a lead on Opus and the tests on Sonnet, say. Under the form,
+that member on that model, and `@low` to `@max` sets its effort: `lead @opus @xhigh`,
+`api: endpoints @opus @high`, `tests: checks it @sonnet @medium`, say. A team spends your
+limit once per member, so the routine areas are where a lighter model or effort pays. Under the form,
 what will open is spelled out as you type (the tabs and their names), or what is still
 missing. `Enter` and `Tab` go from box to box, and `Ctrl+S` starts the team. `Ctrl+L`
 keeps the members in the box as a line-up of your own, under a name; it is then among the
@@ -25,8 +27,8 @@ their sessions stay), and `s` starts them in the background again.
 Or let the lead decide: with the line-up **lead decides**, only the lead starts. It reads
 the goal, looks at the project and picks the members the work needs, up to the limit you
 set (4 unless you change it), fewer when the work is small: their names, their areas and,
-when it matters, their models. It adds them with one command,
-`tabmancer team add <team> "name: area @model; name: area"`, the only command it may run
+when it matters, their models and efforts. It adds them with one command,
+`tabmancer team add <team> "name: area @model @effort; name: area"`, the only command it may run
 without asking you (`--allowedTools=...,Bash(tabmancer team add:*)`). Each member opens in
 its own tab (or, with `Ctrl+B`, in the background) and introduces itself to the lead, and the
 team view shows them join.
@@ -65,7 +67,7 @@ Every member is an ordinary Claude Code session in its own tab, so it can be clo
 resumed and handed over like any other. Each starts with:
 
 - a name (`--name shop-api`), which is how the others address it;
-- its model (`--model sonnet`), if the line-up gave it one;
+- its model and effort (`--model sonnet --effort medium`), if the line-up gave it them;
 - its role, added to the system prompt (`--append-system-prompt`): its focus, the other
   members and who the orchestrator is;
 - a setting that lets messages from the other sessions in (`--settings`, a small file of

@@ -42,7 +42,8 @@ USES = {
     "": {
         "--resume": "reopening sessions", "--fork-session": "fork", "--continue": "workspaces",
         "--bg": "background sessions", "--print": "summaries, handovers, reports, renames, plan limits",
-        "--model": "summaries, handovers, teams", "--tools": "summaries and plan limits",
+        "--model": "summaries, handovers, teams, new sessions", "--effort": "teams, new sessions",
+        "--session-id": "new sessions with a model or effort", "--tools": "summaries and plan limits",
         "--no-session-persistence": "summaries and plan limits", "--name": "teams",
         "--append-system-prompt": "teams", "--settings": "teams", "--allowedTools": "a lead that picks its team",
         "agents": "which sessions are open", "attach": "background sessions", "stop": "background sessions",

@@ -40,6 +40,7 @@ from . import (
     handover,
     marks,
     newsessions,
+    picks,
     rename,
     search,
     sixel,
@@ -1521,6 +1522,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             grid.add_row("Team", Text.assemble((team, f"bold {self.accent()}"), (f" · {member}", TEXT)))
         if session.cli != "claude":
             grid.add_row("CLI", Text(clis.label(session.cli), style=CYAN))
+        elif model := picks.model_name(session.model):
+            effort = self.effort_of(session)
+            grid.add_row("Model", Text.assemble((model, TEXT), (f" · {effort} effort" if effort else "", MUTED)))
         if session.git_branch:
             grid.add_row("Branch", Text(f"⎇ {session.git_branch}", style=CYAN))
         state = self.git.get(folder_key(session.cwd))
@@ -1560,13 +1564,20 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                                       style=MUTED))
         return grid
 
+    def effort_of(self, session: Session) -> str:
+        """The effort a session was started with, when tabmancer knows it: a team member's own, or
+        what it was opened with from here (picks). Others ran on Claude Code's own setting."""
+        found = teams.member_of(session) if session.session_id in self.member_rows else None
+        return found[1].effort if found else picks.recall(session.session_id).effort
+
     def launch_for(self, session: Session, saved: dict[str, teams.Team] | None = None) -> Launch:
-        """How a closed session opens: a team member's as that member (teams.as_member)."""
+        """How a closed session opens: a team member's as that member (teams.as_member), one tabmancer
+        opened with an effort at that effort again (picks.resumed)."""
         mode = self.mode(session)
-        return teams.as_member(session, Launch(
+        return picks.resumed(teams.as_member(session, Launch(
             title=_clip(f"{session.project}: {session.title}", 48), cwd=session.cwd, mode=mode,
             session_id=session.session_id, cli=session.cli,
-            prompt=continue_prompt(session.status) if mode is Mode.AUTO else None), saved)
+            prompt=continue_prompt(session.status) if mode is Mode.AUTO else None), saved))
 
     # --- events and actions -------------------------------------------------------
 
@@ -1620,9 +1631,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if not answer:
                 return
             how, prompt = answer
-            launch = teams.as_member(session, Launch(
+            launch = picks.resumed(teams.as_member(session, Launch(
                 title=_clip(f"{session.project}: {session.title}", 48), cwd=session.cwd, mode=Mode.RESUME,
-                session_id=session.session_id, prompt=prompt, cli=session.cli))
+                session_id=session.session_id, prompt=prompt, cli=session.cli)))
             if how == "background" and not clis.CLIS[session.cli].can_background:
                 self.notify(f"{clis.label(session.cli)} has no background sessions: opening a tab instead.",
                             severity="warning")
@@ -2154,7 +2165,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
         def start(request: newsessions.Request | None) -> None:
             if request and request.folders:
-                self.open_sessions(newsessions.launches(request.folders, request.cli, request.message))
+                self.open_sessions(newsessions.launches(request.folders, request.cli, request.message, request.pick))
 
         self.push_screen(newsessions.NewSessions(found, ticked), start)
 

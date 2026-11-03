@@ -202,6 +202,15 @@ often the better move. Press `n`:
   gets it, so they all start working right away.
 - `Enter` opens a fresh session in each ticked folder, each in its own tab.
 - With more than one CLI on, `Ctrl+O` picks which one to start.
+- **Model** and **Effort** pick Claude Code's `--model` (opus, sonnet, haiku, fable) and
+  `--effort` (low to max) for these sessions: `Tab` to the row, `←`/`→` to change it, and a line
+  under them says what the pick is good for. Left at *your default*, nothing is passed and your
+  own Claude Code settings decide.
+
+Claude Code resumes a session on the model it ran on, but at your default effort. So a session
+opened here with an effort gets its id from tabmancer (`--session-id`), and whenever tabmancer
+resumes, forks or hands it over, it passes the same effort again. The preview's **Model** row
+shows the model a session last answered with, and the effort when tabmancer knows it.
 
 These start clean. To carry a session's work on in a fresh one, hand it over with `h`
 instead (see [Crowded sessions and handing over](handover.md#crowded-sessions-and-handing-over)).
@@ -211,6 +220,7 @@ From a shell or a script:
 ```sh
 tabmancer new web-app api-server --prompt "Run the tests and fix what fails"
 tabmancer new C:\dev\new-idea --cli codex
+tabmancer new docs-site --model sonnet --effort medium
 ```
 
 A name is matched against the projects you worked in lately; a path works anywhere.

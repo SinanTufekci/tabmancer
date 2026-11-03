@@ -25,7 +25,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import focus, summarize, teams
+from . import focus, picks, summarize, teams
 from .launch import Launch, Mode, clean_env
 from .sessions import Session, _registry_sessions, _shorten, sanitize
 
@@ -154,8 +154,8 @@ def write_itself(session: Session) -> str:
 
 
 def fresh(session: Session, handover: str) -> Launch:
-    """The fresh session: same folder and CLI, the handover as its first message, and for a team
-    member the same name and role."""
+    """The fresh session: same folder and CLI, the handover as its first message, the model and
+    effort tabmancer opened the old one with (picks), and for a team member the same name and role."""
     if len(handover) > MAX_CHARS:
         handover = (handover[:MAX_CHARS].rsplit("\n", 1)[0]
                     + "\n\n(The handover was cut here: it was too long to send. Ask for the rest if you need it.)")
@@ -164,5 +164,5 @@ def fresh(session: Session, handover: str) -> Launch:
     if role is not None:
         team, member = role
         return teams.launch(team, member, prompt=prompt)
-    return Launch(title=f"{session.project}: handed over", cwd=session.cwd, mode=Mode.NEW, session_id="",
-                  prompt=prompt, cli=session.cli)
+    return picks.fresh(Launch(title=f"{session.project}: handed over", cwd=session.cwd, mode=Mode.NEW,
+                              session_id="", prompt=prompt, cli=session.cli), picks.recall(session.session_id))

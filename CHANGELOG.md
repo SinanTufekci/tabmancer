@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Model and effort where sessions start.** The `n` dialog has Model and Effort rows (left at
+  your default, nothing is passed), `tabmancer new` takes `--model` and `--effort`, and a team's
+  line takes an effort after its model: `api: endpoints @sonnet @medium`. Claude Code resumes a
+  session at your default effort, so tabmancer gives the sessions it opens with an effort their
+  id and passes that effort again when it resumes, forks or hands them over. The preview has a
+  Model row.
+
 ## 0.1.2
 
 - **Claude Code Wrapped.** Your last seven days as a card to share, in pixels like Bit: the

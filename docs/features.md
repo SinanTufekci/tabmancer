@@ -38,8 +38,8 @@
   `c` continues them then, or right away once you have signed in with another account.
 - **Resume, fork or start fresh.** Choose per session.
 - **Fresh sessions in several projects at once.** `n` lists the projects you worked in
-  lately: tick a few, add a first message if you like, and each opens a clean session
-  in its own tab.
+  lately: tick a few, add a first message if you like, pick a model and an effort if your
+  default is not what the work needs, and each opens a clean session in its own tab.
 - **Teams.** Several sessions on one project, each with its own focus, one of them the
   orchestrator. They message each other, and you watch it happen: the team is one row of
   the list, each member a name with a sign of what it is doing, its preview shows who talks

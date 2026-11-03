@@ -12,6 +12,7 @@ from datetime import timedelta
 from . import clis, shortcuts, workspaces
 from .config import read_json, write_json
 from .launch import Launch, continue_prompt, open_tabs
+from .picks import EFFORTS, Pick
 from .sessions import find_sessions, nothing_found
 from .shutdowns import open_at_shutdown, recent_shutdowns
 
@@ -64,6 +65,9 @@ def main(argv: list[str] | None = None) -> None:
                        help="a folder path, or the name of a project you worked in lately")
     fresh.add_argument("--prompt", help="the same first message for every new session")
     fresh.add_argument("--cli", choices=list(clis.CLIS), help="which CLI to start (default: Claude Code if on)")
+    fresh.add_argument("--model", help="Claude Code's model: opus, sonnet, haiku, fable or a full name "
+                                       "(default: your own setting)")
+    fresh.add_argument("--effort", choices=list(EFFORTS), help="Claude Code's effort (default: your own setting)")
     using = sub.add_parser("clis", help="which coding CLIs' sessions to list: claude, codex, agy")
     using.add_argument("action", nargs="?", choices=["enable", "disable"])
     using.add_argument("names", nargs="*", metavar="name", help=", ".join(clis.CLIS))
@@ -83,7 +87,7 @@ def main(argv: list[str] | None = None) -> None:
     teaming = sub.add_parser("team", help="add members to a team (what a lead that decides runs)")
     teaming.add_argument("action", choices=["add"])
     teaming.add_argument("team", help="the team's name")
-    teaming.add_argument("members", help='"name: area @model; name: area" (the model is optional)')
+    teaming.add_argument("members", help='"name: area @model @effort; name: area" (model and effort are optional)')
     telling = sub.add_parser("notifications", help="desktop notifications when a session wants you back")
     telling.add_argument("action", nargs="?", choices=["on", "off", "test"])
     checking = sub.add_parser("updates", help="say when a newer tabmancer is out (PyPI, once a day): on or off")
@@ -115,7 +119,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "clis":
         manage_clis(args.action, args.names)
     elif args.command == "new":
-        start_fresh(args.folders, args.prompt, args.cli, args.days)
+        start_fresh(args.folders, args.prompt, args.cli, args.days, Pick(args.model or "", args.effort or ""))
     elif args.command == "open":
         open_workspace(args.name, args.days, args.all)
     elif args.command == "workspaces":
@@ -196,7 +200,7 @@ def add_to_team(name: str, spec: str) -> int:
         return 1
     added, note = teams.add_members(team, spec)
     if not added:
-        print(f"Nobody joined{f': {note}' if note else ''}. Write members as \"name: area @model; name: area\".")
+        print(f"Nobody joined{f': {note}' if note else ''}. Write members as \"name: area @model @effort; name: area\".")
         return 1
     team = teams.load()[team.name]  # with them on it: their roles name everyone
     joining = teams.joining(team, added)
@@ -213,7 +217,7 @@ def add_to_team(name: str, spec: str) -> int:
     else:
         leftover = open_tabs(joining)
         where = "Their tabs are opening"
-    names = ", ".join(f"{team.session_name(m)} ({m.focus or m.name}{f', {m.model}' if m.model else ''})"
+    names = ", ".join(f"{team.session_name(m)} ({m.focus or m.name}{f', {m.pick.words()}' if m.pick else ''})"
                       for m in added)
     print(f"Joined the team {team.name}: {names}. {where} and each will introduce itself to "
           f"{team.session_name(team.lead)}. Message them with SendMessage by those names.")
@@ -311,9 +315,12 @@ def print_sessions(days: float, include_all: bool, as_json: bool) -> None:
         print("\n* looked open at the last shutdown")
 
 
-def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: float) -> None:
+def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: float, pick: Pick | None = None) -> None:
     from . import newsessions
 
+    cli = cli or newsessions.default_cli()
+    if pick and cli != "claude":
+        sys.exit("--model and --effort are for Claude Code sessions.")
     listed = find_sessions(days, quick=True)
     known = newsessions.projects(listed)
     folders, missing = [], []
@@ -325,7 +332,7 @@ def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: flo
             missing.append(name)
     if missing:
         sys.exit(f"Not a folder, and no recent project of that name: {', '.join(missing)}")
-    launch_all(newsessions.launches(folders, cli or newsessions.default_cli(), prompt or ""))
+    launch_all(newsessions.launches(folders, cli, prompt or "", pick))
 
 
 def manage_clis(action: str | None, names: list[str]) -> None:

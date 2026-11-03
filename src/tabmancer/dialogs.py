@@ -8,11 +8,79 @@ a view with much in it. A dialog that is about to delete something has an amber 
 
 from __future__ import annotations
 
-from rich.text import Text
+from typing import ClassVar
 
-from .theme import MUTED
+from rich.text import Text
+from textual import events
+from textual.binding import Binding
+from textual.message import Message
+from textual.widgets import Static
+
+from .theme import CYAN, MUTED, TEXT
 
 WIDTHS = {"small": 72, "medium": 96, "large": 112}
+GAP = "   "
+
+
+class Choice(Static, can_focus=True):
+    """One of a few words, shown side by side with the one picked marked: ● opus   ○ sonnet.
+    ←/→ (or Space) moves the mark while it has the focus; a click picks a word."""
+
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("left", "step(-1)", "Previous", show=False),
+        Binding("right,space", "step(1)", "Next", show=False),
+    ]
+    DEFAULT_CSS = """
+    Choice { height: 1; width: 1fr; }
+    Choice:focus { background: $panel-lighten-2; }
+    Choice.-off { opacity: 0.5; }
+    """
+
+    class Changed(Message):
+        def __init__(self, choice: Choice, value: str) -> None:
+            super().__init__()
+            self.choice, self.value = choice, value
+
+        @property
+        def control(self) -> Choice:
+            return self.choice
+
+    def __init__(self, words: list[str], value: str = "", **kwargs) -> None:
+        super().__init__("", **kwargs)
+        self.words = list(words)
+        self.value = value if value in self.words else self.words[0]
+
+    def render(self) -> Text:
+        out = Text()
+        for word in self.words:
+            on = word == self.value
+            out.append(("● " if on else "○ ") + word, style=f"bold {CYAN if self.has_focus else TEXT}" if on else MUTED)
+            out.append(GAP)
+        return out
+
+    def pick(self, value: str) -> None:
+        if value in self.words and value != self.value:
+            self.value = value
+            self.refresh()
+            self.post_message(self.Changed(self, value))
+
+    def action_step(self, step: int) -> None:
+        self.pick(self.words[(self.words.index(self.value) + step) % len(self.words)])
+
+    def on_click(self, event: events.Click) -> None:
+        start = 0
+        for word in self.words:
+            end = start + len(word) + 2
+            if start <= event.x < end:
+                self.pick(word)
+                return
+            start = end + len(GAP)
+
+    def on_focus(self) -> None:
+        self.refresh()
+
+    def on_blur(self) -> None:
+        self.refresh()
 
 
 def frame(name: str, size: str = "medium", height: str = "auto", tone: str = "$primary") -> str:

@@ -281,7 +281,7 @@ class TeamGraph(Widget):
         canvas.put(x + 2 + inner - len(label), y + 1, label, style)
         used = getattr(self.app, "session_tokens", {}).get(session.session_id) if session is not None else None
         tokens = human(used.total) if used is not None and used.total else ""
-        right = " · ".join(part for part in (member.model, tokens) if part)
+        right = " · ".join(part for part in (member.pick.short(), tokens) if part)
         left = 0
         if session is not None and session.context:
             share = context.share(session)
@@ -756,8 +756,10 @@ class TeamsDialog(ModalScreen[tuple[str, str] | None]):
 
 
 LEAD_LINE = f"{teams.LEAD}: {teams.LEAD_FOCUS}"
-MEMBERS_HELP = "one a line · name: what they work on · @sonnet at the end picks its model"
-LEAD_HELP = "@opus (or any model) at the end picks the lead's model; it picks the members' models itself"
+# One line, so the keys stay on screen in a 120x30 window; the examples show how a line is written.
+MEMBERS_HELP = "name: area @model @effort · lead @opus @xhigh · code @opus @high · tests, docs @sonnet @medium"
+LEAD_HELP = ("@opus @xhigh (any model, any effort) at the end: the lead's own; "
+             "it picks the members' itself")
 
 
 class NewTeamDialog(ModalScreen[teams.Team | None]):
@@ -972,7 +974,7 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
             return
         name, folder, _, members = self.read()
         team = teams.new_team(name, folder, "", members)
-        tabs = ", ".join(team.session_name(m) + (f" ({m.model})" if m.model else "") for m in team.members)
+        tabs = ", ".join(team.session_name(m) + (f" ({m.pick.words()})" if m.pick else "") for m in team.members)
         each = "each in the background" if self.background else "each in its own tab"
         if deciding:
             preview.update(Text.assemble((f"Opens 1 tab in {team.project}: ", MUTED), (tabs, TEXT),

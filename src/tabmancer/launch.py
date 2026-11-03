@@ -71,6 +71,9 @@ class Launch:
     prompt: str | None = None  # sent as soon as the session opens
     cli: str = "claude"        # see clis.CLIS
     options: tuple[str, ...] = ()  # more Claude Code flags, e.g. a team member's name and role
+    model: str = ""   # --model for Claude Code; empty: your default (see picks)
+    effort: str = ""  # --effort for Claude Code; empty: your default
+    new_id: str = ""  # a fresh session's id, given by tabmancer (--session-id) so its pick is kept
 
     @property
     def argv(self) -> list[str]:
@@ -78,7 +81,10 @@ class Launch:
             return self._codex_argv()
         if self.cli == "agy":
             return self._agy_argv()
-        more = list(self.options)
+        more = [*(["--model", self.model] if self.model else []), *(["--effort", self.effort] if self.effort else []),
+                *self.options]
+        if self.mode is Mode.NEW and self.new_id:
+            more = ["--session-id", self.new_id, *more]
         if self.mode is Mode.RESUME:
             return ["claude", "--resume", self.session_id, *more, *([self.prompt] if self.prompt else [])]
         if self.mode is Mode.AUTO:

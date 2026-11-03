@@ -25,7 +25,7 @@ def test_the_lead_is_told_to_make_the_team_and_may_run_only_the_add_command(tmp_
     tools = next(a for a in argv if a.startswith("--allowedTools="))
     assert tools == "--allowedTools=SendMessage,ListAgents,Bash(tabmancer team add:*)"
     role = argv[argv.index("--append-system-prompt") + 1]
-    assert 'tabmancer team add shop "name: area @model; name: area"' in role and "at most 3" in role
+    assert 'tabmancer team add shop "name: area @model @effort; name: area"' in role and "at most 3" in role
     assert "There are no other members yet" in role
     assert "tabmancer team add shop" in argv[-1]  # its first prompt: make the team, then hand out work
     fixed = teams.new_team("fixed", str(tmp_path), "goal", teams.parse_members("api: x"))

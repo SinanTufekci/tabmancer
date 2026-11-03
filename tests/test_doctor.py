@@ -68,6 +68,8 @@ Options:
   --bg, --background              Start the session in the background
   -p, --print                     Print response and exit; works with --settings and --bg
   --model <model>                 Model for the current session
+  --effort <level>                Effort level for the current session
+  --session-id <uuid>             Use a specific session ID for the conversation
   --tools <tools...>              Specify the list of available tools
   --no-session-persistence        Disable session persistence
   -n, --name <name>               Set a display name for this session

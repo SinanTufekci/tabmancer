@@ -22,8 +22,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, OptionList
 from textual.widgets.option_list import Option
 
-from . import clis, workspaces
-from .dialogs import frame, title
+from . import clis, picks, workspaces
+from .dialogs import Choice, frame, title
 from .launch import Launch, Mode
 from .sessions import Session, folder_key
 from .theme import CYAN, MUTED, TEXT, keys
@@ -67,9 +67,10 @@ def match(name: str, known: list[Project]) -> Project | None:
     return next((p for p in known if p.name.casefold() == name.casefold()), None)
 
 
-def launches(folders: list[str], cli: str, prompt: str | None) -> list[Launch]:
-    return [Launch(title=f"{Path(cwd).name or cwd}: new", cwd=cwd, mode=Mode.NEW, session_id="",
-                   prompt=prompt or None, cli=cli) for cwd in folders]
+def launches(folders: list[str], cli: str, prompt: str | None, pick: picks.Pick | None = None) -> list[Launch]:
+    """A fresh session in each folder; Claude Code ones with the model and effort picked (picks.fresh)."""
+    return [picks.fresh(Launch(title=f"{Path(cwd).name or cwd}: new", cwd=cwd, mode=Mode.NEW, session_id="",
+                               prompt=prompt or None, cli=cli), pick or picks.Pick()) for cwd in folders]
 
 
 @dataclass
@@ -78,6 +79,7 @@ class Request:
     folders: list[str]
     cli: str
     message: str = ""
+    pick: picks.Pick = field(default_factory=picks.Pick)
 
 
 def default_cli() -> str:
@@ -105,6 +107,10 @@ class NewSessions(ModalScreen[Request | None]):
     NewSessions #cli { width: auto; }
     NewSessions Input { margin-top: 1; }
     NewSessions FolderList { height: auto; max-height: 18; margin-top: 1; background: $surface; }
+    NewSessions .pick-row { height: 1; }
+    NewSessions #new-model-row { margin-top: 1; }
+    NewSessions .pick-row > Label { width: 8; color: $text-muted; }
+    NewSessions #new-pick-words { color: $text-muted; }
     NewSessions #new-note { color: $text-muted; margin-top: 1; }
     """
     BINDINGS: ClassVar[list[Binding]] = [
@@ -130,6 +136,13 @@ class NewSessions(ModalScreen[Request | None]):
             yield Input(placeholder="Filter projects, or type a folder path", id="new-filter")
             yield FolderList(id="new-folders")
             yield Input(placeholder="First message for every new session (optional)", id="new-first")
+            with Horizontal(classes="pick-row", id="new-model-row"):
+                yield Label("Model")
+                yield Choice([picks.DEFAULT, *picks.MODELS], id="new-model")
+            with Horizontal(classes="pick-row"):
+                yield Label("Effort")
+                yield Choice([picks.DEFAULT, *picks.EFFORTS], id="new-effort")
+            yield Label("", id="new-pick-words")
             yield Label("These start clean. To carry a session's work on in a fresh one, press h on it in the list.",
                         id="new-note")
             yield Label(keys(("Space", "tick"), ("Enter", "start them"), ("Tab", "next box"), ("Ctrl+O", "pick the CLI"),
@@ -205,6 +218,40 @@ class NewSessions(ModalScreen[Request | None]):
         many = len(clis.enabled()) > 1
         self.query_one("#cli", Label).update(Text.assemble(
             ("with ", MUTED), (clis.label(self.cli), f"bold {CYAN}"), ("  Ctrl+O" if many else "", MUTED)))
+        for choice in self.query(Choice):
+            choice.set_class(self.cli != "claude", "-off")
+        self.show_pick()
+
+    # --- model and effort -----------------------------------------------------------
+
+    def pick(self) -> picks.Pick:
+        """What the Model and Effort rows say; nothing for other CLIs."""
+        if self.cli != "claude":
+            return picks.Pick()
+        model, effort = (self.query_one(f"#new-{row}", Choice).value for row in ("model", "effort"))
+        return picks.Pick("" if model == picks.DEFAULT else model, "" if effort == picks.DEFAULT else effort)
+
+    def show_pick(self) -> None:
+        """A line on the row in focus, or on what is picked: what it means for the sessions."""
+        words = self.query_one("#new-pick-words", Label)
+        if self.cli != "claude":
+            words.update(f"Model and effort are for Claude Code sessions; {clis.label(self.cli)} uses its own settings.")
+            return
+        model, effort = self.query_one("#new-model", Choice), self.query_one("#new-effort", Choice)
+        if self.focused is effort or (self.focused is not model and effort.value != picks.DEFAULT
+                                      and model.value == picks.DEFAULT):
+            words.update(f"{effort.value}: {picks.EFFORT_WORDS[effort.value]}")
+        elif self.focused is model or model.value != picks.DEFAULT:
+            words.update(f"{model.value}: {picks.MODEL_WORDS[model.value]}")
+        else:
+            words.update("Your Claude Code settings pick the model and effort. Tab to a row, then ←/→ for others.")
+
+    def on_choice_changed(self, event: Choice.Changed) -> None:
+        self.show_pick()
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        if self.is_mounted:
+            self.show_pick()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input is self.filter_box:
@@ -247,7 +294,7 @@ class NewSessions(ModalScreen[Request | None]):
         known = {folder_key(p.cwd): p for p in self.extra + self.found} | self.shown
         chosen = [known[key].cwd for key in self.ticked if key in known]
         prompt = self.query_one("#new-first", Input).value.strip()
-        self.dismiss(Request(chosen, self.cli, prompt))
+        self.dismiss(Request(chosen, self.cli, prompt, self.pick()))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

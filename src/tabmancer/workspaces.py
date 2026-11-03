@@ -12,7 +12,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import teams
+from . import picks, teams
 from .config import read_json, write_json
 from .launch import Launch, Mode, default_mode
 from .sessions import Session, Status
@@ -101,8 +101,8 @@ def resolve(workspace: Workspace, sessions: list[Session]) -> tuple[list[Launch]
         if wanted and not missing:
             notes.append(f"{name}: already open")
         resumable = [s for s in here if s.status is not Status.RUNNING][:missing]
-        launches += [teams.as_member(s, Launch(f"{name}: {s.title}", s.cwd, default_mode(s.status), s.session_id,
-                                               cli=s.cli), saved) for s in resumable]
+        launches += [picks.resumed(teams.as_member(s, Launch(f"{name}: {s.title}", s.cwd, default_mode(s.status),
+                                                             s.session_id, cli=s.cli), saved)) for s in resumable]
         for _ in range(missing - len(resumable)):
             # Nothing recent enough in the list. claude --continue finds older ones,
             # but only if no session in the folder is open (it could pick that one).

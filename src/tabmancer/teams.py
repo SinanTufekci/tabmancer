@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
+from . import picks
 from .config import config_dir, read_json, write_json
 from .launch import Launch, Mode
 from .sessions import (
@@ -48,7 +49,6 @@ TEMPLATES = {  # one member a line, as the new-team dialog shows them
     "write and review": "writer: does the work\nreviewer: reviews every change the writer makes, "
                         "finds problems and asks for fixes",
 }
-MODEL = re.compile(r"(?:^|\s)@([A-Za-z0-9][\w.\-\[\]]*)\s*$")  # "tests: checks it @sonnet"
 DECIDE = "lead decides"  # the line-up the lead makes itself, with `tabmancer team add`
 DECIDE_MOST = 4  # members it may add unless told otherwise
 ADD = "tabmancer team add"  # the one command a deciding lead may run without asking
@@ -60,6 +60,11 @@ class Member:
     focus: str = ""
     lead: bool = False
     model: str = ""  # its session's --model (an alias such as sonnet, or a full name); empty: the default
+    effort: str = ""  # its session's --effort (picks.EFFORTS); empty: the default
+
+    @property
+    def pick(self) -> picks.Pick:
+        return picks.Pick(self.model, self.effort)
 
 
 @dataclass
@@ -105,21 +110,20 @@ def clean(name: str) -> str:
 
 
 def parse_members(text: str, lead_ok: bool = False) -> list[Member]:
-    """"api: endpoints @sonnet; ui: screens" (or one per line) to members. A name without a focus
-    is fine, and so is one without a model. With lead_ok, a "lead" line is the orchestrator's:
-    its focus and model; otherwise it is left out, as a team has one lead."""
+    """"api: endpoints @sonnet @high; ui: screens" (or one per line) to members. A name without a
+    focus is fine, and so is one without a model or an effort (picks.split). With lead_ok, a "lead"
+    line is the orchestrator's: its focus, model and effort; otherwise it is left out, as a team has
+    one lead."""
     members, seen = [], set()
     for part in re.split(r"[;\n]", text):
-        model = MODEL.search(part)
-        if model:
-            part = part[:model.start()]
+        part, pick = picks.split(part)
         name, _, focus = part.partition(":")
         name, focus = clean(name), " ".join(focus.split())
         if not name or name in seen or (name == LEAD and not lead_ok):
             continue
         seen.add(name)
         members.append(Member(name, focus or (LEAD_FOCUS if name == LEAD else ""), lead=name == LEAD,
-                              model=model[1] if model else ""))
+                              model=pick.model, effort=pick.effort))
     return members
 
 
@@ -133,7 +137,7 @@ def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int 
 
 
 def add_members(team: Team, text: str) -> tuple[list[Member], str]:
-    """Members from "name: area @model; ..." joined to the team and saved: (who joined, a note on
+    """Members from "name: area @model @effort; ..." joined to the team and saved: (who joined, a note on
     who did not). A team whose lead decides takes no more than its limit."""
     new = parse_members(text)
     taken = {m.name for m in team.members}
@@ -226,7 +230,8 @@ def load() -> dict[str, Team]:
     teams = {}
     for item in data.get("teams", []) if isinstance(data, dict) else []:
         try:
-            members = [Member(m["name"], m.get("focus", ""), bool(m.get("lead")), str(m.get("model") or ""))
+            members = [Member(m["name"], m.get("focus", ""), bool(m.get("lead")), str(m.get("model") or ""),
+                              str(m.get("effort") or "") if m.get("effort") in picks.EFFORTS else "")
                        for m in item["members"]]
             teams[item["name"]] = Team(item["name"], item["cwd"], item.get("goal", ""), members,
                                        item.get("created", ""), int(item.get("decide") or 0),
@@ -287,9 +292,9 @@ def role(team: Team, member: Member) -> str:
         return (f"You are {team.session_name(member)}, the orchestrator of this team, and you decide who is on "
                 f"it. {common} First read the goal and look at the project, then decide which members the work "
                 f"needs: at most {team.decide}, fewer when the work is small, none if you can do it well alone. "
-                "Give each a short name (a word) and an area, and a model when it matters (@sonnet for routine work, "
-                "@opus for hard design; leave it out for the default). Add them all with one shell command: "
-                f'{ADD} {team.name} "name: area @model; name: area". Each '
+                "Give each a short name (a word) and an area, and a model and an effort when they matter (@sonnet "
+                "@medium for routine work, @opus @high for hard design; leave them out for the user's default). "
+                f'Add them all with one shell command: {ADD} {team.name} "name: area @model @effort; name: area". Each '
                 + ("starts as a background session, with no tab, and introduces " if team.background
                    else "opens in its own tab and introduces ")
                 + "itself to you. Then send each its first task with SendMessage, keep track of who does what, "
@@ -310,10 +315,9 @@ def role(team: Team, member: Member) -> str:
 
 def options(team: Team, member: Member) -> tuple[str, ...]:
     # --allowedTools=... in one piece: written apart it takes every word after it as a tool.
-    model = ("--model", member.model) if member.model else ()
     # A deciding lead may add members without asking: that one command, and only it.
     tools = f"SendMessage,ListAgents,Bash({ADD}:*)" if member.lead and team.decide else "SendMessage,ListAgents"
-    return ("--name", team.session_name(member), *model, "--settings", str(settings_file()),
+    return ("--name", team.session_name(member), *member.pick.flags(), "--settings", str(settings_file()),
             f"--allowedTools={tools}", "--append-system-prompt", role(team, member))
 
 
