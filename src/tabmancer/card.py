@@ -135,14 +135,17 @@ class Canvas:
         return self.palette[self.rows[y][x]]
 
 
-def png(width: int, height: int, palette: list[Colour], rows: list[bytes | bytearray]) -> bytes:
-    """An indexed-colour PNG: a palette of up to 256 colours, a byte a pixel."""
+def png(width: int, height: int, palette: list[Colour], rows: list[bytes | bytearray],
+        clear: bool = False) -> bytes:
+    """An indexed-colour PNG: a palette of up to 256 colours, a byte a pixel; clear: the first
+    colour see-through (pictures over another, Bit's frames in a banner)."""
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
 
     raw = b"".join(b"\x00" + bytes(row) for row in rows)  # each row unfiltered
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 3, 0, 0, 0))
             + chunk(b"PLTE", b"".join(bytes(colour) for colour in palette))
+            + (chunk(b"tRNS", b"\x00") if clear else b"")
             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 

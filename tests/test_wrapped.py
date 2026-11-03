@@ -54,6 +54,8 @@ def test_the_card_is_a_png_of_its_own_pixels():
     assert chunks[b"PLTE"] == bytes((10, 20, 30, 200, 100, 50))
     rows = zlib.decompress(chunks[b"IDAT"])
     assert rows == b"\x00" + bytes(7) + b"\x00" + bytes((0, 1, 1, 1, 0, 0, 0)) + b"\x00" + bytes(7)
+    clear = card.png(canvas.width, canvas.height, canvas.palette, canvas.rows, clear=True)
+    assert b"tRNS\x00" in clear and clear.index(b"PLTE") < clear.index(b"tRNS") < clear.index(b"IDAT")  # the ground
     picture = card.dib(canvas)
     assert struct.unpack("<IiiHH", picture[:16]) == (40, 7, 3, 1, 32)
     assert picture[40 + 7 * 4 + 4:40 + 7 * 4 + 8] == bytes((50, 100, 200, 0))  # the middle row, bottom up, BGR
