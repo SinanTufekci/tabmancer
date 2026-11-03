@@ -19,7 +19,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import background, context, focus, teams, teamtree, viewmodel
+from . import background, context, focus, summarize, teams, teamtree, viewmodel
 from .dialogs import frame, title
 from .safework import work
 from .sessions import Exit, Session, Status
@@ -817,6 +817,38 @@ class TeamsDialog(ModalScreen[tuple[str, str] | None]):
         self.dismiss(None)
 
 
+class RoleDialog(ModalScreen[None]):
+    """What a member is told when it starts: its role word for word, and its first message."""
+
+    DEFAULT_CSS = frame("RoleDialog", "large") + """
+    RoleDialog #role-text { margin-top: 1; height: auto; max-height: 18; }
+    RoleDialog .first { margin-top: 1; color: $text-muted; }
+    """
+    BINDINGS: ClassVar[list[Binding]] = [Binding("escape,enter,ctrl+g", "close", "Close", priority=True)]
+
+    def __init__(self, team: teams.Team, member: teams.Member) -> None:
+        super().__init__()
+        self.team, self.member = team, member
+
+    def compose(self) -> ComposeResult:
+        team, member = self.team, self.member
+        kind = teams.kind_of(member)
+        about = [f"a {kind}er" if kind in ("review", "research") else f"the {kind}s" if kind else "",
+                 member.pick.words(), f"owns {member.owns}" if member.owns else ""]
+        first = teams.launch(team, member).prompt
+        with Vertical():
+            yield Label(title(f"What {team.session_name(member)} is told", *[part for part in about if part]))
+            with VerticalScroll(id="role-text"):
+                yield Static(Text(teams.role(team, member), style=TEXT))
+            yield Label(Text.assemble(("Its first message: ", MUTED), (first, TEXT)) if first else
+                        Text(f"Its first message comes from {team.session_name(team.lead)}." if team.lead and
+                             not member.lead else "It starts with no message.", style=MUTED), classes="first")
+            yield Label(keys(("Esc", "close")), classes="hint")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 LEAD_LINE = f"{teams.LEAD}: {teams.LEAD_FOCUS}"
 # One line, so the keys stay on screen in a 120x30 window; the examples show how a line is written.
 MEMBERS_HELP = "name: area @model @effort · lead @opus @xhigh · code @opus @high · tests, docs @sonnet @medium"
@@ -846,6 +878,8 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         Binding("ctrl+t", "template", "Next line-up", priority=True),
         Binding("ctrl+l", "keep_lineup", "Keep the line-up", priority=True),
         Binding("ctrl+b", "toggle_background", "Tabs or background", priority=True),
+        Binding("ctrl+r", "suggest", "Suggest a line-up", priority=True),
+        Binding("ctrl+g", "show_role", "What a member is told", priority=True),
         Binding("ctrl+s", "create", "Create", priority=True),
     ]
 
@@ -859,6 +893,7 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         self.lineups = [*teams.TEMPLATES, *teams.PEER_TEMPLATES, *self.saved, teams.DECIDE]
         self.forgetting: str | None = None  # Ctrl+L once on a kept line-up: again forgets it
         self.background = False  # Ctrl+B: the members run as background sessions, the lead in a tab
+        self.asking = False  # Ctrl+R: Claude is being asked for a line-up
 
     def compose(self) -> ComposeResult:
         first = next(iter(teams.TEMPLATES))
@@ -893,8 +928,8 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
                              classes="aside")
             yield Static("", id="team-preview")
             # One line, even in a 120x30 window: a second one would be cut off there.
-            yield Label(keys(("Ctrl+S", "create"), ("Enter/Tab", "next box"), ("Ctrl+T", "next line-up"),
-                             ("Ctrl+L", "keep it"), ("Esc", "cancel")), classes="hint")
+            yield Label(keys(("Ctrl+S", "create"), ("Tab", "next"), ("Ctrl+T", "line-up"), ("Ctrl+L", "keep"),
+                             ("Ctrl+R", "suggest"), ("Ctrl+G", "role"), ("Esc", "cancel")), classes="hint")
 
     def on_mount(self) -> None:
         self.show_preview()
@@ -1050,6 +1085,10 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         self.query_one("#team-members", TextArea).set_class(deciding, "alone")
         self.query_one("#team-members-help", Static).update(LEAD_HELP if deciding else MEMBERS_HELP)
         preview = self.query_one("#team-preview", Static)
+        if self.asking:
+            preview.update(Text("Asking Claude for a line-up for the goal: your plan, your default model, "
+                                "about half a minute…", style=f"italic {MUTED}"))
+            return
         missing = self.missing()
         if missing:
             style = f"bold {AMBER}" if self.tried else MUTED
@@ -1078,6 +1117,64 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
             return
         preview.update(Text.assemble((f"Opens {len(team.members)} tabs in {team.project}: ", MUTED), (tabs, TEXT),
                                      (". The lead starts last and hands out the work.", MUTED)))
+
+    # --- help with the roles ---------------------------------------------------------------
+
+    def action_suggest(self) -> None:
+        """Ctrl+R: Claude reads the goal and the project's top level and writes a line-up into the
+        box, each member with its part, its own files, a model and an effort, a lead only when the
+        parts need one. One call on your plan; the box is yours to change after."""
+        if self.asking:
+            return
+        _, folder, goal, _ = self.read()
+        if not goal or not folder or not Path(folder).is_dir():
+            self.notify("Write the goal and the project folder first: the line-up is suggested for them.",
+                        severity="warning", timeout=5)
+            return
+        most = self.most() if self.deciding() and self.most() >= 2 else teams.SUGGEST_MOST
+        prompt = teams.suggestion_prompt(goal, str(Path(folder).resolve()), most)
+        self.asking = True
+        self.show_preview()
+        self.run_worker(lambda: self.ask_for_lineup(prompt), thread=True, exclusive=True, group="suggest",
+                        exit_on_error=False)
+
+    def ask_for_lineup(self, prompt: str) -> None:
+        """In a thread: the answer, or why there is none."""
+        try:
+            lines = teams.suggested_lines(summarize.ask(prompt, "", timeout=180, effort=teams.SUGGEST_EFFORT))
+            error = "" if lines else "Claude's answer named no members."
+        except Exception as problem:  # noqa: BLE001 - a failed suggestion leaves the box as it was, and says why
+            lines, error = "", str(problem) or type(problem).__name__
+        self.app.call_from_thread(self.suggested, lines, error)
+
+    def suggested(self, lines: str, error: str) -> None:
+        self.asking = False
+        if not self.is_mounted:
+            return
+        if error:
+            self.notify(f"No line-up suggested: {error}", severity="warning", timeout=8)
+        else:
+            self.query_one("#team-members", TextArea).text = lines
+            self.notify("A line-up for the goal: change what you like. Ctrl+G on a line shows what that member "
+                        "is told.", timeout=8)
+        self.show_preview()
+
+    def action_show_role(self) -> None:
+        """Ctrl+G: what the member on the cursor's line is told when it starts: its role, word for
+        word, and its first message."""
+        box = self.query_one("#team-members", TextArea)
+        lines = box.text.split("\n")
+        row = box.cursor_location[0]
+        found = teams.parse_members(lines[row] if row < len(lines) else "", lead_ok=True)
+        if not found:
+            self.notify("Put the cursor on a member's line in the box first.", timeout=4)
+            return
+        name, folder, goal, members = self.read()
+        team = teams.new_team(name or "team", folder or ".", goal or "(the goal)", members,
+                              decide=self.most() if self.deciding() else 0, peers=self.peers())
+        member = next((m for m in team.members if m.name == found[0].name), None)
+        if member is not None:
+            self.app.push_screen(RoleDialog(team, member))
 
     def action_create(self) -> None:
         self.tried = True

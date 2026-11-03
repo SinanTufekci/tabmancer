@@ -19,6 +19,25 @@ missing. `Enter` and `Tab` go from box to box, and `Ctrl+S` starts the team. `Ct
 keeps the members in the box as a line-up of your own, under a name; it is then among the
 line-ups `Ctrl+T` goes through, and `Ctrl+L` twice on it forgets it.
 
+### Help with the roles
+
+- **Their own files.** `[...]` at the end of a member's part names the folders or files that are
+  its own: `api: the endpoints [src/api, docs/api.md] @sonnet`. Its role says they are its to
+  edit and the others' are theirs, and every other member sees who owns what. Two sessions
+  editing the same file at the same time is what a team most often trips on.
+- **The usual kinds.** A member whose name starts with `review`, `test`, `doc` or `research` gets
+  that kind's rules besides its area: a reviewer changes no code and sends what it finds to
+  whoever made the change; tests tell a member about a bug in its part rather than fix it there;
+  docs ask rather than guess; research changes no files and reports with its sources.
+- **Suggest (`Ctrl+R`).** With the goal and the folder written, Claude reads the goal, the
+  project's files (from git, folder by folder; else its top level) and the start of its README,
+  and writes a line-up into the box: each member with its part, its own files, a model and an
+  effort, and a lead line only when the parts depend on each other so much that someone must
+  hand out the work (else they are peers). One `claude -p` call on your plan, with your default
+  model at a medium effort, and no tools; the box is yours to change after.
+- **What a member is told (`Ctrl+G`).** On a member's line, shows its role word for word as it
+  will start with it, and its first message.
+
 `Ctrl+B` in the same form runs the members in the background instead (`claude --bg`): no tab
 each, only the lead's, where you talk to the team. The members start first, the lead's tab
 opens once they are up, and `B` lists them. `x` twice on the team stops them (`claude stop`;

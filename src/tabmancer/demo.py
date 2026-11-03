@@ -255,6 +255,10 @@ SUMMARY_ANSWER = ("Made up for the demo. For real, Claude Code reads the session
                   "sentences what it was about and where it stopped, on your own plan.")
 HANDOVER_ANSWER = ("A made-up handover. For real it holds the goal, the decisions and why, what is done, "
                    "what is open or broken, and the next steps.")
+SUGGEST_START = "You set up a team of Claude Code sessions"  # teams.suggestion_prompt's first words
+DEMO_LINEUP = ("api: the endpoints and the data behind them [src/api] @opus @high\n"
+               "web: the pages that use them [src/web] @sonnet @high\n"
+               "tests: tests for both, end to end [tests] @sonnet @medium")
 GIT = {  # project -> (changed, to push): what the sidebar's ± and ↑ show
     "pcb-router": (3, 0), "web-app": (0, 2), "docs-site": (1, 0),
 }
@@ -315,9 +319,11 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
     def no_handover(session):
         raise handover.HandoverError("In the demo no session is resumed to write its handover.")
 
-    def answer(prompt: str, model: str, timeout: float = 180) -> str:
+    def answer(prompt: str, model: str, timeout: float = 180, effort: str = "") -> str:
         if prompt.startswith(report.INSTRUCTIONS):
             return DEMO_REPORT
+        if prompt.startswith(SUGGEST_START):  # the new-team dialog's Ctrl+R
+            return DEMO_LINEUP
         return HANDOVER_ANSWER if prompt.startswith(handover.INSTRUCTIONS) else SUMMARY_ANSWER
 
     def git(folder: str):

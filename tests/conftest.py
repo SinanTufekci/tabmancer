@@ -30,7 +30,7 @@ def isolated(monkeypatch, tmp_path):
     def no_background(launch):
         raise OSError("no background sessions in tests")
 
-    def no_model(prompt, model, timeout=180):
+    def no_model(prompt, model, timeout=180, effort=""):
         raise summarize.SummaryError("no model calls in tests")
 
     def no_resume(session):

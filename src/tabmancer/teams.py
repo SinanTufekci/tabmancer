@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import unicodedata
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
@@ -71,6 +72,13 @@ class Member:
     lead: bool = False
     model: str = ""  # its session's --model (an alias such as sonnet, or a full name); empty: the default
     effort: str = ""  # its session's --effort (picks.EFFORTS); empty: the default
+    owns: str = ""   # the folders or files that are its own ("src/api, docs/api.md"), written [...] in its line
+
+    def line(self) -> str:
+        """The member as a line of the members box: 'api: endpoints [src/api] @sonnet @high'."""
+        owns = f" [{self.owns}]" if self.owns else ""
+        return f"{self.name}: {self.focus}{owns}{picks.tags(self.pick)}" if self.focus else \
+            f"{self.name}{owns}{picks.tags(self.pick)}"
 
     @property
     def pick(self) -> picks.Pick:
@@ -137,14 +145,22 @@ def parse_members(text: str, lead_ok: bool = False) -> list[Member]:
     members, seen = [], set()
     for part in re.split(r"[;\n]", text):
         part, pick = picks.split(part)
+        part = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", part)  # a list's bullet or number, as a model may write
+        owned = OWNS.search(part)
+        owns = " ".join(owned[1].split()) if owned else ""
+        if owned:
+            part = part[:owned.start()]
         name, _, focus = part.partition(":")
         name, focus = clean(name), " ".join(focus.split())
         if not name or name in seen or (name == LEAD and not lead_ok):
             continue
         seen.add(name)
         members.append(Member(name, focus or (LEAD_FOCUS if name == LEAD else ""), lead=name == LEAD,
-                              model=pick.model, effort=pick.effort))
+                              model=pick.model, effort=pick.effort, owns=owns))
     return members
+
+
+OWNS = re.compile(r"\s*\[([^\]]+)\]\s*$")  # "api: endpoints [src/api]"
 
 
 def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int = 0,
@@ -269,7 +285,8 @@ def load() -> dict[str, Team]:
     for item in data.get("teams", []) if isinstance(data, dict) else []:
         try:
             members = [Member(m["name"], m.get("focus", ""), bool(m.get("lead")), str(m.get("model") or ""),
-                              str(m.get("effort") or "") if m.get("effort") in picks.EFFORTS else "")
+                              str(m.get("effort") or "") if m.get("effort") in picks.EFFORTS else "",
+                              str(m.get("owns") or ""))
                        for m in item["members"]]
             teams[item["name"]] = Team(item["name"], item["cwd"], item.get("goal", ""), members,
                                        item.get("created", ""), int(item.get("decide") or 0),
@@ -313,8 +330,39 @@ def settings_file() -> Path:
 
 
 def roster(team: Team, skip: Member | None = None) -> str:
-    return ", ".join(f"{team.session_name(m)} ({'orchestrator' if m.lead else m.focus or m.name})"
-                     for m in team.members if m is not skip)
+    return ", ".join(f"{team.session_name(m)} ({'orchestrator' if m.lead else m.focus or m.name}"
+                     f"{f'; owns {m.owns}' if m.owns else ''})" for m in team.members if m is not skip)
+
+
+# Rules for the kinds of member most teams have, by the start of its name: what it does and what
+# it leaves to the others. A member of another name gets its area alone.
+KINDS = {
+    "review": "You review: you do not change the code yourself. Read each change the others report, look for "
+              "bugs, missing cases and unclear code, and send what you find to whoever made the change, with "
+              "the file and the line; say plainly when a change is good to go.",
+    "test": "You write and run the tests for what the others build. When a test finds a bug in another member's "
+            "part, tell that member, with how to reproduce it, rather than fixing their code yourself.",
+    "doc": "You write the documentation: read what the others build and describe it for the people who will use "
+           "it. Ask the member who built something when it is unclear, rather than guessing.",
+    "research": "You find things out and report them: read the code, the docs and the web, change no files, and "
+                "send short findings with their sources to whoever needs them.",
+}
+
+
+def kind_of(member: Member) -> str | None:
+    """The kind of member it is, by its name: review(er), test(s), doc(s), research(er)."""
+    return next((kind for kind in KINDS if member.name.startswith(kind)), None)
+
+
+def duties(member: Member) -> str:
+    """What a member is told beyond its area: its kind's rule, and the files that are its own."""
+    out = []
+    kind = kind_of(member)
+    if kind:
+        out.append(KINDS[kind])
+    if member.owns:
+        out.append(f"Yours to edit: {member.owns}. The others' files are theirs: ask before you change one.")
+    return " ".join(out)
 
 
 def role(team: Team, member: Member) -> str:
@@ -346,16 +394,97 @@ def role(team: Team, member: Member) -> str:
                 "a decision is theirs. The members start alongside you: if ListAgents does not show one yet, "
                 "wait a moment and look again.")
     if team.lead is None:
-        return (f"You are {team.session_name(member)}, one of the peers on this team. Your part: "
+        text = (f"You are {team.session_name(member)}, one of the peers on this team. Your part: "
                 f"{member.focus or member.name}. {common} Nobody leads this team: your part is yours to plan and "
                 "decide, and the user talks to each of you in your own tab. Before you change something another "
                 "member's work depends on (a shared file, an interface, a schema, the build), tell that member "
                 "with SendMessage and agree on it first; when you finish something the others need, tell them. "
                 "Tell the user here when your part is done or a decision is theirs.")
-    return (f"You are {team.session_name(member)}, a member of this team. Your area: {member.focus or member.name}. "
-            f"{common} {team.session_name(team.lead)} is the orchestrator: it hands out the work, and you "
-            "report to it with SendMessage when you finish something or get stuck. Ask another member directly "
-            "when you need something from their area.")
+    else:
+        text = (f"You are {team.session_name(member)}, a member of this team. Your area: "
+                f"{member.focus or member.name}. {common} {team.session_name(team.lead)} is the orchestrator: it "
+                "hands out the work, and you report to it with SendMessage when you finish something or get stuck. "
+                "Ask another member directly when you need something from their area.")
+    extra = duties(member)
+    return f"{text} {extra}" if extra else text
+
+
+# --- a line-up suggested for a goal -------------------------------------------------------------
+
+SUGGEST_MOST = 5
+SUGGEST_EFFORT = "medium"  # one answer, a short one: your default model at a medium effort
+
+
+def project_files(folder: Path, most_folders: int = 40, per_folder: int = 12) -> str:
+    """The project's files folder by folder, from git when it is a repository ('src/app/: main.py,
+    ui.py (+3 more)'), so the files a member is given are ones that exist; else '' (not one)."""
+    try:
+        listed = subprocess.run(["git", "-C", str(folder), "ls-files"], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=10, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if listed.returncode != 0:
+        return ""
+    folders: dict[str, list[str]] = {}
+    for name in listed.stdout.splitlines():
+        parent, _, leaf = name.rpartition("/")
+        folders.setdefault(parent + "/" if parent else "./", []).append(leaf)
+    lines = []
+    for parent, leaves in sorted(folders.items())[:most_folders]:
+        more = f" (+{len(leaves) - per_folder} more)" if len(leaves) > per_folder else ""
+        lines.append(f"{parent}: {', '.join(leaves[:per_folder])}{more}")
+    if len(folders) > most_folders:
+        lines.append(f"(+{len(folders) - most_folders} more folders)")
+    return "\n".join(lines)
+
+
+def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST) -> str:
+    """What Claude is asked for a line-up: the goal, the project's files (from git, or its top level)
+    and its README's start. The answer is the members box's lines (parse_members reads them)."""
+    path = Path(folder)
+    try:
+        entries = sorted((p for p in path.iterdir() if not p.name.startswith(".")),
+                         key=lambda p: (not p.is_dir(), p.name.casefold()))
+    except OSError:
+        entries = []
+    files = project_files(path)
+    listing = (f"\n{files}" if files else
+               ", ".join(p.name + ("/" if p.is_dir() else "") for p in entries[:60]) or "(nothing listed)")
+    readme = next((p for p in (path / name for name in ("README.md", "README.rst", "README.txt", "README"))
+                   if p.is_file()), None)
+    try:
+        start = readme.read_text(encoding="utf-8", errors="replace")[:1500] if readme else ""
+    except OSError:
+        start = ""
+    return (
+        "You set up a team of Claude Code sessions for one goal in one project. Each member is a session of "
+        "its own, working in the same folder at the same time, and they message each other.\n\n"
+        f"Goal: {goal}\nProject folder: {path.name}\n{'Its files, by folder' if files else 'At its top level'}: "
+        f"{listing}\n"
+        + (f"Its README begins:\n{start}\n" if start else "")
+        + "\nAnswer with the line-up only, one member a line, nothing before or after it, each line in this "
+        "form:\nname: what it works on [the folders or files that are its own] @model @effort\n\n"
+        f"- 2 to {most} members, fewer when the work is small. Names: one short lowercase word.\n"
+        "- Give each a part that can go on at the same time as the others, and the folders or files that are "
+        "its own, so that no two edit the same file.\n"
+        "- Put a first line 'lead: plans the work, hands it out and checks it @opus @xhigh' only when the parts "
+        "depend on each other so much that someone must hand out and check the work. Leave it out when they "
+        "are separate topics that only need to tell each other what touches the other: they then work as peers.\n"
+        "- Models: opus for hard design or tricky code, sonnet for routine code, tests and docs, haiku for quick "
+        "look-ups. Efforts: high for most work, xhigh for the hardest, medium for routine work, low for look-ups.\n"
+        "- Name a member who reviews review, one who writes tests tests, one who writes documentation docs, one "
+        "who finds things out research.")
+
+
+MEMBER_LINE = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*[A-Za-z][\w-]*\s*:\s*\S")  # "- api: ...", not "Here you go:"
+
+
+def suggested_lines(answer: str) -> str:
+    """The members box's text from Claude's answer: each member it named (a one-word name, a colon
+    and its part), as a clean line; anything said around them is left out."""
+    named = "\n".join(line for line in answer.splitlines() if MEMBER_LINE.match(line))
+    return "\n".join(member.line() for member in parse_members(named, lead_ok=True))
 
 
 def options(team: Team, member: Member) -> tuple[str, ...]:

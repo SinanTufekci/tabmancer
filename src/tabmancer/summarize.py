@@ -108,15 +108,16 @@ def session_digest(session: Session) -> str:
     return digest(session)
 
 
-def ask(prompt: str, model: str, timeout: float = 180) -> str:
+def ask(prompt: str, model: str, timeout: float = 180, effort: str = "") -> str:
     """One answer from `claude -p`: no tools, no transcript left behind, run from a neutral
-    folder so no project CLAUDE.md is loaded into the request."""
+    folder so no project CLAUDE.md is loaded into the request. An empty model is your default."""
     claude = shutil.which("claude")
     if not claude:
         raise SummaryError("The claude CLI is not on PATH.")
+    chosen = [*(["--model", model] if model else []), *(["--effort", effort] if effort else [])]
     try:
         result = subprocess.run(
-            [claude, "-p", "--model", model, "--tools", "", "--no-session-persistence"],
+            [claude, "-p", *chosen, "--tools", "", "--no-session-persistence"],
             input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout, check=False, cwd=tempfile.gettempdir(),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

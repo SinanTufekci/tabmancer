@@ -142,7 +142,9 @@ has seen, in its own folder, to offer them when you switch (`A`), and the ids of
 opened again, to count them on your week's card (`W`). Once a day it asks PyPI which version of
 tabmancer is the latest, to tell you of a newer one (`tabmancer updates off` stops it). A model
 is called only when you ask for one, through your own CLI
-and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats). It types into
+and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats), a team's line-up
+(`Ctrl+R` in the new-team form, which sends the goal, the project's file names and its README's
+start). It types into
 an open session only when you have it continue the ones stopped at a usage limit (`c`).
 Sharing your week's card (`p` on it) opens the platform's own page for a new post in your
 browser, with the words written in: you post it, or not.

@@ -21,6 +21,11 @@
   own tab, and tells the others what touches their work. You talk to each; an idle peer waits for
   you. In the list and the team view peers stand side by side on one wire, with what each sent
   and was sent counted on it.
+- **Help with the roles.** In the new-team form, `Ctrl+R` has Claude suggest a line-up for the
+  goal (each member's part, its own files, a model and an effort, a lead only when one is needed),
+  from the project's files and README, in one call on your plan; `Ctrl+G` shows what the member on
+  the cursor's line is told, word for word. `[src/api]` after a member's part names its own files,
+  and members named review, tests, docs or research get their kind's rules.
 
 ## 0.1.2
 
