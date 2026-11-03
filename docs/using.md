@@ -105,6 +105,7 @@ the highlighted session the preview says what `Enter` will do with it, as it sta
 | `X` | show the hidden ones too (`x` on one brings it back) |
 | `f` | pin the ticked sessions, or the highlighted one, above the rest; again unpins |
 | `u` | stats: tokens, when you work, tools and files, plan limits, a written report |
+| `W` | Claude Code Wrapped: your last seven days as a card to share ([stats](stats.md#claude-code-wrapped)) |
 | `B` | background sessions: attach, stop, remove, clean up |
 | `,` | which CLIs to list: Claude Code, Codex, Antigravity |
 | `t` | next colour theme (remembered) |

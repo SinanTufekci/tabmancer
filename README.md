@@ -60,6 +60,10 @@ picker at login when sessions were left open.
   as its first message.
 - **Counts.** Tokens, when you work, tools and files, plan limits with a forecast, and a
   written report of the week to share.
+- **Wraps your week up.** Claude Code Wrapped: on Fridays the dashboard says your week is
+  ready, and `W` shows it as a card to share (tokens, time at work, how many sessions worked
+  side by side, the ones brought back where they left off), in pixels like Bit; `s` saves it
+  as a picture, `c` copies it. Counts only: no project names.
 - **Finds.** `/` finds a session by anything you or Claude said in it.
 - **Codex and Antigravity too**, if you use them.
 
@@ -83,6 +87,7 @@ status means, every key, writing to a session, background sessions, workspaces) 
 | `h` | hand a session over to a fresh one |
 | `c` | continue the sessions stopped at a usage limit |
 | `u` | stats |
+| `W` | Claude Code Wrapped: your week as a card to share |
 | `?` | every key, explained; `Enter` runs the one picked |
 
 [All the keys](docs/using.md#keys).
@@ -106,7 +111,8 @@ the agents already keep (`~/.claude`, `~/.codex`, `~/.gemini`) and asks the `cla
 which sessions are open and how full your plan limits are (`/usage`, a local command). It
 reads which account you are signed in with (its email and plan) from `~/.claude.json` and
 Codex's `auth.json`, to show it in the top bar, and remembers the emails of the Claude accounts it
-has seen, in its own folder, to offer them when you switch (`A`). Once a day it asks PyPI which version of
+has seen, in its own folder, to offer them when you switch (`A`), and the ids of the sessions it
+opened again, to count them on your week's card (`W`). Once a day it asks PyPI which version of
 tabmancer is the latest, to tell you of a newer one (`tabmancer updates off` stops it). A model
 is called only when you ask for one, through your own CLI
 and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats). It types into

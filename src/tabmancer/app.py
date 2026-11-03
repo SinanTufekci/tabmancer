@@ -52,6 +52,7 @@ from . import (
     updates,
     usage,
     workspaces,
+    wrapped,
 )
 from . import viewmodel as VM
 from .clisettings import CliSettings
@@ -158,6 +159,7 @@ TOKENS_SECONDS = 60  # token counts: only what transcripts gained since the last
 ACCOUNTS_SECONDS = 5  # who the CLIs are signed in as: /login in any session switches it
 UPDATES_SECONDS = 6 * 3600  # a dashboard left open for days hears of a new tabmancer (PyPI: once a day)
 GIT_SECONDS = 60  # where each project's folder stands in git (git status: local, no network)
+WRAPPED_AFTER, WRAPPED_SECONDS = 8, 600  # Friday's word on the week: after Bit's hello, then looked for again
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
 FLASH_SECONDS = 1.6  # how long a row stays lit after its state changes
@@ -548,6 +550,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         Binding("u", "tokens", "Stats"),
         Binding("T", "teams", "Teams"),
         Binding("A", "accounts", "Accounts", show=False),
+        Binding("W", "wrapped", "Wrapped", show=False),
         Binding("w", "save_workspace", "Save workspace", show=False),
         Binding("o", "open_workspace", "Workspaces", show=False),
         Binding("X", "toggle_hidden", "Show hidden", show=False),  # the status line says it when any are
@@ -810,6 +813,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         else:
             self.mascot.say("Hi! Press Enter to open a session.", seconds=5)
         self.check_limits()
+        self.set_timer(WRAPPED_AFTER, self.tell_wrapped)  # after Bit's hello: Friday's word on the week
+        self.set_interval(WRAPPED_SECONDS, self.tell_wrapped)
 
     # --- rows ---------------------------------------------------------------------
 
@@ -1640,6 +1645,26 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             return
         accent = THEMES.get(self.theme, THEMES[DEFAULT_THEME])[1]
         self.push_screen(StatsScreen(self.token_report, self.sessions, accent))
+
+    def action_wrapped(self) -> None:
+        """W: Claude Code Wrapped, the last seven days as a card to share."""
+        if self.token_report is None:
+            self.notify("Still counting tokens…", timeout=3)
+            return
+        from .wrappedview import WrappedScreen
+
+        self.push_screen(WrappedScreen(wrapped.week(self.token_report, self.sessions), self.accent()))
+
+    def tell_wrapped(self) -> None:
+        """On Fridays from noon, or the weekend after, once a week: the week is ready (W)."""
+        if not wrapped.due():
+            return
+        wrapped.told()
+        self.mascot.react("lifted", "Your week, wrapped! W shows it.", self.accent(), seconds=10)
+        self.notify("Claude Code Wrapped: your week as a card to share. W shows it.", title="Your week",
+                    timeout=15)
+        if toast.enabled():
+            self.send_toast("Your week, wrapped", "Claude Code Wrapped is ready: W in the dashboard shows it.")
 
     # --- handing over -----------------------------------------------------------------
 
@@ -2652,6 +2677,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         missed = [s for s in still_open
                   if not (s.live_state in handover.IDLE and typein.type_into(s.session_id, prompt))]
         back = opened + len(still_open) - len(missed)
+        wrapped.note_opened([(s.session_id, "limit") for s in still_open if s not in missed])  # for the card
         if back:
             self.call_from_thread(self.mascot.react, "back", f"{back} back at work", self.accent())
         if missed:
@@ -3013,6 +3039,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             # No terminal that can open tabs: close, and leave the commands to run by hand.
             self.exit(leftover)
             return
+        # Brought back where they left off, or told to carry on: counted on the week's card (W).
+        wrapped.note_opened([(launch.session_id, "auto" if launch.mode is Mode.AUTO else "resume")
+                             for launch in launches if resumes(launch)])
         ids = {launch.session_id for launch in launches}
         self.opening.update(dict.fromkeys(ids, time.monotonic()))
         resumed = {launch.session_id for launch in launches if resumes(launch)}

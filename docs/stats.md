@@ -86,6 +86,28 @@ the top bar and the Plan limits tab show.
 Each session file is read once. After that, only what was added since is read, so the
 count stays current every minute at next to no cost.
 
+## Claude Code Wrapped
+
+Your last seven days as a card to share, drawn in pixels like Bit: the tokens and how they
+compare with the week before, the time at work, the sessions and in how many projects, how
+many worked **side by side** at most (each in its own tab, at work at the same time), the
+sessions tabmancer **brought back** where they left off (opened again, or told to carry on,
+after a reboot or a usage limit) and the tool called most, with a bar for each day.
+
+On Fridays from noon, or the first time the dashboard is open over the weekend after, Bit
+says your week is ready, once a week. `W` shows the card at any time: `s` saves it as a
+1200x675 PNG in your Downloads, `c` copies it to paste where you share it. In a terminal
+that draws no pictures, its numbers are shown in words; `s` still saves the picture.
+
+```sh
+tabmancer wrapped                 # save this week's card (--out a folder or a .png)
+tabmancer wrapped off             # no word on Fridays (on again with: on)
+```
+
+The card holds counts only: no project names, no titles, nothing said in a session. The
+sessions brought back are counted from when tabmancer opens them (it keeps their ids, in its
+own folder, for two months), so a first week counts only what it has seen.
+
 ## AI summaries
 
 Press `s` on a session. tabmancer sends a digest of it to Claude and shows what comes back.

@@ -88,6 +88,10 @@ def main(argv: list[str] | None = None) -> None:
     telling.add_argument("action", nargs="?", choices=["on", "off", "test"])
     checking = sub.add_parser("updates", help="say when a newer tabmancer is out (PyPI, once a day): on or off")
     checking.add_argument("action", nargs="?", choices=["on", "off"])
+    wrapping = sub.add_parser("wrapped", help="Claude Code Wrapped: your last seven days as a picture to share; "
+                                              "on or off: the dashboard's word on Fridays")
+    wrapping.add_argument("action", nargs="?", choices=["on", "off"])
+    wrapping.add_argument("--out", help="where to save the picture (default: Downloads)")
     # What the login shortcut runs when there is no windowless gui launcher.
     sub.add_parser("startup-run", help="(used by the login shortcut)")
     args = parser.parse_args(argv)
@@ -134,6 +138,8 @@ def main(argv: list[str] | None = None) -> None:
         manage_notifications(args.action)
     elif args.command == "updates":
         manage_updates(args.action)
+    elif args.command == "wrapped":
+        save_wrapped(args.action, args.out)
     elif args.command == "team":
         sys.exit(add_to_team(args.team, args.members))
     elif args.command == "startup-run":
@@ -351,6 +357,34 @@ def print_report(days: float, save: bool) -> None:
     print(entry["text"])
     if save:
         print(f"Saved {report.save(entry)}", file=sys.stderr)
+
+
+def save_wrapped(action: str | None, out: str | None) -> None:
+    """Claude Code Wrapped: the last seven days saved as a picture; on/off: the Friday word."""
+    from pathlib import Path
+
+    from . import card, tokens, wrapped
+    from .theme import DEFAULT_THEME, THEMES
+
+    if action:
+        wrapped.set_enabled(action == "on")
+        print("On Fridays from noon the dashboard says your week is ready (W shows it)." if action == "on" else
+              "The dashboard no longer says so on Fridays; W and tabmancer wrapped still show your week.")
+        return
+    week = wrapped.week(tokens.collect(14), {s.session_id: s for s in find_sessions(14, include_all=True, quick=True)})
+    accent = THEMES[DEFAULT_THEME][1].lstrip("#")
+    canvas = wrapped.draw(week, (int(accent[0:2], 16), int(accent[2:4], 16), int(accent[4:6], 16)))
+    target = Path(out).expanduser() if out else None
+    if target is not None and target.suffix.lower() != ".png":  # a folder
+        path = card.save(canvas, wrapped.filename(week), target)
+    elif target is not None:
+        target.write_bytes(canvas.png())
+        path = target
+    else:
+        path = card.save(canvas, wrapped.filename(week))
+    print(f"Claude Code Wrapped, {wrapped.span(week).lower()}: saved as {path}")
+    for what, number, note in wrapped.tiles(week):
+        print(f"  {what.lower():<14}{number:<12}{note.lower()}")
 
 
 def print_stats(days: float, as_json: bool, as_csv: bool) -> None:

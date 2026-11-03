@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Claude Code Wrapped.** Your last seven days as a card to share, in pixels like Bit: the
+  tokens against the week before, the time at work, the sessions, how many worked side by side,
+  the ones tabmancer brought back where they left off, the tool called most. On Fridays Bit
+  says it is ready; `W` shows it, `s` saves it as a PNG, `c` copies it to paste. Counts only, no
+  project names. `tabmancer wrapped` saves it from the command line; `tabmancer wrapped off`
+  stops the Friday word.
 - **Smoother.** Bit's new poses are drawn about two and a half times faster (front to back, and
   the pixels that cannot be inside a part are skipped), so the dashboard no longer stalls while
   it walks; a turning star draws its own row again, not the whole list; and with a dialog in

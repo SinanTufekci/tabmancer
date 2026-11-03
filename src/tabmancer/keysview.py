@@ -68,6 +68,8 @@ KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("Views", [
         ("l", "toggle_live", "the live view: only the open sessions and what each is doing; l again goes back"),
         ("u", "tokens", "stats: tokens, when you work, tools and files, plan limits, a written report"),
+        ("W", "wrapped", ("Claude Code Wrapped: your last seven days as a card to share (s saves it, c copies "
+                          "it); on Fridays Bit says it is ready")),
         ("T", "teams", ("teams: several sessions on one project with an orchestrator, talking to each other: the "
                         "list of them, and a new one. A team's own view: Enter on its row")),
     ]),

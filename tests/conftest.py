@@ -57,6 +57,10 @@ def isolated(monkeypatch, tmp_path):
     from tabmancer import updates
 
     monkeypatch.setattr(updates, "ask_pypi", lambda timeout=5: None)  # never PyPI
+    from tabmancer import wrapped
+
+    # The week's word only where a test asks for it: run on a Friday afternoon, every dashboard said it.
+    monkeypatch.setattr(wrapped, "due", lambda now=None: False)
     monkeypatch.setenv("TABMANCER_CONFIG_DIR", str(tmp_path / "tabmancer-config"))
     # An empty ~/.claude unless a test builds one: never read the real transcripts.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-home"))
