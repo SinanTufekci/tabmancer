@@ -1,8 +1,9 @@
 """docs/banner.svg: the banner of the README and the profile, 1720x340 (the height of a row of the
 profile's two-column project table at full width): Bit, a small dashboard of sessions, the 14-day token
-chart. Bit is the dashboard's own, going through its moves in a 41-second loop (bit_sprites.py): it
-waves, walks, has a coffee, whistles, works at its laptop, thinks, has an idea, cheers, walks back,
-dances, spins, gets dizzy, stretches, yawns, nods off and sleeps, wakes with a hop, looks about.
+chart. Bit is the dashboard's own, going through its moves in a loop of 71 seconds
+(bit_sprites.py), standing still a while between them: it waves, walks, has a coffee, whistles, works
+at its laptop, thinks, has an idea, cheers, walks back, dances, spins, gets dizzy, stretches, yawns,
+nods off and sleeps, wakes with a hop, looks about.
 Otherwise the working star turns and the waiting dot breathes (docs/banner.webp, the moving story, is
 scripts/promo.py's).
 
@@ -24,13 +25,20 @@ def hexc(c):
     return f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}"
 
 
-# Bit's loop: (move, frames at 20 a second); it walks right and back again, so it ends where it began.
-MOVES = [Move("idle", 30), Move("wave", 36, eyes="happy"), Move("walk", 26, direction=1), Move("coffee", 80),
-         Move("whistle", 50), Move("work", 80), Move("think", 40), Move("idea", 30),
-         Move("cheer", 40, jumps=2, eyes="happy", burst=True), Move("walk", 26, direction=-1),
-         Move("dance", 60, eyes="happy", burst=True), Move("spin", 30, burst=True), Move("dizzy", 40),
-         Move("stretch", 40), Move("yawn", 40), Move("nod", 50), Move("sleep", 70, eyes="sleep"),
-         Move("wake", 24, jumps=1), Move("look", 30, eyes="left"), Move("idle", 30)]
+# Bit's loop: (move, frames at 20 a second), Bit standing still between moves (REST: it breathes and
+# blinks) but for moves that run into the next (thinking into an idea, a spin into dizziness, a yawn
+# into sleep). It walks right and back again, so it ends where it began.
+def rest(frames: int = 50) -> Move:
+    return Move("idle", frames)
+
+
+MOVES = [rest(60), Move("wave", 36, eyes="happy"), rest(), Move("walk", 26, direction=1), rest(30),
+         Move("coffee", 80), rest(), Move("whistle", 50), rest(), Move("work", 80), Move("think", 40),
+         Move("idea", 30), rest(), Move("cheer", 40, jumps=2, eyes="happy", burst=True), rest(40),
+         Move("walk", 26, direction=-1), rest(), Move("dance", 60, eyes="happy", burst=True), rest(40),
+         Move("spin", 30, burst=True), Move("dizzy", 40), rest(60), Move("stretch", 40), rest(30),
+         Move("yawn", 40), Move("nod", 50), Move("sleep", 90, eyes="sleep"), Move("wake", 24, jumps=1), rest(40),
+         Move("look", 30, eyes="left"), rest(60)]
 
 
 def main(out_path):
