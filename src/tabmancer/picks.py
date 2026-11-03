@@ -98,16 +98,25 @@ def model_name(model: str) -> str:
 
 # --- what was picked, by session id ------------------------------------------------------------
 
-_cache: tuple[tuple[str, float], dict[str, dict]] | None = None  # (file, its mtime), what it held
+_cache: tuple[tuple, dict[str, dict]] | None = None  # (the file, its time and size), what it held
+
+
+def _stamp() -> tuple | None:
+    path = config_dir() / FILE
+    try:
+        found = path.stat()
+    except OSError:
+        return None
+    return str(path), found.st_mtime_ns, found.st_size
 
 
 def _load() -> dict[str, dict]:
-    """The picks, read again only when the file changed: the dashboard asks on every cursor move."""
+    """The picks, read again only when the file changed: the dashboard asks on every cursor move.
+    Writes in quick succession can leave the time as it was (seen on Windows), so remember() keeps
+    the cache itself and the size is in the stamp too."""
     global _cache
-    path = config_dir() / FILE
-    try:
-        stamp = (str(path), path.stat().st_mtime)
-    except OSError:
+    stamp = _stamp()
+    if stamp is None:
         return {}
     if _cache is not None and _cache[0] == stamp:
         return _cache[1]
@@ -124,6 +133,9 @@ def remember(session_id: str, pick: Pick) -> None:
     if len(picks) > KEEP:
         picks = dict(sorted(picks.items(), key=lambda item: str(item[1].get("at", "")))[-KEEP:])
     write_json(FILE, {"picks": picks}, indent=1)
+    global _cache
+    stamp = _stamp()
+    _cache = (stamp, picks) if stamp is not None else None
 
 
 def recall(session_id: str, picks: dict[str, dict] | None = None) -> Pick:

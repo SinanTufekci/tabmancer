@@ -76,6 +76,16 @@ def test_the_oldest_picks_go_first(monkeypatch):
     assert set(picks.read_json(picks.FILE)["picks"]) == {"s2", "s3", "s4"}
 
 
+def test_quick_writes_lose_nothing_when_the_files_time_stands_still(monkeypatch):
+    # On the Windows runner two writes in a row left the file's time as it was, and the cached
+    # picks, read before the first, wrote over it: s3 was lost (CI, a2ad4b7).
+    monkeypatch.setattr(picks, "_stamp", lambda: ("picks.json", 0, 0))  # a clock that never moves
+    for name in ("a", "b", "c"):
+        picks.remember(name, Pick("", "low"))
+    assert set(picks.read_json(picks.FILE)["picks"]) == {"a", "b", "c"}
+    assert picks.recall("c") == Pick("", "low")
+
+
 def test_team_lines_take_an_effort_and_members_start_with_it():
     members = teams.parse_members("lead @opus @xhigh\napi: endpoints @sonnet @medium\nui: screens @high", lead_ok=True)
     assert [(m.name, m.model, m.effort) for m in members] == [
