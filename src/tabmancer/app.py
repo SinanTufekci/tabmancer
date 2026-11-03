@@ -25,6 +25,7 @@ from textual.containers import Horizontal, Vertical
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Input, Label, OptionList, SelectionList, Sparkline, Static
+from textual.widgets.data_table import ColumnKey, RowKey
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
@@ -395,6 +396,41 @@ class SessionTable(DataTable):
             self.app.toggle_selected(session_id)
         else:
             self.app.toggle_expanded(session_id)
+
+    def update_cells(self, changes: list[tuple[str, str, object]]) -> None:
+        """Cells changed, (row, column, value), and only their rows drawn again. update_cell throws
+        away the drawing of every row (DataTable's caches go by a count of changes) and draws the
+        whole table again: for the turning stars, a dozen times a second, that was most of the
+        dashboard's drawing. Here the changed rows are forgotten from the caches and redrawn; should
+        a Textual to come keep them otherwise, update_cell does it."""
+        rows: dict[RowKey, int] = {}
+        try:
+            for row, column, value in changes:
+                key = RowKey(row)
+                self._data[key][ColumnKey(column)] = value
+                rows[key] = self.get_row_index(key)
+            count = self._update_count
+            for index in rows.values():
+                self._row_renderable_cache.discard((count, index))
+            for cache in (self._cell_render_cache, self._row_render_cache):  # keyed by the row first
+                for stale in [k for k in cache.keys() if k[0] in rows]:
+                    cache.discard(stale)
+            stale = []
+            for k in self._line_cache.keys():  # keyed by the line first
+                try:
+                    if self._get_offsets(k[0])[0] in rows:
+                        stale.append(k)
+                except LookupError:
+                    pass
+            for k in stale:
+                self._line_cache.discard(k)
+        except (AttributeError, KeyError, LookupError, TypeError):
+            for row, column, value in changes:
+                if row in self.rows:
+                    self.update_cell(row, column, value)
+            return
+        for index in rows.values():
+            self.refresh_row(index)
 
 
 class WorkspaceList(ModalScreen[str | None]):
@@ -1003,8 +1039,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         return text
 
     def spin(self) -> None:
-        """Advance the spinners and pulses of open sessions; touch only their cells."""
+        """Advance the spinners and pulses of open sessions; touch only their cells. Not behind a
+        dialog or another screen: with a dialog in front, Textual sends the whole screen to the
+        terminal again for any change behind it, a dozen times a second for a turning star."""
         self.frame += 1
+        if not self.screen_stack or self.screen is not self.dashboard:
+            return
         now = time.monotonic()
         if self.grow_until > now:  # the token chart rises from zero after loading
             progress = 1 - (self.grow_until - now) / GROW_SECONDS
@@ -1015,17 +1055,20 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.grow_until = 0.0
         if self.team_flights:
             self.fly(now)
+        changes: list[tuple[str, str, object]] = []  # only these rows are drawn again (update_cells)
         for state, _ in self.blocks:  # a folded team's members at work: their stars turn on its row
             key = f"{TEAM_ROW}{state.team.name}"
             if (state.team.name not in self.unfolded and key in self.table.rows
                     and any(s.live_state.lower() in SPINNING for _, s in self.team_members(state.team.name))):
-                self.table.update_cell(key, "title", self.team_chips(state))
+                changes.append((key, "title", self.team_chips(state)))
         for session in self.visible():
             sid = session.session_id
             if self.animates(session) and sid in self.table.rows:
-                self.table.update_cell(sid, "status", self.status_cell(session))
+                changes.append((sid, "status", self.status_cell(session)))
             if self.flash.get(sid, now) < now:
                 del self.flash[sid]  # drawn one last time without the highlight
+        if changes:
+            self.table.update_cells(changes)
 
     def animates(self, session: Session) -> bool:
         """Whether its status cell changes from one frame to the next: a turning star, the red

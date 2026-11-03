@@ -239,6 +239,13 @@ def tally(lines: list[tuple[str, str]], room: int = 3) -> Text:
 BAR_PADDING = {"pills": 2, "usage": 2}  # the top bar's parts' own padding, as in its CSS
 
 
+def same(a, b) -> bool:
+    """Whether two contents look the same: Rich's Text is equal to one in another colour."""
+    if isinstance(a, Text) and isinstance(b, Text):
+        return a.plain == b.plain and a.style == b.style and a.spans == b.spans
+    return type(a) is type(b) and a == b
+
+
 class TopBar(Horizontal):
     """One slim line: the name, what is on screen, a breathing live dot and a clock."""
 
@@ -259,6 +266,7 @@ class TopBar(Horizontal):
         super().__init__(**kwargs)
         self.live = live  # the breathing dot: only where the view refreshes itself
         self.widths: dict[str, int] = {"brand": cell_len("◆ tabmancer")}  # the parts' contents, in cells
+        self.shown: dict[str, int] = {}  # ...as last put, each (put)
         self.accounts: list[Account] = []
 
     def compose(self) -> ComposeResult:
@@ -292,12 +300,19 @@ class TopBar(Horizontal):
 
     def put(self, part: str, content) -> None:
         """Update one part of the bar. A poll can still land while the app shuts down and the bar
-        has been emptied (seen on CI as NoMatches): then there is nothing to update."""
+        has been emptied (seen on CI as NoMatches): then there is nothing to update.
+
+        Only what changed is drawn again, and a part as wide as before without laying the screen
+        out anew: the clock and the live dot are put ten times a second, and with a dialog in front
+        each layout sent the whole screen to the terminal again (700 KB a second)."""
+        width = content.cell_len if isinstance(content, Text) else cell_len(str(content))
         found = self.query(f"#{part}")
         if found:
-            found.first(Static).update(content)
+            static = found.first(Static)
+            if not same(static.content, content):
+                static.update(content, layout=width != self.shown.get(part))
+            self.shown[part] = width
         if part not in ("info", "account", "clock", "live"):  # the clock and the dot keep their widths
-            width = content.cell_len if isinstance(content, Text) else cell_len(str(content))
             if width != self.widths.get(part):
                 self.widths[part] = width
                 self.fit_accounts()
@@ -353,9 +368,10 @@ class TopBar(Horizontal):
         self.set_interval(0.1, self.tick)
 
     def tick(self) -> None:
-        # The live dot breathes: a slow sine between dim and bright green.
+        # The live dot breathes: a slow sine between dim and bright green. Not behind a dialog, where
+        # each change would send the whole screen to the terminal again; the clock goes on there.
         phase = (math.sin((time.monotonic() - self.started) * 2.2) + 1) / 2
-        if self.live:
+        if self.live and self.app.screen is self.screen:
             dot = Text("● ", style=mix("#163d1f", GREEN, phase))
             self.put("live", dot + Text("live", style=MUTED))
         self.put("clock", datetime.now().strftime("%H:%M:%S"))

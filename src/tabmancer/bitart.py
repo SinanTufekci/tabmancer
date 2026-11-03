@@ -11,7 +11,9 @@ and stretches them freely, and they are filled hard-edged, pixel art in two or t
 part. Props (a laptop, a mug, a box...) and effects (Z's, notes, confetti...) go with them.
 
 Pure Python, no imaging library. A pose without its effects is drawn once and kept
-(figure()); effects are laid over a copy each frame.
+(figure()); effects are laid over a copy each frame. A new pose costs a few milliseconds: drawn
+front to back, each part tried only where nothing nearer is, and a pixel some way outside a part
+skips the next ones that cannot be nearer (drawn).
 """
 
 from __future__ import annotations
@@ -199,6 +201,27 @@ class _Space:
         # on their front has gone round by this much (an ellipse turned: its point at the front).
         self.head_across, self.head_round = self._round(HEAD_DEPTH)
         self.body_across, self.body_round = self._round(BODY_DEPTH)
+        # Screen pixels to each part's design coordinates, as affine maps worked out once for the pose
+        # (they were worked out step by step, legs to body to head, for every pixel).
+        self.pixel = 1 / (self.sx * SCALE)  # design pixels a screen pixel across, legs, body and head
+        self._ground = (self.pixel, 0.0, 55 - 55 / SCALE, 0.0, 1 / self.sy, 0.0)
+        self._legs = (self.pixel, 0.0, 55 - 55 / SCALE, 0.0, 1 / (self.sy * self.k), GROUND - self.feet / self.k)
+        body = _moved(self._legs, 0.0, -self.SIT_DROP) if p.sitting else self._legs
+        self._body = _turned_about(body, *self.lean, 55, 70) if p.lean else body  # about the hips
+        self._head = _moved(_turned_about(self._body, *self.tilt, 55, p.head_y + 40), 0.0, -p.head_y)
+        self._helmet = _narrowed(self._head, self.head_across)
+        self._torso = _narrowed(self._body, self.body_across)
+
+    def across(self, space: str) -> float | None:
+        """How far a screen pixel across goes, at most, in a space's design coordinates (_Space's
+        methods): None on a turned front or back, which squeezes towards its sides without end."""
+        if space in ("ground", "legs", "body", "head"):
+            return self.pixel
+        if space == "helmet" or (space == "face" and not self.head_round):
+            return self.pixel / self.head_across
+        if space == "torso" or (space == "chest" and not self.body_round):
+            return self.pixel / self.body_across
+        return None
 
     def _round(self, depth: float) -> tuple[float, float]:
         c, s = self.turn
@@ -212,32 +235,27 @@ class _Space:
 
     def ground(self, x, y):
         """Where Bit stands: its shadow stays there when it hops."""
-        return 55 + (x / self.sx - 55) / SCALE, y / self.sy
+        ax, bx, cx, ay, by, cy = self._ground
+        return ax * x + bx * y + cx, ay * x + by * y + cy
 
     def legs(self, x, y):
-        x, y = x / self.sx, y / self.sy
-        return 55 + (x - 55) / SCALE, GROUND - (self.feet - y) / self.k
+        ax, bx, cx, ay, by, cy = self._legs
+        return ax * x + bx * y + cx, ay * x + by * y + cy
 
     def body(self, x, y):
-        bx, by = self.legs(x, y)
-        if self.p.sitting:
-            by -= self.SIT_DROP
-        if self.p.lean:  # about the hips
-            c, s = self.lean
-            dx, dy = bx - 55, by - 70
-            bx, by = 55 + dx * c - dy * s, 70 + dx * s + dy * c
-        return bx, by
+        """The legs' coordinates, sitting lower, leaning about the hips."""
+        ax, bx, cx, ay, by, cy = self._body
+        return ax * x + bx * y + cx, ay * x + by * y + cy
 
     def head(self, x, y):
-        bx, by = self.body(x, y)
-        c, s = self.tilt
-        dx, dy = bx - 55, by - self.p.head_y - 40
-        return 55 + dx * c - dy * s, 40 + dx * s + dy * c
+        """The body's, the head tilted and bobbing."""
+        ax, bx, cx, ay, by, cy = self._head
+        return ax * x + bx * y + cx, ay * x + by * y + cy
 
     def helmet(self, x, y):
         """The head's coordinates for its outline, as wide as it is turned."""
-        hx, hy = self.head(x, y)
-        return 55 + (hx - 55) / self.head_across, hy
+        ax, bx, cx, ay, by, cy = self._helmet
+        return ax * x + bx * y + cx, ay * x + by * y + cy
 
     def face(self, x, y):
         """The head's coordinates on its front, where the visor and the eyes are: turned, they go
@@ -250,8 +268,8 @@ class _Space:
 
     def torso(self, x, y):
         """The body's coordinates for its outline, as wide as it is turned."""
-        bx, by = self.body(x, y)
-        return 55 + (bx - 55) / self.body_across, by
+        ax, bx, cx, ay, by, cy = self._torso
+        return ax * x + bx * y + cx, ay * x + by * y + cy
 
     def chest(self, x, y):
         """The body's coordinates on its front (the panel, its light, the vents)."""
@@ -282,6 +300,27 @@ class _Space:
         sx = 55 + (x - 55) * SCALE
         sy = self.feet - (GROUND - y - drop - head) * self.k
         return sx * self.sx, sy * self.sy
+
+
+# An affine map of screen pixels (x, y) to design coordinates (u, v): (ax, bx, cx, ay, by, cy) for
+# u = ax*x + bx*y + cx and v = ay*x + by*y + cy.
+
+def _moved(m: tuple, du: float, dv: float) -> tuple:
+    ax, bx, cx, ay, by, cy = m
+    return ax, bx, cx + du, ay, by, cy + dv
+
+
+def _turned_about(m: tuple, c: float, s: float, ox: float, oy: float) -> tuple:
+    """The map, then turned by the angle of cosine c and sine s about the design point (ox, oy)."""
+    ax, bx, cx, ay, by, cy = m
+    return (c * ax - s * ay, c * bx - s * by, c * (cx - ox) - s * (cy - oy) + ox,
+            s * ax + c * ay, s * bx + c * by, s * (cx - ox) + c * (cy - oy) + oy)
+
+
+def _narrowed(m: tuple, across: float) -> tuple:
+    """The map, then squeezed to a width of across about the middle."""
+    ax, bx, cx, ay, by, cy = m
+    return ax / across, bx / across, (cx - 55) / across + 55, ay, by, cy
 
 
 def _surface(x: float, y: float, half: float, gone: float, front: bool) -> tuple[float, float]:
@@ -446,7 +485,7 @@ def _eyes(p: Pose, s: _Space):
         seen = s.seen(cx - 8, cx + 8)
         if seen is None:  # round the side, out of sight
             continue
-        shapes.append((f"eye{side}", (seen[0], cy - 8, seen[1], cy + 8), distance,
+        shapes.append((f"eye{side}:{own}", (seen[0], cy - 8, seen[1], cy + 8), distance,
                        _flat(PINK if own == "heart" else YELLOW if own == "star" else EYE)))
     return shapes
 
@@ -637,21 +676,57 @@ def lights(pose: Pose) -> dict[Colour, Colour]:
             CHEST_LIGHT: chest, CHEST_SHINE: chest_shine}
 
 
+# How much each part's distance changes at most as its point moves a design pixel, and the
+# coordinates it is measured in (_Space.across). Boxes, circles, segments and ellipses give true
+# distances, which change no more than that: a pixel d outside one is d from it at least, and the
+# pixels before that far need not be tried. Not here, tried pixel by pixel: the gear's teeth and the
+# clipboard's lines (no true distance), and the back's hatch and grille (on a turned back, always).
+REACH = {
+    "ground": (1.0, "ground"), "leg": (1.0, "legs"), "foot": (1.0, "legs"), "lap": (1.0, "legs"),
+    "shoe": (1.0, "legs"), "neck": (1.0, "body"), "body": (1.0, "torso"), "panel": (1.0, "chest"),
+    "chest": (1.0, "chest"), "vent": (1.0, "chest"), "ear": (1.0, "head"), "helmet": (1.0, "helmet"),
+    "visor": (1.0, "face"), "blush": (1.0, "face"), "stem": (1.0, "head"), "beacon": (1.0, "head"),
+    "upper": (1.0, "body"), "fore": (1.0, "body"), "hand": (1.0, "body"), "lid": (1.0, "body"),
+    "logo": (1.0, "body"), "base": (1.0, "body"), "mug": (1.0, "body"), "board": (1.0, "body"),
+    "clip": (1.0, "body"), "handle": (1.0, "body"), "jaw": (1.0, "body"), "box": (1.0, "body"),
+    "tape": (1.0, "body"), "glass": (1.0, "head"), "screw": (1.0, "head"), "dot": (1.0, "head"),
+}
+EYE_REACH = {"focused": 1.15, "worried": 1.15, "heart": 1.25, "star": None}  # the rest: 1 (_eye)
+
+
+def _reach(part: str, s: _Space) -> float | None:
+    """How far a part's distance changes at most from one screen pixel to the next across: None
+    where that is not known."""
+    name, _, eye = part.partition(":")
+    name = name.rstrip("-0123456789")
+    bound, space = (EYE_REACH.get(eye, 1.0), "face") if name == "eye" else REACH.get(name, (None, ""))
+    across = s.across(space) if bound is not None else None
+    return None if across is None else bound * across * 1.01  # a little over: rounding never skips a pixel
+
+
 @lru_cache(maxsize=1024)
 def drawn(pose: Pose, cell: tuple[int, int] = WT_CELL) -> tuple[tuple[Colour | None, ...], tuple[bytes, ...]]:
     """The shapes of a pose, the lights in their stand-in colours: a palette and rows of indices
-    into it, a byte a pixel, so that hundreds of poses kept take a few megabytes."""
+    into it, a byte a pixel, so that hundreds of poses kept take a few megabytes.
+
+    Front to back: a pixel a nearer part took is not tried again for the ones behind it. And along
+    a row, a pixel outside a part skips the next pixels its distance says cannot be inside (_reach)."""
     width, height = size(cell)
     s = _Space(pose, cell)
     palette: list[Colour | None] = [None]
     index: dict[Colour, int] = {}
     out = [bytearray(width) for _ in range(height)]
-    for part, box, distance, paint in _shapes(pose, s):
+    for part, box, distance, paint in reversed(_shapes(pose, s)):
         x0, y0, x1, y1 = _screen_box(box, part, s, width, height)
+        reach = _reach(part, s)
         for y in range(y0, y1):
             row = out[y]
             cy = y + 0.5
-            for x in range(x0, x1):
+            x = x0
+            while x < x1:
+                if row[x]:
+                    x += 1
+                    continue
                 cx = x + 0.5
                 d = distance(cx, cy)
                 if d <= 0:
@@ -661,6 +736,11 @@ def drawn(pose: Pose, cell: tuple[int, int] = WT_CELL) -> tuple[tuple[Colour | N
                         n = index[colour] = len(palette)
                         palette.append(colour)
                     row[x] = n
+                    x += 1
+                elif reach is None:
+                    x += 1
+                else:
+                    x += max(1, int(d / reach))
     return tuple(palette), tuple(bytes(row) for row in out)
 
 

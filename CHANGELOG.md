@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Smoother.** Bit's new poses are drawn about two and a half times faster (front to back, and
+  the pixels that cannot be inside a part are skipped), so the dashboard no longer stalls while
+  it walks; a turning star draws its own row again, not the whole list; and with a dialog in
+  front (the stats, the keys), the clock, the live dot, the stars and Bit behind it no longer
+  have the whole screen sent to the terminal again ten times a second: behind a dialog they
+  wait, and the clock still ticks.
+- **TOKENS TODAY in real pixels.** Where the terminal draws Bit in pixels, the card's chart has
+  a place for each of the day's hours, the hours gone by on a floor and the hour now in white.
+
 ## 0.1.1
 
 - **A newer tabmancer is told of.** Once a day the dashboard asks PyPI for the latest version

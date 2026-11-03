@@ -420,6 +420,10 @@ class Mascot(Widget):
         # own pace but is drawn and sent a few times a second only: the drawing is what costs.
         if not getattr(self.app, "app_focus", True) and self.frame % (FPS // UNFOCUSED_FPS):
             return
+        # Behind a dialog it is not drawn at all: there its picture cannot be shown, and with a
+        # dialog in front, Textual sends the whole screen again for any change behind it.
+        if self.app.screen is not self.screen:
+            return
         # Repaint only when the picture changed: sitting, dozing or standing still, most
         # frames are identical, and redrawing them would cost CPU for nothing.
         width = self.size.width
