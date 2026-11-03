@@ -104,6 +104,9 @@ def test_the_numbers_say_what_they_compare_with():
                         [0] * 7)
     tiles = wrapped.tiles(week)
     assert tiles[0] == ("TOKENS", "200", "") and tiles[3] == ("SIDE BY SIDE", "1", "AT WORK AT ONCE")
+    assert tiles[1] == ("AT WORK", "1 MIN", "OVER 1 DAY")  # not 1M, which beside the tokens reads as a million
+    week.seconds = 3 * 3600 + 5 * 60
+    assert wrapped.tiles(week)[1][1] == "3H 05M"
     assert tiles[4] == ("BUSIEST DAY", "-", "") and tiles[5] == ("TOP TOOL", "-", "")
     week.before, week.brought_back, week.carried_on = 0, 2, 1
     assert wrapped.tiles(week)[0][2] == "NEW THIS WEEK" and wrapped.tiles(week)[4][2] == "1 ON ITS OWN"

@@ -188,7 +188,7 @@ def tiles(week: Week) -> list[tuple[str, str, str]]:
         note = "NEW THIS WEEK" if week.before == 0 and week.tokens else ""
     days = f"OVER {week.days_worked} DAY{'S' * (week.days_worked != 1)}"
     out = [("TOKENS", human(week.tokens).upper(), note),
-           ("AT WORK", duration(week.seconds).upper(), days),
+           ("AT WORK", _time(week.seconds), days),
            ("SESSIONS", str(week.sessions), f"IN {week.projects} PROJECT{'S' * (week.projects != 1)}"),
            ("SIDE BY SIDE", str(week.at_once), "AT WORK AT ONCE")]
     if week.brought_back:
@@ -196,7 +196,7 @@ def tiles(week: Week) -> list[tuple[str, str, str]]:
         out.append(("BROUGHT BACK", str(week.brought_back),
                     "1 ON ITS OWN" if alone == 1 else f"{alone} ON THEIR OWN" if alone else "PICKED UP AGAIN"))
     elif week.busiest:
-        out.append(("BUSIEST DAY", WEEKDAYS[week.busiest[0]], duration(week.busiest[1]).upper()))
+        out.append(("BUSIEST DAY", WEEKDAYS[week.busiest[0]], _time(week.busiest[1])))
     else:
         out.append(("BUSIEST DAY", "-", ""))
     if week.tool:
@@ -206,6 +206,11 @@ def tiles(week: Week) -> list[tuple[str, str, str]]:
     else:
         out.append(("TOP TOOL", "-", ""))
     return out
+
+
+def _time(seconds: float) -> str:
+    """14H 05M, or 45 MIN under an hour: 45M beside the tokens' 55.8M would read as millions."""
+    return duration(seconds).upper() if seconds >= 3600 else f"{int(seconds // 60)} MIN"
 
 
 def _fit(text: str, room: int, size: int) -> str:

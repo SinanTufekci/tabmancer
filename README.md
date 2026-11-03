@@ -11,12 +11,17 @@
 
 # tabmancer
 
-A dashboard for your coding-agent sessions, in the terminal: Claude Code first, Codex and
-Antigravity if you use them. See every recent session from every project and what the open
-ones are doing right now, which one waits for you, and how full each one's context is. Run a
-team of sessions that talk to each other. And after a reboot or a crash, call back the
-sessions you had open, each in its own tab and folder; the ones cut off mid-reply carry on
-by themselves.
+**Many Claude Code sessions in many terminals: one screen for all of them, and none lost.**
+tabmancer is a dashboard for your coding-agent sessions, in the terminal. See every session
+from every project, which ones are working, which one waits for you and how full each one's
+context is, and go to any of them in a key. Close them when you have to, even halfway through
+a task: they come back where they left off, each in its own tab and folder, and the ones cut
+off mid-reply carry on by themselves. Claude Code first, Codex and Antigravity if you use them.
+
+> I run Claude Code in several terminals at once, and keeping track of them got hard: which
+> one is working, which one is waiting for me. And I often had to close them before Claude
+> had finished. tabmancer is what I built for both: one screen to see and manage them all,
+> and every session back where it left off, all of them at once. *Sinan Tüfekci*
 
 <p align="center">
   <img src="docs/demo.webp" alt="tabmancer in use: a cut-off session, a card filter, a team, the team view and the keys" width="100%">
@@ -46,12 +51,14 @@ picker at login when sessions were left open.
 
 ![The dashboard: live counters, projects, recent sessions, how each one ended, and a preview with an AI summary](docs/picker.png)
 
-- **Calls your sessions back.** After a reboot or a crash, the sessions that were open start
-  out ticked: `Enter` opens each in its own tab and folder, and the ones cut off mid-task are
-  told to carry on. Resume, fork or start fresh, per session.
-- **Shows what each one is doing.** Working, waiting for you or needing you; how each closed
-  one ended (done, stopped, cut off, unanswered, at a usage limit); how full every context
-  is; your plan limits in the top bar. `j` goes to the next one waiting for you.
+- **Shows what each one is doing.** Every open session, whichever terminal it is in: working,
+  waiting for you or needing you, and how full its context is; your plan limits in the top bar.
+  `j` goes to the next one waiting for you, and `Enter` on an open one goes to its tab.
+- **Brings your sessions back.** Closed before they were done, by you, a reboot or a crash,
+  they say how they ended (cut off, unanswered, at a usage limit, done) and wait under TO
+  CONTINUE. `Enter` opens them again where they left off, each in its own tab and folder, and
+  the ones cut off mid-task are told to carry on. After a reboot the ones that were open start
+  out ticked: one `Enter` brings them all back. Resume, fork or start fresh, per session.
 - **Gets past a usage limit.** Sessions stopped at a limit say when it lifts; `c` continues
   them all then, or right away once you have signed in with another account.
 - **Runs teams.** Several sessions on one project with an orchestrator, talking through Claude

@@ -36,7 +36,7 @@ Result = tuple[str, str]  # (level, message); level is ok, warn or fail
 SHUTDOWN_RECORDS = {"win32": "the System event log", "darwin": "`last shutdown`",
                     "linux": "the systemd journal or wtmp (`last -x`)"}
 # The Claude Code tabmancer was last checked with: see CONTRIBUTING.md, "Releasing".
-TESTED_WITH = "2.1.316"
+TESTED_WITH = "2.1.317"
 # What tabmancer runs claude with, by subcommand ("" for claude itself), and what each is for.
 USES = {
     "": {

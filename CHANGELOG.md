@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2
 
 - **Claude Code Wrapped.** Your last seven days as a card to share, in pixels like Bit: the
   tokens against the week before, the time at work, the sessions, how many worked side by side,
