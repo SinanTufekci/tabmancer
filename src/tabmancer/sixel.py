@@ -336,6 +336,8 @@ class Picture:
         self.fresh = False           # changed since it was last sent
         self.number = next(_numbers)  # its id in kitty graphics
         self.shown = False           # on the screen now (kitty graphics: it stays until taken off)
+        self.seen: bool | None = None  # whether it could be shown, as last sent (SixelHost.send_pictures)...
+        self.seen_at: tuple[int, int, int, int] | None = None  # ...and where
 
 
 class SixelHost:
@@ -434,7 +436,17 @@ class SixelHost:
         kitty = found is not None and found.kitty
         for picture in list(self._sixel_pictures()):
             cells = picture.place() if picture.data else None
-            if cells is None or not in_view(self, picture, cells):
+            seen = cells is not None and in_view(self, picture, cells)
+            if seen != picture.seen or (seen and cells != picture.seen_at):  # scrolled, a dialog over it, gone
+                picture.seen, picture.seen_at = seen, cells
+                changed = getattr(picture.owner, "sight_changed", None)
+                if changed is not None:
+                    # Its part in sight drawn now, to go below; or its block characters stand in
+                    # for it meanwhile (statsview.ChartPicture).
+                    changed()
+                    cells = picture.place() if picture.data else None
+                    seen = cells is not None and in_view(self, picture, cells)
+            if not seen:
                 if kitty and picture.shown:  # a dialog in front, Bit away: it would stay over them
                     driver.write(kitty_delete(picture.number))
                     picture.shown, picture.fresh = False, True

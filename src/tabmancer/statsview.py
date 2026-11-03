@@ -7,31 +7,36 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import ClassVar
 
-from rich.console import Group
+from rich.console import Group, RenderableType
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.color import Color
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Label, Static, TabbedContent, TabPane
 
 from . import report as reports
-from . import stats, summarize, tokens, usage
+from . import sixel, stats, summarize, tokens, usage
 from .dialogs import frame
 from .safework import work
 from .sessions import Session
 from .theme import AMBER, GREEN, MUTED, RED, TEXT, keys, mix
+from .tokenchart import PixelPicture, draw_bars, draw_week
 from .tokens import Report, Tokens, duration, human
 
 TOP = 10
 BAR = 24
 LEVELS = "▁▂▃▄▅▆▇█"
 CHART = 84  # columns of a limit's history
+TILE_LOW, TILE_NONE = "#1a1a1a", "#3a3a3a"  # an hour of the week: least worked (to the accent), none
+CHARTED = ("tokens", "work", "tools")  # the tabs with charts: their parts in widgets of their own
 UNLISTED = "(not in the session list)"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 TABS = ("tokens", "work", "tools", "limits", "report")
@@ -78,10 +83,86 @@ def projects(report: Report, sessions: dict[str, Session]) -> list[tuple[str, To
     return [(row["project"], row["tokens"], row["sessions"]) for row in stats.per_project(report, sessions)]
 
 
+# --- the charts ---------------------------------------------------------------------------
+
+@dataclass
+class BarChart:
+    """Rows of a label, a bar as long as its value against the largest, and figures beside it: BY
+    DAY, BY PROJECT, TOOLS. In block characters one grid (`tabmancer stats`); on the screen the
+    bars are drawn in real pixels where the terminal draws them (BarsView)."""
+    heading: str
+    labels: list[RenderableType]
+    values: list[float]
+    figures: list[tuple[RenderableType, ...]]
+    width: int = BAR
+    justify: tuple[str, ...] = ("right", "right", "right")  # the labels', then each figure's
+
+    def table(self, accent: str) -> Table:
+        peak = max(self.values, default=0)
+        grid = _grid(self.justify[0], "left", *self.justify[1:])
+        for label, value, figures in zip(self.labels, self.values, self.figures):
+            grid.add_row(label, Text(bar(value, peak, self.width), style=accent), *figures)
+        return grid
+
+
+@dataclass
+class WeekChart:
+    """HOURS OF THE WEEK: the time worked in each hour of each weekday, in seconds."""
+    slots: list[list[float]]
+    heading: str = "HOURS OF THE WEEK"
+
+    def header(self) -> Text:
+        header = Text("     ")
+        for hour in range(24):
+            header.append(f"{hour:<3}" if hour % 3 == 0 else "   ", style=MUTED)
+        return header
+
+    def tiles(self, day: int, accent: str) -> Text:
+        """A weekday's hours in block characters, three cells an hour: a tile, or a dot for none."""
+        peak = max((s for row in self.slots for s in row), default=0)
+        line = Text()
+        for value in self.slots[day]:
+            if value <= 0:
+                line.append("·  ", style=TILE_NONE)
+            else:
+                line.append("██ ", style=mix(TILE_LOW, accent, 0.25 + 0.75 * value / peak))
+        return line
+
+    def lines(self, accent: str) -> list[Text]:
+        rows = [self.header()]
+        for day in range(7):
+            line = Text(f"{WEEKDAYS[day]}  ", style=MUTED)
+            line.append_text(self.tiles(day, accent))
+            rows.append(line)
+        return rows
+
+
+def in_text(parts: list, accent: str) -> Group:
+    """A tab's parts as `tabmancer stats` prints them: the charts in block characters."""
+    out: list = []
+    for part in parts:
+        if isinstance(part, BarChart):
+            out += [_heading(part.heading), part.table(accent)]
+        elif isinstance(part, WeekChart):
+            out += [_heading(part.heading), *part.lines(accent)]
+        else:
+            out.append(part)
+    return Group(*out)
+
+
+def _sessions(count: int) -> str:
+    return f"{count} session{'s' * (count != 1)}"
+
+
 # --- tokens -----------------------------------------------------------------------------
 
 def render_tokens(report: Report, sessions: dict[str, Session], accent: str) -> Group:
     """sessions: the session list, for titles. Sessions missing from it still count."""
+    return in_text(tokens_parts(report, sessions, accent), accent)
+
+
+def tokens_parts(report: Report, sessions: dict[str, Session], accent: str) -> list:
+    """The tokens tab, in order: lines of text, and its charts (BarChart)."""
     window = report.total()
     out: list = [
         Text.assemble(("TOKENS", f"bold {TEXT}"), (f" · last {report.days} days", MUTED)),
@@ -105,23 +186,19 @@ def render_tokens(report: Report, sessions: dict[str, Session], accent: str) -> 
             line.append(f"({delta})   ", style=MUTED)
         out.append(line)
 
-    days = report.daily()
-    peak = max((d.total for d in days), default=0)
-    grid = _grid("right", "left", "right", "right")
-    for offset, use in enumerate(reversed(days)):
-        day = date.today() - timedelta(days=offset)
-        grid.add_row(f"{day:%a %d %b}", Text(bar(use.total, peak), style=accent),
-                     human(use.total) if use.total else Text("·", style=MUTED), _out(use))
-    out += [_heading("BY DAY"), grid]
+    newest = list(reversed(report.daily()))
+    out.append(BarChart("BY DAY", [f"{date.today() - timedelta(days=offset):%a %d %b}" for offset in range(len(newest))],
+                        [use.total for use in newest],
+                        [(human(use.total) if use.total else Text("·", style=MUTED), _out(use)) for use in newest]))
 
     rows = projects(report, sessions)
     if rows:
-        grid = _grid("left", "left", "right", "right", "right", "right")
-        for name, use, count in rows[:TOP]:
-            grid.add_row(Text(name[:22], style=TEXT), Text(bar(use.total, rows[0][1].total, 16), style=accent),
-                         _share(use.total, window.total), human(use.total), _out(use),
-                         Text(f"{count} session{'s' * (count != 1)}", style=MUTED))
-        out += [_heading("BY PROJECT"), grid]
+        shown = rows[:TOP]
+        out.append(BarChart("BY PROJECT", [Text(name[:22], style=TEXT) for name, _, _ in shown],
+                            [use.total for _, use, _ in shown],
+                            [(_share(use.total, window.total), human(use.total), _out(use),
+                              Text(_sessions(count), style=MUTED)) for _, use, count in shown],
+                            width=16, justify=("left", "right", "right", "right", "right")))
         if len(rows) > TOP:
             out.append(Text(f"and {len(rows) - TOP} more", style=MUTED))
 
@@ -139,7 +216,7 @@ def render_tokens(report: Report, sessions: dict[str, Session], accent: str) -> 
         for model, use in sorted(report.models.items(), key=lambda item: item[1].total, reverse=True):
             grid.add_row(Text(model, style=TEXT), _share(use.total, window.total), human(use.total), _out(use))
         out += [_heading("BY MODEL"), grid]
-    return Group(*out)
+    return out
 
 
 render = render_tokens  # the name tabmancer tokens and older callers use
@@ -148,6 +225,12 @@ render = render_tokens  # the name tabmancer tokens and older callers use
 # --- when you work ----------------------------------------------------------------------
 
 def render_work(report: Report, sessions: dict[str, Session], accent: str) -> Group:
+    return in_text(work_parts(report, sessions, accent), accent)
+
+
+def work_parts(report: Report, sessions: dict[str, Session], accent: str) -> list:
+    """The tab of when you work, in order: lines of text, the hours of the week (WeekChart, without
+    any time at work none) and BY DAY (BarChart)."""
     activity = report.activity
     worked = sum(activity.day_seconds)
     active_days = sum(1 for s in activity.day_seconds if s > 0)
@@ -169,32 +252,17 @@ def render_work(report: Report, sessions: dict[str, Session], accent: str) -> Gr
         weekday, hour = max(((d, h) for d in range(7) for h in range(24)), key=lambda dh: slots[dh[0]][dh[1]])
         out.append(Text(f"Busiest: {WEEKDAYS[weekday]} {hour:02d}:00 to {(hour + 1) % 24:02d}:00, "
                         f"{duration(slots[weekday][hour])} in all.", style=MUTED))
-        header = Text("     ")
-        for hour in range(24):
-            header.append(f"{hour:<3}" if hour % 3 == 0 else "   ", style=MUTED)
-        rows = [header]
-        for day in range(7):
-            line = Text(f"{WEEKDAYS[day]}  ", style=MUTED)
-            for hour in range(24):
-                value = slots[day][hour]
-                if value <= 0:
-                    line.append("·  ", style="#3a3a3a")
-                else:
-                    level = 0.25 + 0.75 * value / peak
-                    line.append("██ ", style=mix("#1a1a1a", accent, level))
-            rows.append(line)
-        out += [_heading("HOURS OF THE WEEK"), *rows]
+        out.append(WeekChart(slots))
 
-    grid = _grid("right", "left", "right", "right")
-    peak_day = max(activity.day_seconds, default=0)
+    dates, values, figures = [], [], []
     for offset in range(report.days):
         index = report.days - 1 - offset
-        day = date.today() - timedelta(days=offset)
         seconds, count = activity.day_seconds[index], activity.sessions_per_day[index]
-        grid.add_row(f"{day:%a %d %b}", Text(bar(seconds, peak_day), style=accent),
-                     duration(seconds) if seconds else Text("·", style=MUTED),
-                     Text(f"{count} session{'s' * (count != 1)}" if count else "", style=MUTED))
-    out += [_heading("BY DAY"), grid]
+        dates.append(f"{date.today() - timedelta(days=offset):%a %d %b}")
+        values.append(seconds)
+        figures.append((duration(seconds) if seconds else Text("·", style=MUTED),
+                        Text(_sessions(count) if count else "", style=MUTED)))
+    out.append(BarChart("BY DAY", dates, values, figures))
 
     longest = sorted(activity.session_seconds.items(), key=lambda kv: kv[1], reverse=True)[:TOP]
     if longest:
@@ -204,22 +272,26 @@ def render_work(report: Report, sessions: dict[str, Session], accent: str) -> Gr
             grid.add_row(Text(project[:18], style=TEXT), Text(title[:52], style=MUTED if title == UNLISTED else ""),
                          duration(seconds))
         out += [_heading("LONGEST SESSIONS"), grid]
-    return Group(*out)
+    return out
 
 
 # --- tools and files --------------------------------------------------------------------
 
 def render_tools(report: Report, sessions: dict[str, Session], accent: str) -> Group:
+    return in_text(tools_parts(report, sessions, accent), accent)
+
+
+def tools_parts(report: Report, sessions: dict[str, Session], accent: str) -> list:
+    """The tab of tools and files, in order: lines of text and TOOLS (BarChart)."""
     used = stats.tools(report)
     calls = sum(count for _, count in used)
     out: list = [Text.assemble(("TOOLS AND FILES", f"bold {TEXT}"), (f" · last {report.days} days", MUTED)),
                  Text(f"{calls:,} tool calls · MCP tools are counted per server.", style=MUTED)]
     if used:
-        grid = _grid("left", "left", "right", "right")
-        for name, count in used[:15]:
-            grid.add_row(Text(name[:28], style=TEXT), Text(bar(count, used[0][1], 20), style=accent),
-                         f"{count:,}", Text(_share(count, calls), style=MUTED))
-        out += [_heading("TOOLS"), grid]
+        shown = used[:15]
+        out.append(BarChart("TOOLS", [Text(name[:28], style=TEXT) for name, _ in shown], [count for _, count in shown],
+                            [(f"{count:,}", Text(_share(count, calls), style=MUTED)) for _, count in shown],
+                            width=20, justify=("left", "right", "right")))
         if len(used) > 15:
             out.append(Text(f"and {len(used) - 15} more", style=MUTED))
     files = stats.edited_files(report, sessions)
@@ -236,7 +308,7 @@ def render_tools(report: Report, sessions: dict[str, Session], accent: str) -> G
         out += [_heading("LINES CHANGED"), grid,
                 Text("By Claude Code's own count, which it records for a session when the session exits.",
                      style=MUTED)]
-    return Group(*out)
+    return out
 
 
 def _clip_left(text: str, limit: int) -> str:
@@ -335,6 +407,167 @@ def render_report(entry: dict | None, current: bool, days: int, writing: bool, a
     return Group(*out)
 
 
+# --- the charts on the screen --------------------------------------------------------------
+
+class ChartPicture(PixelPicture, Static):
+    """A chart in real pixels where the terminal draws them, in block characters elsewhere and while
+    its picture cannot be shown (a tab not shown, a dialog over it). Scrolled partly out of sight,
+    the part in sight is shown: the whole chart is drawn once, and that part of it sent."""
+
+    whole: tuple | None = None  # (what it shows, its palette and rows): drawn again only when that changes
+
+    def on_mount(self) -> None:
+        self.start_pixels()
+
+    def cells(self) -> tuple[int, int, int, int] | None:
+        """The cells of it in sight: all of it, or what a scroll leaves showing."""
+        if not self.is_attached:
+            return None
+        try:
+            clip = self.screen.find_widget(self).clip
+        except Exception:  # noqa: BLE001 - not laid out (yet), or on a tab not shown
+            return None
+        seen = self.content_region.intersection(clip)
+        if seen.width < 2 or seen.height < 1:
+            return None
+        return seen.x, seen.y, seen.width, seen.height
+
+    def in_sight(self) -> bool:
+        cells = self.cells()
+        return (self.picture is not None and bool(self.picture.data) and cells is not None
+                and isinstance(self.app, sixel.SixelHost) and sixel.in_view(self.app, self.picture, cells))
+
+    def sight_changed(self) -> None:
+        """The host saw the picture's cells in sight change (a scroll): that part of it is sent, or
+        the block characters stand in for it, or make way."""
+        self.draw_picture()
+        self.refresh()
+
+    def draw_picture(self) -> None:
+        found = sixel.terminal()
+        cells = self.cells()
+        if self.picture is None or found is None or cells is None:
+            return
+        cell_w, cell_h = found.cell
+        region = self.content_region
+        width, height = region.width * cell_w, region.height * cell_h
+        left, top = (cells[0] - region.x) * cell_w, (cells[1] - region.y) * cell_h
+        seen_w = cells[2] * cell_w
+        seen_h = cells[3] * cell_h if found.kitty else cells[3] * cell_h // 6 * 6  # whole Sixel bands
+        ground = self.shown(self.background_colors[1])
+        shows = (self.picture_key(), width, height, ground)
+        key = (*shows, found.kitty, left, top, seen_w, seen_h)
+        if key == self.drawn:
+            return
+        self.drawn = key
+        if self.whole is None or self.whole[0] != shows:
+            self.whole = (shows, *self.picture_rows(width, height))
+        _, palette, rows = self.whole
+        rows = [row[left:left + seen_w] for row in rows[top:top + seen_h]]
+        self.picture.data = (sixel.encode_kitty(palette, rows, self.picture.number) if found.kitty
+                             else sixel.encode_indexed(palette, rows, ground))
+        self.picture.fresh = True
+        self.refresh()
+
+    def blocks(self) -> Text:
+        raise NotImplementedError
+
+    def render(self):
+        return Text("") if self.in_sight() else self.blocks()
+
+
+class BarsPicture(ChartPicture):
+    """A bar chart's bars, a row of cells each."""
+
+    DEFAULT_CSS = "BarsPicture { height: auto; }"
+
+    def __init__(self, chart: BarChart, accent: str) -> None:
+        super().__init__("")
+        self.chart, self.accent = chart, accent
+        self.styles.width = chart.width if any(v > 0 for v in chart.values) else 0  # as the grid's column
+        self.styles.height = len(chart.values)
+
+    def blocks(self) -> Text:
+        peak = max(self.chart.values, default=0)
+        return Text("\n").join(Text(bar(value, peak, self.chart.width), style=self.accent) for value in self.chart.values)
+
+    def picture_key(self) -> tuple:
+        return tuple(self.chart.values), self.accent
+
+    def picture_rows(self, width: int, height: int):
+        return draw_bars(self.chart.values, sixel.terminal().cell, width, height, self.shown(Color.parse(self.accent)))
+
+
+class WeekPicture(ChartPicture):
+    """The hours of the week, a row of cells a day, three cells an hour."""
+
+    DEFAULT_CSS = "WeekPicture { width: 72; height: 7; }"
+
+    def __init__(self, week: WeekChart, accent: str) -> None:
+        super().__init__("")
+        self.week, self.accent = week, accent
+
+    def blocks(self) -> Text:
+        return Text("\n").join(self.week.tiles(day, self.accent) for day in range(7))
+
+    def picture_key(self) -> tuple:
+        return tuple(tuple(hours) for hours in self.week.slots), self.accent
+
+    def picture_rows(self, width: int, height: int):
+        return draw_week(self.week.slots, sixel.terminal().cell, width, height, self.shown(Color.parse(TILE_LOW)),
+                         self.shown(Color.parse(self.accent)), self.shown(Color.parse(TILE_NONE)))
+
+
+class BarsView(Vertical):
+    """A bar chart on the screen: its heading, the labels, the bars, the figures, laid out as the
+    grid `tabmancer stats` prints."""
+
+    DEFAULT_CSS = """
+    BarsView { height: auto; }
+    BarsView > Horizontal { height: auto; }
+    BarsView .labels { width: auto; margin-right: 2; }
+    BarsView BarsPicture { margin-right: 2; }
+    BarsView .figures { width: auto; }
+    """
+
+    def __init__(self, chart: BarChart, accent: str) -> None:
+        super().__init__()
+        self.chart, self.accent = chart, accent
+
+    def compose(self) -> ComposeResult:
+        chart = self.chart
+        yield Static(_heading(chart.heading))
+        with Horizontal():
+            labels = (label if isinstance(label, Text) else Text(str(label)) for label in chart.labels)
+            yield Static(Text("\n", justify=chart.justify[0]).join(labels), classes="labels")
+            yield BarsPicture(chart, self.accent)
+            figures = _grid(*chart.justify[1:])
+            for row in chart.figures:
+                figures.add_row(*row)
+            yield Static(figures, classes="figures")
+
+
+class WeekView(Vertical):
+    """HOURS OF THE WEEK on the screen: the hours written above, the weekdays beside, the tiles."""
+
+    DEFAULT_CSS = """
+    WeekView { height: auto; }
+    WeekView > Horizontal { height: auto; }
+    WeekView .days { width: 5; }
+    """
+
+    def __init__(self, week: WeekChart, accent: str) -> None:
+        super().__init__()
+        self.week, self.accent = week, accent
+
+    def compose(self) -> ComposeResult:
+        yield Static(_heading(self.week.heading))
+        yield Static(self.week.header())
+        with Horizontal():
+            yield Static(Text("\n").join(Text(f"{day}  ", style=MUTED) for day in WEEKDAYS), classes="days")
+            yield WeekPicture(self.week, self.accent)
+
+
 # --- the screen ---------------------------------------------------------------------------
 
 class StatsScreen(ModalScreen[None]):
@@ -373,7 +606,8 @@ class StatsScreen(ModalScreen[None]):
             with TabbedContent(initial="tokens"):
                 for key, label in zip(TABS, TAB_LABELS):
                     with TabPane(label, id=key), VerticalScroll(id=f"{key}-scroll"):
-                        yield Static("", id=f"{key}-body")
+                        if key not in CHARTED:  # those are filled with their parts (fill)
+                            yield Static("", id=f"{key}-body")
             yield Label(keys(("1-4", "7, 14, 30 or 90 days"), ("← →", "tabs"), ("x", "export"),
                              ("r", "write the report"), ("c", "copy it"), ("Esc", "close")), classes="hint")
 
@@ -390,11 +624,30 @@ class StatsScreen(ModalScreen[None]):
         if self.counting:
             periods.append("counting…", style=f"italic {MUTED}")
         self.query_one("#stats-head", Label).update(periods)
-        self.query_one("#tokens-body", Static).update(render_tokens(self.report, self.sessions, self.accent))
-        self.query_one("#work-body", Static).update(render_work(self.report, self.sessions, self.accent))
-        self.query_one("#tools-body", Static).update(render_tools(self.report, self.sessions, self.accent))
+        for key, parts in (("tokens", tokens_parts), ("work", work_parts), ("tools", tools_parts)):
+            self.run_worker(self.fill(key, parts(self.report, self.sessions, self.accent)), group=f"fill-{key}",
+                            exclusive=True)
         self.query_one("#limits-body", Static).update(render_limits(usage.history(7), self.accent))
         self.show_report()
+
+    async def fill(self, key: str, parts: list) -> None:
+        """A tab's parts on it: its text in Statics, each chart a widget of its own, in real pixels
+        where the terminal draws them."""
+        widgets: list = []
+        text: list = []
+        for part in parts:
+            if isinstance(part, (BarChart, WeekChart)):
+                if text:
+                    widgets.append(Static(Group(*text)))
+                    text = []
+                widgets.append(BarsView(part, self.accent) if isinstance(part, BarChart) else WeekView(part, self.accent))
+            else:
+                text.append(part)
+        if text:
+            widgets.append(Static(Group(*text)))
+        scroll = self.query_one(f"#{key}-scroll", VerticalScroll)
+        await scroll.remove_children()
+        await scroll.mount_all(widgets)
 
     def show_report(self) -> None:
         entry = reports.latest(self.report.days)

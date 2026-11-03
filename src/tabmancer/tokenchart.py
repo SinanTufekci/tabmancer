@@ -86,6 +86,71 @@ def draw_hours(hours: list[float], width: int, height: int, quiet: Colour, now: 
     return palette, [bytes(row) for row in rows]
 
 
+def _rounded_box(rows: list[bytearray], left: int, top: int, width: int, height: int, radius: int,
+                 colour: int) -> None:
+    """A box with its corners rounded off by radius pixels, clipped to the rows."""
+    for dy in range(height):
+        y = top + dy
+        if not 0 <= y < len(rows):
+            continue
+        row = rows[y]
+        # How far in the row starts at this height: in from a corner's circle near the top and bottom.
+        edge = min(dy, height - 1 - dy)
+        cut = 0
+        if edge < radius:
+            off = radius - edge - 0.5
+            cut = radius - int((radius * radius - off * off) ** 0.5 + 0.5)
+        for x in range(max(0, left + cut), min(len(row), left + width - cut)):
+            row[x] = colour
+
+
+WEEK_LEVELS = 6  # shades of the hours of the week, from a quarter of the way to the accent to all of it
+
+
+def draw_week(slots: list[list[float]], cell: tuple[int, int], width: int, height: int, low: Colour, high: Colour,
+              empty: Colour) -> tuple[list[Colour | None], list[bytes]]:
+    """The hours of the week as tiles: a row of cells a day, three cells an hour (as the hours
+    written above), a square tile over the first two, from low to high as more time was worked
+    then; a dot where none was. Laid out as the block characters are, so the words fit either."""
+    palette: list[Colour | None] = [None, empty]
+    rows = [bytearray(width) for _ in range(height)]
+    cw, ch = cell
+    peak = max((v for row in slots for v in row), default=0)
+    side = max(2, min(2 * cw - 4, ch - 4))
+    shade: dict[int, int] = {}
+    for day, hours in enumerate(slots[:7]):
+        top = day * ch + (ch - side) // 2
+        for hour, value in enumerate(hours[:24]):
+            left = hour * 3 * cw + (2 * cw - side) // 2
+            if value <= 0 or peak <= 0:
+                dot = max(2, cw // 5)
+                _rounded_box(rows, left + (side - dot) // 2, top + (side - dot) // 2, dot, dot, 0, 1)
+                continue
+            level = round(value / peak * (WEEK_LEVELS - 1))
+            if level not in shade:
+                shade[level] = len(palette)
+                palette.append(_mix(low, high, 0.25 + 0.75 * level / (WEEK_LEVELS - 1)))
+            _rounded_box(rows, left, top, side, side, max(1, side // 5), shade[level])
+    return palette, [bytes(row) for row in rows]
+
+
+def draw_bars(values: list[float], cell: tuple[int, int], width: int, height: int,
+              colour: Colour) -> tuple[list[Colour | None], list[bytes]]:
+    """A bar a row of cells, as long as its value against the largest, the whole width for that,
+    its ends rounded; nothing for a value of nothing, a few pixels for any other."""
+    palette: list[Colour | None] = [None, colour]
+    rows = [bytearray(width) for _ in range(height)]
+    ch = cell[1]
+    peak = max(values, default=0)
+    thick = max(2, round(ch * 0.6))
+    for n, value in enumerate(values):
+        if value <= 0 or peak <= 0:
+            continue
+        long = max(3, round(value / peak * width))
+        _rounded_box(rows, 0, n * ch + (ch - thick) // 2, long, thick, min(thick // 3, long // 2), 1)
+    return palette, [bytes(row) for row in rows]
+
+
 class PixelPicture:
     """Mixed into a widget whose content is a picture in real pixels where the terminal draws them:
     it says what the picture shows (picture_key) and draws it (picture_rows); this keeps the picture

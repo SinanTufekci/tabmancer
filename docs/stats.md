@@ -7,6 +7,12 @@
 Press `u` for the stats. `1` to `4` look back 7, 14, 30 or 90 days, `←` `→` move between
 the five tabs, and `x` saves everything as JSON and CSV in your Downloads folder.
 
+Where the terminal draws Bit in real pixels (Sixel or kitty graphics), the bar charts and the
+map of the hours of the week are drawn in them too: bars of any length with round ends, a
+tile for each hour with a gap around it. Scrolled partly out of sight, the part in sight is
+drawn; elsewhere, and under a dialog, they are block characters, as `tabmancer stats` prints
+them.
+
 **Tokens.** Today, this week and the whole period; this week against the last (tokens,
 output, time at work, sessions); then by day, project, session and model.
 

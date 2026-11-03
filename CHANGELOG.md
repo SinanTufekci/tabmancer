@@ -8,6 +8,10 @@
   front (the stats, the keys), the clock, the live dot, the stars and Bit behind it no longer
   have the whole screen sent to the terminal again ten times a second: behind a dialog they
   wait, and the clock still ticks.
+- **The stats' charts in real pixels.** Where the terminal draws Bit in pixels, the bars by
+  day, by project and by tool are drawn in them, of any length and with round ends, and the
+  hours of the week are tiles with a gap around each. Scrolled partly out of sight, the part in
+  sight is drawn; elsewhere they are the block characters `tabmancer stats` prints.
 - **TOKENS TODAY in real pixels.** Where the terminal draws Bit in pixels, the card's chart has
   a place for each of the day's hours, the hours gone by on a floor and the hour now in white.
 
