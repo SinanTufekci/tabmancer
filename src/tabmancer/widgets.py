@@ -312,10 +312,10 @@ class TopBar(Horizontal):
             if not same(static.content, content):
                 static.update(content, layout=width != self.shown.get(part))
             self.shown[part] = width
-        if part not in ("info", "account", "clock", "live"):  # the clock and the dot keep their widths
-            if width != self.widths.get(part):
-                self.widths[part] = width
-                self.fit_accounts()
+        # The clock and the dot keep their widths; the info line and the accounts give way.
+        if part not in ("info", "account", "clock", "live") and width != self.widths.get(part):
+            self.widths[part] = width
+            self.fit_accounts()
 
     def on_click(self, event: events.Click) -> None:
         """The account in the top bar: the accounts you use, to switch (A)."""

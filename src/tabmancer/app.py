@@ -412,11 +412,12 @@ class SessionTable(DataTable):
             count = self._update_count
             for index in rows.values():
                 self._row_renderable_cache.discard((count, index))
+            # Textual's LRUCache, not a dict: it has keys() but no __iter__ (iterated, it raises KeyError).
             for cache in (self._cell_render_cache, self._row_render_cache):  # keyed by the row first
-                for stale in [k for k in cache.keys() if k[0] in rows]:
+                for stale in [k for k in cache.keys() if k[0] in rows]:  # noqa: SIM118
                     cache.discard(stale)
             stale = []
-            for k in self._line_cache.keys():  # keyed by the line first
+            for k in self._line_cache.keys():  # noqa: SIM118 - keyed by the line first
                 try:
                     if self._get_offsets(k[0])[0] in rows:
                         stale.append(k)
