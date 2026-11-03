@@ -206,7 +206,7 @@ def team_blocks(shown: list[Session], team_states: dict[str, TeamState]) -> list
     blocks, taken = [], set()
     for state in team_states.values():
         members = []
-        for member in [state.team.lead, *(m for m in state.team.members if not m.lead)]:
+        for member in state.team.ordered:
             found = state.sessions.get(member.name)
             if found is not None and found.session_id in by_id and found.session_id not in taken:
                 members.append((member.name, by_id[found.session_id]))  # as the list has it now
@@ -338,9 +338,9 @@ def session_view(session: Session, *, hidden: bool, pinned: bool, member: tuple[
 
 def team_view(state: TeamState, tokens: dict, sessions: dict[str, Session]) -> TeamView:
     members = []
-    for member in [state.team.lead, *(m for m in state.team.members if not m.lead)]:
+    for member in state.team.ordered:
         found = state.sessions.get(member.name)
-        now = sessions.get(found.session_id, found) if found is not None else None
+        now =sessions.get(found.session_id, found) if found is not None else None
         if now is None:
             words, tone, state_name = "not started", "done", "not-started"
         else:
@@ -363,7 +363,7 @@ def build(sessions: dict[str, Session], *, hidden: set[str], pinned: set[str], g
         sessions.values(), key=lambda s: (s.exit is not Exit.RUNNING, -s.last_active.timestamp()))
     grouped = group(order, pinned, team_states)
     leads = {state.sessions[state.team.lead.name].session_id for state in team_states.values()
-             if state.sessions.get(state.team.lead.name) is not None}
+             if state.team.lead is not None and state.sessions.get(state.team.lead.name) is not None}
 
     def git_of(folder: str) -> dict | None:
         state = git.get(folder_key(folder))

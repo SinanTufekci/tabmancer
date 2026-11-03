@@ -46,7 +46,7 @@
   lately: tick a few, add a first message if you like, pick a model and an effort if your
   default is not what the work needs, and each opens a clean session in its own tab.
 - **Teams.** Several sessions on one project, each with its own focus, one of them the
-  orchestrator. They message each other, and you watch it happen: the team is one row of
+  orchestrator, or none: peers on related topics, each in its tab. They message each other, and you watch it happen: the team is one row of
   the list, each member a name with a sign of what it is doing, its preview shows who talks
   to whom, and `Enter` on it opens the full view: the members' cards on a tree of wires,
   every message flying from card to card, and the conversation drawn as arrows between the

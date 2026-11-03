@@ -74,7 +74,7 @@ async def test_the_dialog_offers_the_lead_deciding_with_a_limit(tmp_path):
     async with host.run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
         assert not dialog.query_one("#team-most-row").display  # a line-up given: no limit to set
-        for _ in range(3):
+        for _ in range(len(teams.TEMPLATES) + len(teams.PEER_TEMPLATES)):  # past the ready-made line-ups
             await pilot.press("ctrl+t")
         assert "● lead decides" in str(dialog.query_one("#team-lineup", Static).render())
         assert dialog.query_one("#team-members", TextArea).text == "lead: " + teams.LEAD_FOCUS
@@ -94,8 +94,9 @@ async def test_written_members_mean_a_line_up_of_your_own(tmp_path):
     dialog = NewTeamDialog(str(tmp_path), set())
     async with Host(dialog).run_test(size=(120, 40)) as pilot:
         await pilot.pause(0.2)
-        for _ in range(3):
+        for _ in range(len(teams.TEMPLATES) + len(teams.PEER_TEMPLATES)):  # to lead decides
             await pilot.press("ctrl+t")
+        assert dialog.deciding()
         dialog.query_one("#team-members", TextArea).text += "\napi: endpoints"
         await pilot.pause(0.1)
         assert not dialog.query_one("#team-most-row").display and not dialog.deciding()

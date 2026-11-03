@@ -16,6 +16,11 @@
   open a new post with the words in it and the card on the clipboard to paste; for Instagram the
   story card is saved and its folder opened. `tabmancer wrapped --story` and `--share`. On the
   wide card the top tool gave its place to what Claude wrote; it is on the story card.
+- **Teams of peers.** A team need not have a lead: leave the lead line out of the members box
+  (or pick the line-up *two topics*) and each member owns a topic of its own, starts on it in its
+  own tab, and tells the others what touches their work. You talk to each; an idle peer waits for
+  you. In the list and the team view peers stand side by side on one wire, with what each sent
+  and was sent counted on it.
 
 ## 0.1.2
 

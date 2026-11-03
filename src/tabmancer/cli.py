@@ -222,8 +222,9 @@ def add_to_team(name: str, spec: str) -> int:
         where = "Their tabs are opening"
     names = ", ".join(f"{team.session_name(m)} ({m.focus or m.name}{f', {m.pick.words()}' if m.pick else ''})"
                       for m in added)
+    told = team.session_name(team.lead) if team.lead is not None else "the others"
     print(f"Joined the team {team.name}: {names}. {where} and each will introduce itself to "
-          f"{team.session_name(team.lead)}. Message them with SendMessage by those names.")
+          f"{told}. Message them with SendMessage by those names.")
     if note:
         print(f"Note: {note}.")
     if leftover:

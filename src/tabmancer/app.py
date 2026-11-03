@@ -1327,7 +1327,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """Every member of a team on its row, in the team's order, the lead first."""
         listed = dict(self.team_members(state.team.name))
         items = []
-        for member in [state.team.lead, *(m for m in state.team.members if not m.lead)]:
+        for member in state.team.ordered:
             session = listed.get(member.name) or state.sessions.get(member.name)
             items.append((member.name, member.lead, *self.chip(session)))
         return teamtree.chips(items, self.title_width, f"bold {self.accent()}")
@@ -1347,7 +1347,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         state = self.team_states[name]
         colours = team_colours(state.team, self.accent())
         members = next((members for st, members in self.blocks if st.team.name == name), [])
-        lead = member == state.team.lead.name
+        lead = state.team.lead is not None and member == state.team.lead.name
         branch = "★ " if lead else "└ " if members and members[-1][0] == member else "├ "
         place = Text.assemble((branch, f"bold {colours[member]}" if lead else MUTED),
                               (member, f"bold {colours.get(member, TEXT)} {style}".strip()))
@@ -2019,8 +2019,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         lines = [head, goal, *teamtree.tree(state, width, looks, colours, self.team_flights.get(state.team.name, ()),
                                             time.monotonic())]
         if not self.team_open(state.team.name):
-            lines.insert(2, Text(f"Closed. Enter starts it: each member resumed as itself, {state.team.lead.name} "
-                                 "last.", style=AMBER))
+            last = f", {state.team.lead.name} last" if state.team.lead is not None else ""
+            lines.insert(2, Text(f"Closed. Enter starts it: each member resumed as itself{last}.", style=AMBER))
         if not wide:  # no room beside it: its keys under it
             hint.truncate(width, overflow="ellipsis")
             self.detail.update(Text("\n").join([*lines, hint]))
@@ -2937,9 +2937,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def resting_members(self) -> set[str]:
         """The sessions of the teams' members other than their leads: idle, they wait for the lead's
-        next message, not for you."""
+        next message, not for you. A team of peers has none: each one, idle, waits for you."""
         return {s.session_id for state in self.team_states.values() for name, s in state.sessions.items()
-                if s is not None and name != state.team.lead.name}
+                if s is not None and state.team.lead is not None and name != state.team.lead.name}
 
     def tell_desktop(self, turned: list[Session]) -> None:
         """A desktop notification too, for when the dashboard is not in front: Windows asks what

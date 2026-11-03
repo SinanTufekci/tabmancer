@@ -82,12 +82,18 @@ def flight_spot(message: teams.Message, progress: float, lead: str,
 def tree(state: TeamState, width: int, looks: dict[str, tuple[str, str]], colours: dict[str, str],
          flights: list[tuple[teams.Message, float]] = (), now: float = 0.0) -> list[Text]:
     """The lead on top and every member on its wire under it, with what it is doing and the latest
-    word on that wire. looks: member -> (label, style) as the list shows its state."""
+    word on that wire. A team of peers has no lead line: each member's wire counts what the others
+    sent it and what it sent them. looks: member -> (label, style) as the list shows its state."""
     team = state.team
-    lead = team.lead.name
+    lead = team.lead.name if team.lead is not None else ""
     members = [m for m in team.members if not m.lead]
     sent = counts(state.said)
-    wires = {m.name: wire(sent.get((lead, m.name), 0), sent.get((m.name, lead), 0)) for m in members}
+    if lead:
+        wires = {m.name: wire(sent.get((lead, m.name), 0), sent.get((m.name, lead), 0)) for m in members}
+    else:
+        names_in = {m.name for m in members}
+        wires = {m.name: wire(sum(n for (a, b), n in sent.items() if b == m.name and a in names_in),
+                              sum(n for (a, b), n in sent.items() if a == m.name and b in names_in)) for m in members}
     reach = max((len(w) for w in wires.values()), default=0)
     wires = {name: line.ljust(reach, "─") for name, line in wires.items()}
     names = max(len(m.name) for m in team.members)
@@ -111,7 +117,8 @@ def tree(state: TeamState, width: int, looks: dict[str, tuple[str, str]], colour
         return Text(label.ljust(labels), style=style)
 
     lines = [Text.assemble(("★ ", f"bold {colours.get(lead, TEXT)}"),  # its state lines up with the members'
-                           (lead.ljust(reach + names), f"bold {colours.get(lead, TEXT)}"), "  ", state_part(lead))]
+                           (lead.ljust(reach + names), f"bold {colours.get(lead, TEXT)}"), "  ", state_part(lead))
+             ] if lead else []
     for index, member in enumerate(members):
         line = Text("└" if index == len(members) - 1 else "├", style=MUTED)
         dot, trail = dots.get(member.name, {}), trails.get(member.name, {})
@@ -126,7 +133,11 @@ def tree(state: TeamState, width: int, looks: dict[str, tuple[str, str]], colour
         line.append(member.name.ljust(names), style=f"bold {colours.get(member.name, TEXT)}")
         line.append("  ")
         line.append_text(state_part(member.name))
-        latest = next((m for m in reversed(state.said) if {m.sender, m.receiver} == {lead, member.name}), None)
+        if lead:
+            latest = next((m for m in reversed(state.said) if {m.sender, m.receiver} == {lead, member.name}), None)
+        else:  # a peer's latest word with any of the others
+            latest = next((m for m in reversed(state.between_members()) if member.name in (m.sender, m.receiver)),
+                          None)
         if latest is not None:
             line.append("  ")
             line.append_text(word(latest, member.name, colours))
@@ -186,7 +197,7 @@ def chips(members: list[tuple[str, bool, str, str, str, int]], width: int, lead_
 def lanes_of(team: teams.Team, said: list[teams.Message]) -> list[str]:
     """The diagram's lanes: you on the left when you (or tabmancer) said anything, then the lead and the
     members, then one for anyone else who wrote to them."""
-    names = [team.lead.name, *(m.name for m in team.members if not m.lead)]
+    names = [m.name for m in team.ordered]
     people = {m.sender for m in said} | {m.receiver for m in said}
     left = [teams.YOU] if people & {teams.YOU, teams.TABMANCER} else []
     right = [OTHER] if people - set(names) - {teams.YOU, teams.TABMANCER} else []

@@ -61,8 +61,9 @@ picker at login when sessions were left open.
   out ticked: one `Enter` brings them all back. Resume, fork or start fresh, per session.
 - **Gets past a usage limit.** Sessions stopped at a limit say when it lifts; `c` continues
   them all then, or right away once you have signed in with another account.
-- **Runs teams.** Several sessions on one project with an orchestrator, talking through Claude
-  Code's own messaging between sessions: one row in the list, and a view of who tells whom what.
+- **Runs teams.** Several sessions on one project with an orchestrator, or as peers on related
+  topics side by side, talking through Claude Code's own messaging between sessions: one row in
+  the list, and a view of who tells whom what. Each member can run on its own model and effort.
 - **Hands crowded sessions over.** `h` moves the work to a fresh session, with a full handover
   as its first message.
 - **Counts.** Tokens, when you work, tools and files, plan limits with a forecast, and a

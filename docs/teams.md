@@ -6,7 +6,7 @@
 
 A team is several sessions on one project, each with a focus of its own (the API, the
 screens, the tests), and one of them the orchestrator that splits the goal into tasks and
-hands them out. Press `T` and give the team a name, a project folder (it completes the
+hands them out; or, with no orchestrator, [peers](#peers-no-lead) on related topics side by side. Press `T` and give the team a name, a project folder (it completes the
 folders you have worked in), a goal and its members, one a line as `name: what they work
 on`. The line-ups ready to use (feature team, bug hunt, write and review) are shown by
 name, and `Ctrl+T` goes from one to the next. The lead's line is there too: leave it, or
@@ -32,6 +32,20 @@ when it matters, their models and efforts. It adds them with one command,
 without asking you (`--allowedTools=...,Bash(tabmancer team add:*)`). Each member opens in
 its own tab (or, with `Ctrl+B`, in the background) and introduces itself to the lead, and the
 team view shows them join.
+
+### Peers: no lead
+
+Or no lead at all: **peers**. Take the lead line out of the members box (or pick the line-up
+**two topics**) and the team has nobody in charge: each member owns a topic of its own, say
+the API reference and the site's pages, two related pieces of work going on side by side.
+Each opens in its own tab and starts on its part, you talk to each of them there, and they
+tell each other with `SendMessage` what touches the other's work (a shared file, an
+interface, the build), agreeing before they change it. Peers always run in tabs, never in the
+background. In the list their tree has no lead line, each member's wire counts what the
+others sent it and what it sent them, and an idle peer waits for you (an idle member of a
+team with a lead waits for the lead). In the team view the cards stand side by side on one
+wire. A note about a change made from the dashboard (`g`, `d`) is for every open peer: it
+goes on the clipboard, to paste into each tab. `Ctrl+L` keeps a line-up of peers as one.
 
 ![A team heading OPEN NOW as one row: each member a name with a sign of what it is doing, and its preview with each member's wire and the messages along it](team-rows.png)
 

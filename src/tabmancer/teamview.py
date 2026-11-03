@@ -39,7 +39,10 @@ LOG_LINES = 200
 
 
 def colours(team: teams.Team, accent: str) -> dict[str, str]:
-    out = {team.lead.name: accent, teams.YOU: TEXT, teams.TABMANCER: MUTED}
+    """The lead in the theme's accent, the others in the palette's colours; peers, all of them."""
+    out = {teams.YOU: TEXT, teams.TABMANCER: MUTED}
+    if team.lead is not None:
+        out[team.lead.name] = accent
     others = [m for m in team.members if not m.lead]
     out.update({m.name: PALETTE[i % len(PALETTE)] for i, m in enumerate(others)})
     return out
@@ -112,7 +115,8 @@ class Flight:
 
 class TeamGraph(Widget):
     """The cards: the lead on top, the members under it on a tree of wires, the messages flying
-    along them; under the cards, what the picked member works on."""
+    along them; under the cards, what the picked member works on. Peers, with no lead, stand side
+    by side on one wire, and their messages run along it."""
 
     DEFAULT_CSS = "TeamGraph { height: auto; }"
 
@@ -128,7 +132,12 @@ class TeamGraph(Widget):
 
     @property
     def order(self) -> list[teams.Member]:
-        return [self.team.lead, *[m for m in self.team.members if not m.lead]]
+        return self.team.ordered
+
+    @property
+    def lead(self) -> str:
+        """The lead's name; empty for peers."""
+        return self.team.lead.name if self.team.lead is not None else ""
 
     def selected_member(self) -> teams.Member | None:
         """The member picked with ← →, or None when everyone is."""
@@ -139,14 +148,14 @@ class TeamGraph(Widget):
 
     def layout_boxes(self, width: int) -> tuple[dict[str, tuple[int, int, int]], list[list[str]]]:
         """name -> (x, y, card width), and the members row by row: the lead's card on top in the
-        middle, each row of members under a wire of its own."""
-        members = [m.name for m in self.order[1:]]
+        middle, each row of members under a wire of its own. Peers start at the top, under theirs."""
+        members = [m.name for m in self.order if not m.lead]
         count = max(1, len(members))
         card = max(CARD_LEAST, min(CARD_MOST, (width - (count - 1) * GAP) // count))
         per_row = max(1, (width + GAP) // (card + GAP))
         rows = [members[i:i + per_row] for i in range(0, len(members), per_row)] or [[]]
-        places = {self.team.lead.name: ((width - card) // 2, 0, card)}
-        top = CARD_H + 1  # under a row's wire
+        places = {self.lead: ((width - card) // 2, 0, card)} if self.lead else {}
+        top = CARD_H + 1 if self.lead else 1  # under a row's wire
         for row in rows:
             span = len(row) * card + (len(row) - 1) * GAP
             left = max(0, (width - span) // 2)
@@ -156,12 +165,20 @@ class TeamGraph(Widget):
         return places, rows
 
     def height_for(self, rows: list[list[str]]) -> int:
-        return CARD_H + len(rows) * (CARD_H + 1) + 2  # the cards, their wires, and the focus line
+        # The lead's card, the rows of cards each under its wire, and the focus line.
+        return (CARD_H if self.lead else 0) + len(rows) * (CARD_H + 1) + 2
 
     def path(self, sender: str, receiver: str, places: dict[str, tuple[int, int, int]]) -> list[tuple[int, int]]:
         """The cells a message passes on its way: out of the lead's card, down the trunk to a
         member's wire and into its card; or along a wire from one member to another."""
-        lead = self.team.lead.name
+        lead = self.lead
+        if not lead:  # peers: along their row's wire; between rows nothing flies
+            if sender in places and receiver in places and places[sender][1] == places[receiver][1]:
+                (a, top, wa), (b, _, wb) = places[sender], places[receiver]
+                a, b, wire = a + wa // 2, b + wb // 2, top - 1
+                step = 1 if b > a else -1
+                return [(a, top), *[(c, wire) for c in range(a, b + step, step)], (b, top)]
+            return []
         lead_x = places[lead][0] + places[lead][2] // 2
 
         def down_to(name: str) -> list[tuple[int, int]]:
@@ -201,7 +218,10 @@ class TeamGraph(Widget):
     def draw_wires(self, canvas: Canvas, places: dict, rows: list[list[str]]) -> None:
         """The trunk out of the lead's card, a wire across each row of members, a drop into each
         card; on each wire, beside its drop, the messages sent down to that member and back up."""
-        lead = self.team.lead.name
+        if not self.lead:
+            self.draw_peer_wires(canvas, places, rows)
+            return
+        lead = self.lead
         lx, _, lcard = places[lead]
         lead_x = lx + lcard // 2
         chosen = self.selected_member()
@@ -239,17 +259,44 @@ class TeamGraph(Widget):
                 canvas.put(lead_x, y, "┼" if y != last or here == "┬" else "┴", WIRE)
         self.draw_traffic(canvas, places, rows)
 
+    def draw_peer_wires(self, canvas: Canvas, places: dict, rows: list[list[str]]) -> None:
+        """Peers: a wire over each row, from the first card's drop to the last's, a drop into each."""
+        chosen = self.selected_member()
+        for row in rows:
+            if not row:
+                continue
+            top = places[row[0]][1]
+            wire = top - 1
+            middles = [places[n][0] + places[n][2] // 2 for n in row]
+            if len(middles) > 1:
+                canvas.put(middles[0], wire, "─" * (middles[-1] - middles[0] + 1), WIRE)
+            for index, (name, middle) in enumerate(zip(row, middles)):
+                ends = len(middles) > 1 and index in (0, len(middles) - 1)
+                canvas.put(middle, wire, ("╭" if index == 0 else "╮") if ends else "┬" if len(middles) > 1 else "│",
+                           WIRE)
+                picked = chosen is not None and chosen.name == name
+                canvas.put(middle, top, "┻" if picked else "┴",
+                           f"bold {self.palette.get(name, TEXT)}" if picked else WIRE)
+        self.draw_traffic(canvas, places, rows)
+
     def draw_traffic(self, canvas: Canvas, places: dict, rows: list[list[str]]) -> None:
         """' 2▼ 1▲ ' on a member's wire beside its drop: the messages the lead sent down to it and
-        the ones it sent back up. Left of the drop, or right of it where the wire ends there; only
-        where the wire has room, a cell of it kept on either side."""
-        lead = self.team.lead.name
+        the ones it sent back up (for peers: the others sent it, and it sent them). Left of the drop,
+        or right of it where the wire ends there; only where the wire has room, a cell of it kept on
+        either side."""
+        lead = self.lead
         sent = teamtree.counts(self.said)
+        names = {m.name for m in self.team.members}
         for row in rows:
             for name in row:
                 x, top, card = places[name]
                 middle, wire = x + card // 2, top - 1
-                tally = f" {sent.get((lead, name), 0)}▼ {sent.get((name, lead), 0)}▲ "
+                if lead:
+                    down, up = sent.get((lead, name), 0), sent.get((name, lead), 0)
+                else:
+                    down = sum(n for (a, b), n in sent.items() if b == name and a in names)
+                    up = sum(n for (a, b), n in sent.items() if a == name and b in names)
+                tally = f" {down}▼ {up}▲ "
                 for start in (middle - 1 - len(tally), middle + 2):
                     if all(canvas.char_at(c, wire) == "─" for c in range(start - 1, start + len(tally) + 1)):
                         canvas.put(start, wire, tally, MUTED)
@@ -609,7 +656,8 @@ class TeamScreen(Screen):
 
     def action_remove_member(self) -> None:
         """d, twice: the picked member is taken off the team. Its session stays, an ordinary one
-        from then on, and the lead is told (it started with the old line-up)."""
+        from then on, and the lead (or, among peers, the others) is told: it started with the old
+        line-up."""
         member = self.graph.selected_member()
         if member is None:
             self.notify("Pick a member with ← → first.", timeout=3)
@@ -651,7 +699,21 @@ class TeamScreen(Screen):
 
     def tell_lead(self, note: str, done: str) -> None:
         """A change made here, for the lead to hear: nothing can type into its tab, so the note goes
-        to the clipboard and you to its tab, to paste it. A closed lead gets it in its role."""
+        to the clipboard and you to its tab, to paste it. A closed lead gets it in its role. Peers
+        each started with the old team in their role: the note is for every open one."""
+        if self.team.lead is None:
+            open_ones = [name for name, s in self.sessions.items()
+                         if s is not None and s.exit is Exit.RUNNING and any(m.name == name for m in self.team.members)]
+            if not open_ones:
+                self.notify(f"{done} Nobody is open: each starts with the change in its role.", timeout=6)
+                return
+            copy_text(self.app, note)
+            go = getattr(self.app, "go_to_tab", None)
+            if go is not None:
+                go(self.sessions[open_ones[0]])
+            self.notify(f"{done} A note for the team is on the clipboard: paste it into each open member's tab "
+                        f"({', '.join(open_ones)}; Ctrl+V, Enter).", title="Tell the team", timeout=14)
+            return
         lead = self.sessions.get(self.team.lead.name)
         if lead is None or lead.exit is not Exit.RUNNING:
             self.notify(f"{done} The lead is not open: it starts with the change in its role.", timeout=6)
@@ -794,14 +856,14 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         self.template = 0
         self.tried = False  # once Ctrl+S has been pressed, what is missing is said louder
         self.saved = teams.saved_lineups()  # line-ups of your own, kept with Ctrl+L
-        self.lineups = [*teams.TEMPLATES, *self.saved, teams.DECIDE]
+        self.lineups = [*teams.TEMPLATES, *teams.PEER_TEMPLATES, *self.saved, teams.DECIDE]
         self.forgetting: str | None = None  # Ctrl+L once on a kept line-up: again forgets it
         self.background = False  # Ctrl+B: the members run as background sessions, the lead in a tab
 
     def compose(self) -> ComposeResult:
         first = next(iter(teams.TEMPLATES))
         with Vertical():
-            yield Label(title("New team", "every member is a session of its own; the lead hands out the work"))
+            yield Label(title("New team", "every member is a session of its own; with no lead line, they work as peers"))
             with Horizontal(classes="row"):
                 yield Label("Name")
                 yield Input(placeholder="e.g. checkout", id="team-name", compact=True)
@@ -848,8 +910,13 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         return out
 
     def where(self) -> Text:
-        """Where the members run: each in a tab, or in the background with only the lead in a tab."""
+        """Where the members run: each in a tab, or in the background with only the lead in a tab.
+        Peers each in a tab: you talk to every one of them."""
         out = Text()
+        if self.is_mounted and self.peers():
+            out.append("● each in a tab", style=f"bold {TEXT}")
+            out.append("   peers: you talk to each of them, so none runs in the background", style=MUTED)
+            return out
         for on, words in ((not self.background, "each in a tab"),
                           (self.background, "the members in the background, the lead in a tab")):
             out.append(("● " if on else "○ ") + words, style=f"bold {TEXT}" if on else MUTED)
@@ -858,6 +925,9 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         return out
 
     def action_toggle_background(self) -> None:
+        if self.peers():
+            self.notify("Peers each run in a tab: you talk to every one of them.", timeout=4)
+            return
         self.background = not self.background
         self.show_preview()
 
@@ -871,7 +941,17 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
                      if teams.clean(line.partition(":")[0].partition("@")[0]) == teams.LEAD), LEAD_LINE)
         if name == teams.DECIDE:
             return lead
-        return f"{lead}\n{teams.TEMPLATES.get(name) or self.saved.get(name, '')}"
+        if name in teams.PEER_TEMPLATES:  # peers: no lead line
+            return teams.PEER_TEMPLATES[name]
+        kept = self.saved.get(name, "")
+        if kept.startswith(teams.PEERS_MARK):
+            return kept.removeprefix(teams.PEERS_MARK)
+        return f"{lead}\n{teams.TEMPLATES.get(name) or kept}"
+
+    def peers(self) -> bool:
+        """No lead line in the box (and not the line-up where the lead decides): a team of peers."""
+        return (self.lineups[self.template] != teams.DECIDE
+                and not any(m.lead for m in teams.parse_members(self.members_text(), lead_ok=True)))
 
     def deciding(self) -> bool:
         """The lead picks the members: that line-up chosen, and no member written in."""
@@ -905,16 +985,18 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         if not members:
             self.notify("Write its members first; with the lead alone it is the line-up lead decides.", timeout=5)
             return
+        peers = self.peers()
 
         def keep(name: str | None) -> None:
             name = " ".join((name or "").split())[:30]
             if not name:
                 return
-            if name in teams.TEMPLATES or name in (teams.DECIDE, "your own"):
+            if name in teams.TEMPLATES or name in teams.PEER_TEMPLATES or name in (teams.DECIDE, "your own"):
                 self.notify(f"{name} is a ready-made line-up: give yours another name.", severity="warning")
                 return
-            teams.keep_lineup(name, "\n".join(members))
-            self.saved[name] = "\n".join(members)
+            kept = (teams.PEERS_MARK if peers else "") + "\n".join(members)  # a line-up of peers stays one
+            teams.keep_lineup(name, kept)
+            self.saved[name] = kept
             if name not in self.lineups:
                 self.lineups.insert(len(self.lineups) - 1, name)  # before lead decides
             self.template = self.lineups.index(name)
@@ -947,13 +1029,14 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
 
     def missing(self) -> list[str]:
         name, folder, goal, members = self.read()
-        deciding = self.deciding()
+        deciding, peers = self.deciding(), self.peers()
         return [problem for problem, wrong in (
             ("a name", not name),
             (f"another name: {name} exists already", name in self.taken),
             ("a project folder that exists", not folder or not Path(folder).is_dir()),
             ("the goal", not goal),
-            ("a member besides the lead", not deciding and not any(not m.lead for m in members)),
+            ("a member besides the lead", not deciding and not peers and not any(not m.lead for m in members)),
+            ("two members at least, as peers (or a lead line)", peers and len(members) < 2),
             ("how many members at most, 1 to 9", deciding and not 1 <= self.most() <= 9)) if wrong]
 
     def show_preview(self) -> None:
@@ -973,8 +1056,13 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
             preview.update(Text.assemble(("Still needed: ", style), (", ".join(missing), style)))
             return
         name, folder, _, members = self.read()
-        team = teams.new_team(name, folder, "", members)
+        team = teams.new_team(name, folder, "", members, peers=self.peers())
         tabs = ", ".join(team.session_name(m) + (f" ({m.pick.words()})" if m.pick else "") for m in team.members)
+        if team.peers:
+            preview.update(Text.assemble((f"Opens {len(team.members)} tabs in {team.project}: ", MUTED), (tabs, TEXT),
+                                         ((". Nobody leads: each starts on its part, you talk to each, and they tell "
+                                           "each other what touches the other's work."), MUTED)))
+            return
         each = "each in the background" if self.background else "each in its own tab"
         if deciding:
             preview.update(Text.assemble((f"Opens 1 tab in {team.project}: ", MUTED), (tabs, TEXT),
@@ -997,8 +1085,10 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
             self.show_preview()
             return
         name, folder, goal, members = self.read()
+        peers = self.peers()
         self.dismiss(teams.new_team(name, str(Path(folder).resolve()), goal, members,
-                                    decide=self.most() if self.deciding() else 0, background=self.background))
+                                    decide=self.most() if self.deciding() else 0,
+                                    background=self.background and not peers, peers=peers))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

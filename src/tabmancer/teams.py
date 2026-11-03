@@ -1,4 +1,8 @@
-"""Teams: several sessions in one project, one of them the orchestrator, talking to each other.
+"""Teams: several sessions in one project, talking to each other.
+
+Most teams have a lead, the orchestrator, which splits the goal and hands the work out. A team of
+peers has none: each member owns a topic of its own, the user talks to each in its tab, and they
+tell each other what touches the other's work (two related topics worked on side by side).
 
 Each member is an ordinary Claude Code session in its own tab, so it can be closed,
 resumed and handed over like any other. It starts with a name (`--name <team>-<member>`),
@@ -49,6 +53,12 @@ TEMPLATES = {  # one member a line, as the new-team dialog shows them
     "write and review": "writer: does the work\nreviewer: reviews every change the writer makes, "
                         "finds problems and asks for fixes",
 }
+# Line-ups with no lead: peers, each on a topic of its own, telling each other what touches the other's.
+PEER_TEMPLATES = {
+    "two topics": "first: the first topic, and what is done when it is done\n"
+                  "second: the second, related topic, and what is done when it is done",
+}
+PEERS_MARK = "~peers\n"  # a kept line-up of peers begins with it (keep_lineup)
 DECIDE = "lead decides"  # the line-up the lead makes itself, with `tabmancer team add`
 DECIDE_MOST = 4  # members it may add unless told otherwise
 ADD = "tabmancer team add"  # the one command a deciding lead may run without asking
@@ -78,8 +88,18 @@ class Team:
     background: bool = False  # the members run as background sessions (claude --bg), the lead in a tab
 
     @property
-    def lead(self) -> Member:
-        return next((m for m in self.members if m.lead), self.members[0])
+    def lead(self) -> Member | None:
+        """The orchestrator; None for a team of peers, where nobody leads."""
+        return next((m for m in self.members if m.lead), None)
+
+    @property
+    def peers(self) -> bool:
+        return self.lead is None
+
+    @property
+    def ordered(self) -> list[Member]:
+        """The lead first, when there is one, then the members as they were written."""
+        return sorted(self.members, key=lambda m: not m.lead)
 
     @property
     def project(self) -> str:
@@ -128,12 +148,17 @@ def parse_members(text: str, lead_ok: bool = False) -> list[Member]:
 
 
 def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int = 0,
-             background: bool = False) -> Team:
+             background: bool = False, peers: bool = False) -> Team:
     """The lead first: the one among members, or one with the usual focus. With decide, the lead
-    picks the rest itself, at most that many; with background, the members run without tabs."""
+    picks the rest itself, at most that many; with background, the members run without tabs. With
+    peers, nobody leads: the members as given, each in its tab (never in the background, as you talk
+    to each of them)."""
+    stamp = datetime.now().isoformat(timespec="seconds")
+    if peers:
+        return Team(clean(name), cwd, " ".join(goal.split()), [replace(m, lead=False) for m in members], stamp)
     lead = next((m for m in members if m.lead), Member(LEAD, LEAD_FOCUS, lead=True))
     return Team(clean(name), cwd, " ".join(goal.split()), [lead, *(m for m in members if not m.lead)],
-                datetime.now().isoformat(timespec="seconds"), decide, background)
+                stamp, decide, background)
 
 
 def add_members(team: Team, text: str) -> tuple[list[Member], str]:
@@ -184,20 +209,33 @@ def set_goal(name: str, goal: str) -> Team | None:
 
 
 def left_note(team: Team, gone: str) -> str:
-    """What the lead is told when a member is taken off the team from the dashboard: it started
-    with the old line-up in its role."""
+    """What the lead (or, in a team of peers, each member) is told when a member is taken off the
+    team from the dashboard: it started with the old line-up in its role."""
+    if team.lead is None:
+        return (f"Team change: {team.name}-{gone} is no longer on the team, so leave it out from now on. "
+                f"The members now: {roster(team) or 'only you'}.")
     others = roster(team, team.lead)
     return (f"Team change: {team.name}-{gone} is no longer on the team, so send it no more work. "
             f"The members now: {others or 'none besides you'}.")
 
 
 def goal_note(team: Team) -> str:
-    """What the lead is told when the goal changes: it started with the old one in its role."""
+    """What the lead (or each peer) is told when the goal changes: it started with the old one in its role."""
+    if team.lead is None:
+        return (f"Team change: the team goal is now: {team.goal} Check your part against it and tell the "
+                "others what changes for them.")
     return f"Team change: the team goal is now: {team.goal} Plan again with the members where their work changes."
 
 
 def joining(team: Team, members: list[Member]) -> list[Launch]:
-    """Tabs for members who join a team already at work: each introduces itself to the lead."""
+    """Tabs for members who join a team already at work: each introduces itself to the lead, or in a
+    team of peers to the others."""
+    if team.lead is None:
+        def hello(member: Member) -> str:
+            return (f"You just joined the team {team.name}. Introduce yourself to the others ("
+                    f"{', '.join(team.session_name(m) for m in team.members if m is not member) or 'nobody yet'}) "
+                    "with SendMessage, then start on your part.")
+        return [launch(team, m, prompt=hello(m)) for m in members]
     return [launch(team, m, prompt=(f"You just joined the team {team.name}. Introduce yourself to "
                                     f"{team.session_name(team.lead)} with SendMessage and ask for work."))
             for m in members]
@@ -212,14 +250,14 @@ def from_tabmancer(team: Team, text: str) -> bool:
 
 def in_background(team: Team, launch: Launch) -> bool:
     """Whether this member's session starts in the background: a team's members do when it says so,
-    its lead never (it is where you talk to the team)."""
-    return team.background and launch.title != f"{team.name}: {team.lead.name}"
+    its lead never (it is where you talk to the team), and peers never (you talk to each)."""
+    return team.background and team.lead is not None and launch.title != f"{team.name}: {team.lead.name}"
 
 
 def background_start(team: Team, launch: Launch) -> Launch:
     """A member started in the background with nothing to say yet: claude --bg takes a first message,
     so it is told to wait for the lead's."""
-    if launch.prompt:
+    if launch.prompt or team.lead is None:
         return launch
     return replace(launch, prompt=(f"You are on the team {team.name}, in the background. "
                                    f"{team.session_name(team.lead)} sends your first task as a message: wait for it."))
@@ -307,6 +345,13 @@ def role(team: Team, member: Member) -> str:
                 "yourself and leave the members' areas to them. Tell the user here when the goal is met or "
                 "a decision is theirs. The members start alongside you: if ListAgents does not show one yet, "
                 "wait a moment and look again.")
+    if team.lead is None:
+        return (f"You are {team.session_name(member)}, one of the peers on this team. Your part: "
+                f"{member.focus or member.name}. {common} Nobody leads this team: your part is yours to plan and "
+                "decide, and the user talks to each of you in your own tab. Before you change something another "
+                "member's work depends on (a shared file, an interface, a schema, the build), tell that member "
+                "with SendMessage and agree on it first; when you finish something the others need, tell them. "
+                "Tell the user here when your part is done or a decision is theirs.")
     return (f"You are {team.session_name(member)}, a member of this team. Your area: {member.focus or member.name}. "
             f"{common} {team.session_name(team.lead)} is the orchestrator: it hands out the work, and you "
             "report to it with SendMessage when you finish something or get stuck. Ask another member directly "
@@ -333,6 +378,9 @@ def launch(team: Team, member: Member, resume: Session | None = None, prompt: st
     elif prompt is None and member.lead:
         prompt = (f"Goal: {team.goal} Your team is starting now. Plan the work and send each member its "
                   "first task.")
+    elif prompt is None and team.lead is None:  # peers: nobody hands out work, so each starts on its own part
+        prompt = (f"Goal: {team.goal} Your part: {member.focus or member.name}. The others start alongside you: "
+                  "say hello to them with SendMessage, agree where your parts meet, then start on yours.")
     return Launch(title=f"{team.name}: {member.name}", cwd=team.cwd, mode=Mode.NEW, session_id="",
                   prompt=prompt, options=options(team, member))
 
