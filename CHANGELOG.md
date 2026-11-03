@@ -26,6 +26,11 @@
   from the project's files and README, in one call on your plan; `Ctrl+G` shows what the member on
   the cursor's line is told, word for word. `[src/api]` after a member's part names its own files,
   and members named review, tests, docs or research get their kind's rules.
+- **Several topics from `n`.** In the message box `Enter` adds a line and each line is a session of
+  its own; with one folder, `Ctrl+L` opens the lines linked, as a team of peers. `Ctrl+S` starts.
+  The tabs are titled by their lines. `tabmancer new` takes `--prompt` more than once, and
+  `--linked`. The dialog keeps its message box, model, effort and keys on a 120x30 screen however
+  many projects there are: the list of folders once pushed them out of sight.
 
 ## 0.1.2
 

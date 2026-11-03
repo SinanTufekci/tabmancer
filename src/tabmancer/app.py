@@ -2164,8 +2164,17 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         ticked = {self.project_filter} if self.project_filter != ALL_PROJECTS else set()
 
         def start(request: newsessions.Request | None) -> None:
-            if request and request.folders:
-                self.open_sessions(newsessions.launches(request.folders, request.cli, request.message, request.pick))
+            if not request or not request.folders:
+                return
+            if request.linked:  # the lines as a team of peers: saved, opened, and shown
+                saved = teams.load()
+                team = newsessions.linked_team(request.folders[0], request.message, request.pick, set(saved))
+                saved[team.name] = team
+                teams.save(saved)
+                self.open_team(team, teams.start(team, {}))
+                self.push_screen(TeamScreen(team, self.accent()))
+                return
+            self.open_sessions(newsessions.launches(request.folders, request.cli, request.message, request.pick))
 
         self.push_screen(newsessions.NewSessions(found, ticked), start)
 

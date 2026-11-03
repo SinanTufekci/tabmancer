@@ -63,7 +63,10 @@ def main(argv: list[str] | None = None) -> None:
     fresh = sub.add_parser("new", parents=[filters], help="start fresh sessions in several folders at once")
     fresh.add_argument("folders", nargs="+", metavar="folder",
                        help="a folder path, or the name of a project you worked in lately")
-    fresh.add_argument("--prompt", help="the same first message for every new session")
+    fresh.add_argument("--prompt", action="append",
+                       help="a first message; given more than once, a session for each in every folder")
+    fresh.add_argument("--linked", action="store_true",
+                       help="with one folder and two prompts or more: open them as a team of peers")
     fresh.add_argument("--cli", choices=list(clis.CLIS), help="which CLI to start (default: Claude Code if on)")
     fresh.add_argument("--model", help="Claude Code's model: opus, sonnet, haiku, fable or a full name "
                                        "(default: your own setting)")
@@ -122,7 +125,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "clis":
         manage_clis(args.action, args.names)
     elif args.command == "new":
-        start_fresh(args.folders, args.prompt, args.cli, args.days, Pick(args.model or "", args.effort or ""))
+        start_fresh(args.folders, "\n".join(args.prompt or []), args.cli, args.days,
+                    Pick(args.model or "", args.effort or ""), args.linked)
     elif args.command == "open":
         open_workspace(args.name, args.days, args.all)
     elif args.command == "workspaces":
@@ -319,12 +323,15 @@ def print_sessions(days: float, include_all: bool, as_json: bool) -> None:
         print("\n* looked open at the last shutdown")
 
 
-def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: float, pick: Pick | None = None) -> None:
-    from . import newsessions
+def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: float, pick: Pick | None = None,
+                linked: bool = False) -> None:
+    from . import newsessions, teams
 
     cli = cli or newsessions.default_cli()
     if pick and cli != "claude":
         sys.exit("--model and --effort are for Claude Code sessions.")
+    if linked and (cli != "claude" or len(names) != 1 or len(newsessions.topics(prompt)) < 2):
+        sys.exit("--linked takes one folder, two --prompt or more, and Claude Code.")
     listed = find_sessions(days, quick=True)
     known = newsessions.projects(listed)
     folders, missing = [], []
@@ -336,6 +343,15 @@ def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: flo
             missing.append(name)
     if missing:
         sys.exit(f"Not a folder, and no recent project of that name: {', '.join(missing)}")
+    if linked:
+        saved = teams.load()
+        team = newsessions.linked_team(folders[0], prompt or "", pick or Pick(), set(saved))
+        saved[team.name] = team
+        teams.save(saved)
+        launch_all(teams.start(team, {}))
+        print(f"The team of peers {team.name}: {', '.join(team.session_name(m) for m in team.members)}. "
+              "T in the dashboard shows it.")
+        return
     launch_all(newsessions.launches(folders, cli, prompt or "", pick))
 
 

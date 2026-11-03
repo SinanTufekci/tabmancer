@@ -200,7 +200,15 @@ often the better move. Press `n`:
   workspaces. Type to filter them, or type any folder path to add it.
 - `Space` ticks a project. Write a first message if you want one: every new session
   gets it, so they all start working right away.
-- `Enter` opens a fresh session in each ticked folder, each in its own tab.
+- **Several topics at once.** In the message box `Enter` adds a line, and each line is a session
+  of its own, in every ticked folder: two related topics in one project are two lines. The tab of
+  each is titled by its line.
+- **Linked.** With one folder ticked and two lines or more, `Ctrl+L` opens them as a
+  [team of peers](teams.md#peers-no-lead): no lead, each line a member's part, and they know of
+  each other and message each other about what touches the other's. A line written
+  `api: the endpoints` names its member api; the others are first, second and so on.
+- `Ctrl+S` (or `Enter` outside the message box) opens a fresh session in each ticked folder,
+  each in its own tab.
 - With more than one CLI on, `Ctrl+O` picks which one to start.
 - **Model** and **Effort** pick Claude Code's `--model` (opus, sonnet, haiku, fable) and
   `--effort` (low to max) for these sessions: `Tab` to the row, `←`/`→` to change it, and a line
@@ -221,6 +229,7 @@ From a shell or a script:
 tabmancer new web-app api-server --prompt "Run the tests and fix what fails"
 tabmancer new C:\dev\new-idea --cli codex
 tabmancer new docs-site --model sonnet --effort medium
+tabmancer new shop --prompt "api: the refund endpoint" --prompt "web: the refund page" --linked
 ```
 
 A name is matched against the projects you worked in lately; a path works anywhere.
