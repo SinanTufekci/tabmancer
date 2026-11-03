@@ -677,6 +677,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.activity_chart = self.query_one(Sparkline)
         self.body = self.query_one("#body")
         self.flash: dict[str, float] = {}  # session id -> when its highlight ends
+        self.faded = False  # the dashboard has faded in (faded_in)
         self.activity_target: list[int] = []
         self.grow_until = 0.0
         self.filter_box = self.query_one("#filter", Input)
@@ -802,8 +803,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.update_dashboard()
         # Faded in, every widget takes its colours afresh: those drawn during the fade kept them
         # blended towards black (the preview's facts column stayed black for good).
-        self.body.styles.animate("opacity", 1.0, duration=0.5, easing="out_cubic",
-                                 on_complete=lambda: self.refresh_css(animate=False))
+        self.body.styles.animate("opacity", 1.0, duration=0.5, easing="out_cubic", on_complete=self.faded_in)
         if not sessions:
             self.detail.update(nothing_found(self.days, self.include_all, dashboard=True))
         if self.preselected:
@@ -815,6 +815,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.check_limits()
         self.set_timer(WRAPPED_AFTER, self.tell_wrapped)  # after Bit's hello: Friday's word on the week
         self.set_interval(WRAPPED_SECONDS, self.tell_wrapped)
+
+    def faded_in(self) -> None:
+        """The fade-in over: every widget takes its colours afresh (faded says so to the tests)."""
+        self.refresh_css(animate=False)
+        self.faded = True
 
     # --- rows ---------------------------------------------------------------------
 

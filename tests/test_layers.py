@@ -10,10 +10,11 @@ from tabmancer.app import BADGE, LEGEND, SessionPicker, badge
 from tabmancer.theme import AMBER, MUTED, SURFACE, THEMES, mix
 
 
-async def settle(pilot, app, tries=80):
+async def settle(pilot, app, tries=200):
+    """Till the dashboard has faded in and drawn itself again (a slow runner takes its time)."""
     for _ in range(tries):
         await pilot.pause(0.05)
-        if app.sessions and app.body.styles.opacity == 1:
+        if app.sessions and app.faded:
             break
     await pilot.pause(0.2)
 
@@ -55,7 +56,10 @@ async def test_every_part_has_its_tone_after_the_fade_in(fake_home):
                            if isinstance(seg.style, Style) and seg.style.bgcolor}
             if backgrounds == {SURFACE}:
                 break
-        assert backgrounds == {SURFACE}
+        # Seen once on a slow runner, never here: should it come again, what stood how then.
+        assert backgrounds == {SURFACE}, (
+            f"faded={app.faded} opacity={app.body.styles.opacity} cursor={app.table.cursor_row} "
+            f"meta background={app.meta.background_colors[1].hex} body={app.body.background_colors[1].hex}")
 
 
 async def test_a_short_screen_has_two_line_cards(fake_home, monkeypatch):
