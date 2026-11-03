@@ -69,7 +69,7 @@ async def test_leaving_the_lead_line_out_makes_peers(tmp_path):
         await pilot.pause(0.1)
         preview = str(dialog.query_one("#team-preview", Static).render())
         assert preview.startswith("Opens 2 tabs in") and "Nobody leads" in preview
-        assert "none runs in the background" in str(dialog.query_one("#team-where", Static).render())
+        assert "each in a tab (peers: you talk to each)" in str(dialog.query_one("#team-where", Static).render())
         await pilot.press("ctrl+b")  # peers run in tabs: the switch says so and stays
         assert not dialog.background
         assert dialog.query_one(".hint").region.bottom <= 30  # the keys still on a 120x30 screen

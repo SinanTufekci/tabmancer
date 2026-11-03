@@ -19,6 +19,20 @@ missing. `Enter` and `Tab` go from box to box, and `Ctrl+S` starts the team. `Ct
 keeps the members in the box as a line-up of your own, under a name; it is then among the
 line-ups `Ctrl+T` goes through, and `Ctrl+L` twice on it forgets it.
 
+### Worktrees of their own
+
+Members working at the same time in one checkout edit the same working tree: one's half-done
+change breaks another's build, and a commit can take in someone else's files. `Ctrl+O` in the
+form gives each member (every one but the lead) a git worktree of its own: it starts with
+`claude --worktree <team>-<member>`, which makes `<project>/.claude/worktrees/<team>-<member>`
+on the branch `worktree-<team>-<member>`, and works and commits there. Its role says so, and
+says who brings the branches together: the lead, which stays in the project and merges a
+member's branch when its part is done, or for peers you. The project has to be a git
+repository's top folder. The members are still the team's in their worktrees: in the list, in
+the team view, and resumed there with their name and role. Claude Code locks a worktree for its
+session; once a branch is merged, `git worktree unlock` and `git worktree remove` it (tried with
+Claude Code 2.1.317 in `-p` runs: the lock stayed after the session ended).
+
 ### Help with the roles
 
 - **Their own files.** `[...]` at the end of a member's part names the folders or files that are

@@ -94,6 +94,16 @@ class Team:
     created: str = ""
     decide: int = 0  # the lead picks the members itself, at most this many; 0: the line-up given
     background: bool = False  # the members run as background sessions (claude --bg), the lead in a tab
+    worktrees: bool = False  # each member (not the lead) in a git worktree of its own (claude --worktree)
+
+    def has_worktree(self, member: Member) -> bool:
+        """Whether this member works in a worktree of its own: every member but the lead, when the
+        team says so (the lead stays in the project, where the branches come together)."""
+        return self.worktrees and not member.lead
+
+    def branch(self, member: Member) -> str:
+        """The branch Claude Code gives a member's worktree."""
+        return f"worktree-{self.session_name(member)}"
 
     @property
     def lead(self) -> Member | None:
@@ -164,17 +174,18 @@ OWNS = re.compile(r"\s*\[([^\]]+)\]\s*$")  # "api: endpoints [src/api]"
 
 
 def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int = 0,
-             background: bool = False, peers: bool = False) -> Team:
+             background: bool = False, peers: bool = False, worktrees: bool = False) -> Team:
     """The lead first: the one among members, or one with the usual focus. With decide, the lead
     picks the rest itself, at most that many; with background, the members run without tabs. With
     peers, nobody leads: the members as given, each in its tab (never in the background, as you talk
-    to each of them)."""
+    to each of them). With worktrees, each member but the lead works in a git worktree of its own."""
     stamp = datetime.now().isoformat(timespec="seconds")
     if peers:
-        return Team(clean(name), cwd, " ".join(goal.split()), [replace(m, lead=False) for m in members], stamp)
+        return Team(clean(name), cwd, " ".join(goal.split()), [replace(m, lead=False) for m in members], stamp,
+                    worktrees=worktrees)
     lead = next((m for m in members if m.lead), Member(LEAD, LEAD_FOCUS, lead=True))
     return Team(clean(name), cwd, " ".join(goal.split()), [lead, *(m for m in members if not m.lead)],
-                stamp, decide, background)
+                stamp, decide, background, worktrees)
 
 
 def add_members(team: Team, text: str) -> tuple[list[Member], str]:
@@ -290,7 +301,7 @@ def load() -> dict[str, Team]:
                        for m in item["members"]]
             teams[item["name"]] = Team(item["name"], item["cwd"], item.get("goal", ""), members,
                                        item.get("created", ""), int(item.get("decide") or 0),
-                                       bool(item.get("background")))
+                                       bool(item.get("background")), bool(item.get("worktrees")))
         except (KeyError, TypeError):
             continue
     return teams
@@ -365,8 +376,8 @@ def duties(member: Member) -> str:
     return " ".join(out)
 
 
-def role(team: Team, member: Member) -> str:
-    """The system prompt a member starts with. One line: it travels on a command line."""
+def _role(team: Team, member: Member) -> str:
+    """A member's role without the worktree note (role adds it)."""
     others = roster(team, member)
     common = (f"Team: {team.name}, working in {team.cwd}. Team goal: {team.goal}. "
               + (f"The other members, by the name to use with SendMessage: {others}. " if others else
@@ -407,6 +418,27 @@ def role(team: Team, member: Member) -> str:
                 "Ask another member directly when you need something from their area.")
     extra = duties(member)
     return f"{text} {extra}" if extra else text
+
+
+def worktree_note(team: Team, member: Member) -> str:
+    """What a team with worktrees adds to a role: where the member works and who merges."""
+    if not team.worktrees:
+        return ""
+    if member.lead:
+        return ("Each member works in a git worktree of its own, on its own branch (worktree-<its session "
+                "name>): when one reports a part done, check it on that branch and merge it into the project "
+                "here, where you work.")
+    who = team.session_name(team.lead) if team.lead is not None else "the user"
+    return (f"You work in a git worktree of your own, on the branch {team.branch(member)}, so the others' "
+            f"changes never mix with yours mid-way: commit your work there as you go, and tell {who} when the "
+            "branch is ready to merge.")
+
+
+def role(team: Team, member: Member) -> str:
+    """The system prompt a member starts with. One line: it travels on a command line."""
+    text = _role(team, member)
+    note = worktree_note(team, member)
+    return f"{text} {note}" if note else text
 
 
 # --- a line-up suggested for a goal -------------------------------------------------------------
@@ -497,8 +529,8 @@ def options(team: Team, member: Member) -> tuple[str, ...]:
 
 def launch(team: Team, member: Member, resume: Session | None = None, prompt: str | None = None) -> Launch:
     """A member's tab: a fresh session, or its last one resumed with the same name and role."""
-    if resume is not None:
-        return Launch(title=f"{team.name}: {member.name}", cwd=team.cwd, mode=Mode.RESUME,
+    if resume is not None:  # in its own folder: a member with a worktree goes on there
+        return Launch(title=f"{team.name}: {member.name}", cwd=resume.cwd or team.cwd, mode=Mode.RESUME,
                       session_id=resume.session_id, prompt=prompt, options=options(team, member))
     if prompt is None and member.lead and team.decide and not any(not m.lead for m in team.members):
         prompt = (f"Goal: {team.goal} The team is yours to make: decide the members the work needs (at most "
@@ -510,14 +542,40 @@ def launch(team: Team, member: Member, resume: Session | None = None, prompt: st
     elif prompt is None and team.lead is None:  # peers: nobody hands out work, so each starts on its own part
         prompt = (f"Goal: {team.goal} Your part: {member.focus or member.name}. The others start alongside you: "
                   "say hello to them with SendMessage, agree where your parts meet, then start on yours.")
+    # A fresh member with a worktree of its own: Claude Code makes it, .claude/worktrees/<session name>
+    # on the branch worktree-<session name> (tried with 2.1.317), and the session works there.
+    worktree = ("--worktree", team.session_name(member)) if team.has_worktree(member) else ()
     return Launch(title=f"{team.name}: {member.name}", cwd=team.cwd, mode=Mode.NEW, session_id="",
-                  prompt=prompt, options=options(team, member))
+                  prompt=prompt, options=(*options(team, member), *worktree))
+
+
+WORKTREES = (".claude", "worktrees")  # where `claude --worktree <name>` puts a worktree, in the repository
+
+
+def repository_root(folder: str) -> bool:
+    """Whether the folder is a git repository's top: where Claude Code puts its worktrees, and so
+    where a team with worktrees has to be."""
+    try:
+        found = subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=10, check=False,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return found.returncode == 0 and folder_key(found.stdout.strip()) == folder_key(str(Path(folder).resolve()))
+
+
+def in_team_folder(team: Team, cwd: str) -> bool:
+    """Whether a session's folder is the team's: the project, or a worktree of it that Claude Code
+    made (<project>/.claude/worktrees/<name>), where a member with a worktree of its own works."""
+    key, here = folder_key(team.cwd), folder_key(cwd)
+    return here == key or folder_key(str(Path(here).parent)) == folder_key(str(Path(team.cwd, *WORKTREES)))
 
 
 def member_of(session: Session, saved: dict[str, Team] | None = None) -> tuple[Team, Member] | None:
-    """The team and member a session plays: it bears a member's session name, in the team's folder."""
+    """The team and member a session plays: it bears a member's session name, in the team's folder
+    (or a worktree of it)."""
     for team in (load() if saved is None else saved).values():
-        if folder_key(session.cwd) != folder_key(team.cwd):
+        if not in_team_folder(team, session.cwd):
             continue
         for member in team.members:
             if session.title == team.session_name(member):
@@ -566,14 +624,13 @@ def member_sessions(team: Team, sessions: list[Session], live: dict[str, dict] |
     """Each member's session: the open one with its name, else the newest one that had it."""
     live = live_names() if live is None else live
     by_id = {s.session_id: s for s in sessions}
-    key = folder_key(team.cwd)
     out: dict[str, Session | None] = {}
     for member in team.members:
         name = team.session_name(member)
         info = live.get(name)
         found = by_id.get(str(info.get("sessionId"))) if info else None
         if found is None:
-            named = [s for s in sessions if s.title == name and folder_key(s.cwd) == key]
+            named = [s for s in sessions if s.title == name and in_team_folder(team, s.cwd)]
             found = max(named, key=lambda s: s.last_active, default=None)
         out[member.name] = found
     return out

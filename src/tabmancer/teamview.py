@@ -493,6 +493,8 @@ class TeamScreen(Screen):
             (f"  ·  {human(spent)} tokens" if spent else "", MUTED),
             (f"  ·  the lead picks up to {self.team.decide} members" if self.team.decide else "", MUTED),
             ("  ·  members in the background" if self.team.background else "", MUTED),
+            ("  ·  peers, no lead" if self.team.peers else "", MUTED),
+            ("  ·  each member on a worktree-<name> branch" if self.team.worktrees else "", MUTED),
             ("\nGoal  ", MUTED), (self.team.goal, TEXT)))
 
     def spent(self) -> int:
@@ -878,6 +880,7 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         Binding("ctrl+t", "template", "Next line-up", priority=True),
         Binding("ctrl+l", "keep_lineup", "Keep the line-up", priority=True),
         Binding("ctrl+b", "toggle_background", "Tabs or background", priority=True),
+        Binding("ctrl+o", "toggle_worktrees", "Own worktrees", priority=True),
         Binding("ctrl+r", "suggest", "Suggest a line-up", priority=True),
         Binding("ctrl+g", "show_role", "What a member is told", priority=True),
         Binding("ctrl+s", "create", "Create", priority=True),
@@ -894,6 +897,8 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         self.forgetting: str | None = None  # Ctrl+L once on a kept line-up: again forgets it
         self.background = False  # Ctrl+B: the members run as background sessions, the lead in a tab
         self.asking = False  # Ctrl+R: Claude is being asked for a line-up
+        self.worktrees = False  # Ctrl+O: each member in a git worktree of its own
+        self.repositories: dict[str, bool] = {}  # folder -> is a repository's top (is_repository)
 
     def compose(self) -> ComposeResult:
         first = next(iter(teams.TEMPLATES))
@@ -950,14 +955,30 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         out = Text()
         if self.is_mounted and self.peers():
             out.append("● each in a tab", style=f"bold {TEXT}")
-            out.append("   peers: you talk to each of them, so none runs in the background", style=MUTED)
-            return out
-        for on, words in ((not self.background, "each in a tab"),
-                          (self.background, "the members in the background, the lead in a tab")):
-            out.append(("● " if on else "○ ") + words, style=f"bold {TEXT}" if on else MUTED)
-            out.append("   ")
-        out.append("Ctrl+B switches", style=MUTED)
+            out.append(" (peers: you talk to each)", style=MUTED)
+        else:
+            for on, words in ((not self.background, "each in a tab"),
+                              (self.background, "the members in the background")):
+                out.append(("● " if on else "○ ") + words, style=f"bold {TEXT}" if on else MUTED)
+                out.append("   ")
+            out.append("Ctrl+B", style=MUTED)
+        out.append("   │   ", style=MUTED)  # and where they work: the project, or worktrees of their own
+        out.append("[x] " if self.worktrees else "[ ] ", style=f"bold {CYAN}" if self.worktrees else MUTED)
+        out.append("own git worktrees", style=f"bold {TEXT}" if self.worktrees else MUTED)
+        out.append("   Ctrl+O", style=MUTED)
         return out
+
+    def is_repository(self, folder: str) -> bool:
+        """Whether the folder is a git repository's top, asked of git once a folder."""
+        if folder not in self.repositories:
+            self.repositories[folder] = bool(folder) and Path(folder).is_dir() and teams.repository_root(folder)
+        return self.repositories[folder]
+
+    def action_toggle_worktrees(self) -> None:
+        """Ctrl+O: each member (not the lead) in a git worktree of its own, on a branch of its own, so
+        two members' half-done changes never mix in one checkout."""
+        self.worktrees = not self.worktrees
+        self.show_preview()
 
     def action_toggle_background(self) -> None:
         if self.peers():
@@ -1072,6 +1093,8 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
             ("the goal", not goal),
             ("a member besides the lead", not deciding and not peers and not any(not m.lead for m in members)),
             ("two members at least, as peers (or a lead line)", peers and len(members) < 2),
+            ("for worktrees, the top folder of a git repository", self.worktrees and folder
+             and Path(folder).is_dir() and not self.is_repository(folder)),
             ("how many members at most, 1 to 9", deciding and not 1 <= self.most() <= 9)) if wrong]
 
     def show_preview(self) -> None:
@@ -1185,7 +1208,8 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         peers = self.peers()
         self.dismiss(teams.new_team(name, str(Path(folder).resolve()), goal, members,
                                     decide=self.most() if self.deciding() else 0,
-                                    background=self.background and not peers, peers=peers))
+                                    background=self.background and not peers, peers=peers,
+                                    worktrees=self.worktrees))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
