@@ -32,12 +32,16 @@ def test_the_font_draws_every_character_the_card_writes_and_a_letter_as_it_looks
     written = [wrapped.span(week), "CLAUDE CODE WRAPPED", "I'M ", "TOKENS A DAY", "MTWTFSS", "WHEN I WORKED",
                "0 6 12 18", wrapped.TAG, "TABMANCER · " + wrapped.REPO, *personas,
                *(part for tile in wrapped.tiles(week) for part in tile)]
-    missing = {char for words in written for char in words.upper()} - set(card.FONT)
-    assert not missing
+    missing = {char for words in written for char in words.upper() + words.lower()} - set(card.FONT)
+    assert not missing  # in capitals and in small letters, as the card writes its labels
     canvas = card.Canvas(20, 20, (0, 0, 0))
-    assert canvas.text(1, 1, "a", (255, 255, 255), 2) == 10  # capitals, two pixels a font pixel
+    assert canvas.text(1, 1, "A", (255, 255, 255), 2) == 10  # two pixels a font pixel
     drawn = ["".join("1" if canvas.rows[1 + 2 * y][1 + 2 * x] else "0" for x in range(5)) for y in range(7)]
     assert drawn == card.FONT["A"] and canvas.rows[2][2] == canvas.rows[1][1]
+    small = card.Canvas(8, 12, (0, 0, 0))
+    small.text(1, 1, "g", (255, 255, 255))  # a small letter as it is written, its tail under the line
+    assert ["".join("1" if small.rows[1 + y][1 + x] else "0" for x in range(5)) for y in range(9)] == card.FONT["g"]
+    assert len(card.FONT["g"]) == 9 and card.FONT.get("é") is None
     assert card.text_width("ABC", 1) == 17
 
 
@@ -180,8 +184,9 @@ def test_the_card_is_drawn_at_a_size_of_units(home):
     week = wrapped.week(T.collect(14), {}, opened=[])
     small, large = wrapped.draw(week, ACCENT, 1), wrapped.draw(week, ACCENT, 3)
     assert (small.width, small.height) == (400, 225) and (large.width, large.height) == (1200, 675)
-    assert large.rgb(16 * 3 + 1, 10 * 3 + 1) == wrapped.TEXT  # the top of the title's C, three times larger
-    assert large.rgb(0, 0) == wrapped.GROUND and len(large.palette) <= 256
+    assert large.rgb(152 * 3 + 1, 12 * 3 + 1) == wrapped.TEXT  # the top of the title's C, three times larger
+    assert large.rgb(0, 0) == wrapped.GROUND and len(large.palette) <= 256  # the sky at its top...
+    assert large.rgb(1, large.height - 1) == wrapped.DUSK  # ...and at its foot
     story = wrapped.draw(week, ACCENT, shape="story")
     assert (story.width, story.height) == (1080, 1920) and len(story.palette) <= 256
     assert wrapped.filename(week, "story").endswith("-story.png") and not wrapped.filename(week).endswith("-story.png")

@@ -11,13 +11,13 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.color import Color
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 from . import card, share, sixel, wrapped
-from .dialogs import frame, title
+from .dialogs import frame, pills, title
 from .theme import MUTED, TEXT, keys
 from .tokenchart import PixelPicture
 
@@ -76,26 +76,50 @@ class CardPicture(PixelPicture, Static):
         return in_words(self.week, self.accent, cramped)
 
 
+def _hex(colour: tuple[int, int, int]) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*colour)
+
+
+SIGNS = {"TOKENS": "◆", "AT WORK": "◷", "SESSIONS": "▣", "SIDE BY SIDE": "⧉", "CLAUDE WROTE": "≡",
+         "FILES EDITED": "▤", "MODELS": "#", "BROUGHT BACK": "↺", "STREAK": "▲", "BUSIEST DAY": "▦",
+         "LONGEST SESSION": "⧗", "TOP TOOL": "⚒"}  # the card's icons, in characters
+
+
 def in_words(week: wrapped.Week, accent: str, cramped: bool = False) -> Text:
-    """The card's numbers where no picture of it is shown."""
+    """The card's numbers where no picture of it is shown, in the card's colours: a line a number,
+    its sign and its name in a colour of its own."""
     name, why = wrapped.persona(week)
+    muted = _hex(wrapped.MUTED)
     out = Text.assemble(("CLAUDE CODE ", f"bold {TEXT}"), ("WRAPPED", f"bold {accent}"),
-                        (f"   {wrapped.span(week).lower()}\n\n", MUTED),
-                        ("I'm ", TEXT), (name.title(), f"bold {accent}"), (f"  {why.lower()}\n\n", MUTED))
-    for what, number, note in wrapped.tiles(week):
-        out.append(f"{what.lower():<17}", style=MUTED)
+                        (f"   {wrapped.span(week)}\n\n", muted),
+                        ("I'm ", f"bold {TEXT}"), (name.title(), f"bold {accent}"), (f"   {why.lower()}\n\n", muted))
+    colours = [accent, *(_hex(hue) for hue in wrapped.HUES)]
+    for n, (what, number, note) in enumerate(wrapped.tiles(week)):
+        colour = colours[n % len(colours)]
+        out.append(f" {SIGNS.get(what, '·')}  ", style=colour)
         out.append(f"{number.lower() if what in ('TOP TOOL', 'MODELS') else number:<14}", style=f"bold {TEXT}")
-        out.append(f"{note.lower()}\n", style=MUTED)
+        out.append(f"{what.lower():<17}", style=f"bold {colour}")
+        out.append(f"{note.lower()}\n", style=_hex(wrapped.GREEN) if note.startswith("+") else muted)
     out.append("\nThe card is larger than this window: a larger one shows it; s saves it either way." if cramped else
-               "\nWhere the terminal draws pictures this is a card; s saves it as one either way.", style=MUTED)
+               "\nWhere the terminal draws pictures this is a card; s saves it as one either way.", style=muted)
     return out
+
+
+NIGHT = _hex(wrapped.GROUND)  # the window is the card's sky, so the card sits in it without an edge
+FRAME = _hex(wrapped.VIOLET)
 
 
 class WrappedScreen(ModalScreen[None]):
     """The week's card, to share, save or copy."""
 
-    DEFAULT_CSS = frame("WrappedScreen", "large", height="92%") + """
-    WrappedScreen CardPicture { margin-top: 1; }
+    DEFAULT_CSS = frame("WrappedScreen", "large", height="92%", tone=FRAME) + f"""
+    WrappedScreen > Vertical {{ background: {NIGHT}; width: 95%; max-width: 150; }}
+    WrappedScreen #wrapped-top {{ height: 1; }}
+    WrappedScreen #wrapped-title {{ width: 1fr; }}
+    WrappedScreen #wrapped-shape {{ width: auto; }}
+    WrappedScreen CardPicture {{ margin-top: 1; }}
+    WrappedScreen #wrapped-about {{ height: 1; margin-top: 1; color: {_hex(wrapped.MUTED)}; }}
+    WrappedScreen .hint {{ color: {_hex(wrapped.MUTED)}; }}
     """
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape,q,W", "close", "Close"),
@@ -112,14 +136,27 @@ class WrappedScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(self.heading(), id="wrapped-title")
+            with Horizontal(id="wrapped-top"):
+                yield Label(self.heading(), id="wrapped-title")
+                yield Static(self.shapes(), id="wrapped-shape")
             yield CardPicture(self.week, self.accent, self.shape)
+            yield Label(self.about(), id="wrapped-about")
             yield Label(keys(("p", "share: X, Bluesky, Threads, Instagram"), ("f", "wide or story"),
                              ("s", "save"), ("c", "copy"), ("Esc", "close")), classes="hint")
 
     def heading(self) -> Text:
-        shaped = "the wide card, for posts" if self.shape == "wide" else "the story card, for Instagram and stories"
-        return title("Claude Code Wrapped", "your last seven days: counts only, no project names", shaped)
+        return Text.assemble(("Claude Code ", f"bold {TEXT}"), ("Wrapped", f"bold {self.accent}"),
+                             (f"   {wrapped.span(self.week)}", _hex(wrapped.MUTED)))
+
+    def shapes(self) -> Text:
+        """The two cards, the one shown marked, and the key that turns it."""
+        return Text.assemble(pills(["wide", "story"], self.shape, labels={"wide": "wide, for posts",
+                                                                          "story": "story, for Instagram"}),
+                             ("   f", _hex(wrapped.MUTED)))
+
+    def about(self) -> Text:
+        return Text("Your last seven days: counts only, no project names. Nothing is posted until you post it.",
+                    style=_hex(wrapped.MUTED))
 
     def canvas(self) -> card.Canvas:
         return wrapped.draw(self.week, _rgb(self.accent), shape=self.shape)
@@ -127,7 +164,7 @@ class WrappedScreen(ModalScreen[None]):
     def action_turn(self) -> None:
         self.shape = "story" if self.shape == "wide" else "wide"
         self.query_one(CardPicture).turn(self.shape)
-        self.query_one("#wrapped-title", Label).update(self.heading())
+        self.query_one("#wrapped-shape", Static).update(self.shapes())
 
     def action_share(self) -> None:
         def chosen(key: str | None) -> None:
@@ -171,9 +208,10 @@ class WrappedScreen(ModalScreen[None]):
 class ShareMenu(ModalScreen[str | None]):
     """Where to take the card: a place's key, or WORDS for the post's words alone."""
 
-    DEFAULT_CSS = frame("ShareMenu", "medium") + """
-    ShareMenu OptionList { height: auto; background: $surface; border: none; margin-top: 1; }
-    ShareMenu #share-words { color: $text-muted; margin-top: 1; }
+    DEFAULT_CSS = frame("ShareMenu", "medium", tone=FRAME) + f"""
+    ShareMenu > Vertical {{ background: {NIGHT}; }}
+    ShareMenu OptionList {{ height: auto; background: {NIGHT}; border: none; margin-top: 1; }}
+    ShareMenu #share-words {{ color: {_hex(wrapped.MUTED)}; margin-top: 1; }}
     """
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "cancel", "Cancel"),

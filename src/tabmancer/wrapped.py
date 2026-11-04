@@ -38,7 +38,7 @@ UNIT = 3  # saved and copied: three real pixels a design pixel
 SHAPES = {"wide": (400, 225), "story": (360, 640)}  # design pixels: 1200x675 and 1080x1920 saved
 WIDTH, HEIGHT = SHAPES["wide"]
 WEEKDAYS = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY")
-MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 TOKENS_A_NOVEL = 120_000  # a novel of about 90,000 words, at about three words for four tokens
 TOKENS_A_PAGE = 400       # a page of about 300 words
 NIGHT, EARLY = (22, 23, 0, 1, 2, 3, 4), (5, 6, 7, 8)  # hours of the day
@@ -46,11 +46,18 @@ FAMILY = re.compile(r"(fable|mythos|opus|sonnet|haiku)")
 TAG = "#ClaudeCodeWrapped"
 REPO = "github.com/SinanTufekci/tabmancer"
 
-GROUND: Colour = (11, 14, 20)
-PANEL: Colour = (21, 26, 36)
-TEXT: Colour = (230, 227, 221)
-MUTED: Colour = (125, 133, 144)
+# The card is a night sky: deep blue at the top going to purple, stars where nothing is written, and
+# Bit glowing in the theme's colour. Each number has a colour of its own, its icon and its name in it.
+GROUND: Colour = (8, 12, 34)  # the sky at the top
+DUSK: Colour = (42, 16, 58)  # ...and at the foot
+PANEL: Colour = (40, 36, 72)  # an empty bar, a rule between numbers
+TEXT: Colour = (236, 233, 227)
+MUTED: Colour = (150, 146, 178)  # grey with the sky's violet in it
 GREEN: Colour = (76, 195, 138)
+STAR: Colour = (255, 248, 236)
+HUES: tuple[Colour, ...] = ((57, 197, 207), (167, 139, 250), (76, 195, 138), (227, 179, 65), (240, 120, 160),
+                            (108, 182, 255))  # after the accent, the numbers' colours in turn
+VIOLET = HUES[1]
 
 
 @dataclass
@@ -378,23 +385,79 @@ def draw(week: Week, accent: Colour, unit: int = UNIT, shape: str = "wide") -> c
     """The card in a shape of SHAPES, its design pixels unit x unit real ones each."""
     width, height = SHAPES[shape]
     canvas = card.Canvas(width * unit, height * unit, GROUND)
-    pen = _Pen(canvas, unit, width)
+    pen = _Pen(canvas, unit, width, height)
+    pen.sky()
     (_wide if shape == "wide" else _story)(pen, week, accent)
     return canvas
+
+
+# Seven by seven, a number's sign beside it, by what the number is.
+ICONS = {
+    "TOKENS": "0001000 0011100 0111110 1111111 0111110 0011100 0001000",
+    "AT WORK": "0011100 0100010 1001001 1001101 1000001 0100010 0011100",
+    "SESSIONS": "1111111 1000001 1111111 1010001 1001001 1010001 1111111",
+    "SIDE BY SIDE": "1111100 1000100 1011111 1110001 0010001 0010001 0011111",
+    "CLAUDE WROTE": "1111111 0000000 1111100 0000000 1111110 0000000 1110000",
+    "FILES EDITED": "1111100 1000110 1000011 1011101 1000001 1011101 1111111",
+    "MODELS": "0101010 1111111 0100010 1101011 0100010 1111111 0101010",
+    "BROUGHT BACK": "0011100 0100011 1000011 1000000 1000001 0100010 0011100",
+    "STREAK": "0001000 0011000 0111100 0111110 1111111 0111110 0011100",
+    "BUSIEST DAY": "1111111 1000001 1111111 1000001 1010101 1000001 1111111",
+    "LONGEST SESSION": "1111111 0100010 0010100 0001000 0010100 0100010 1111111",
+    "TOP TOOL": "0000110 0001100 0001101 0011111 0111000 1110000 1100000",
+}
 
 
 class _Pen:
     """Writes and draws on a canvas in design pixels."""
 
-    def __init__(self, canvas: card.Canvas, unit: int, width: int) -> None:
+    def __init__(self, canvas: card.Canvas, unit: int, width: int, height: int = 0) -> None:
         self.canvas, self.u, self.width = canvas, unit, width
+        self.height = height or canvas.height // unit
+        self.clear: list[tuple[int, int, int, int]] = []  # where the stars keep away from
 
-    def text(self, x: int, y: int, words: str, colour: Colour, size: int = 1) -> int:
+    def air(self, y: int) -> Colour:
+        """The sky's colour at a height."""
+        return bitart._mix(GROUND, DUSK, round(y / max(1, self.height - 1) * 64) / 64)
+
+    def sky(self) -> None:
+        """Deep blue going to purple, a band a real pixel high at a time (64 shades)."""
+        canvas = self.canvas
+        for y in range(canvas.height):
+            canvas.rect(0, y, canvas.width, 1, self.air(y / self.u))
+
+    def stars(self, count: int, seed: int) -> None:
+        """Small stars, and a few that twinkle, where nothing is drawn (clear)."""
+        import random
+
+        rng = random.Random(seed)
+        free = [(x, y) for _ in range(count * 4) for x, y in [(rng.randrange(2, self.width - 2),
+                                                             rng.randrange(2, self.height - 2))]
+                if not any(left <= x < right and top <= y < bottom for left, top, right, bottom in self.clear)]
+        for k, (x, y) in enumerate(free[:count]):
+            shine = (0.25, 0.4, 0.6, 0.9)[rng.randrange(4)]
+            self.rect(x, y, 1, 1, bitart._mix(self.air(y), STAR, shine))
+            if k % 9 == 0:  # a twinkle: a cross
+                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    self.rect(x + dx, y + dy, 1, 1, bitart._mix(self.air(y), STAR, 0.45))
+
+    def keep_clear(self, x: int, y: int, w: int, h: int) -> None:
+        self.clear.append((x, y, x + w, y + h))
+
+    def rect(self, x: int, y: int, w: int, h: int, colour: Colour) -> None:
+        u = self.u
+        self.canvas.rect(x * u, y * u, w * u, h * u, colour)
+
+    def text(self, x: int, y: int, words: str, colour: Colour, size: int = 1, bold: bool = False) -> int:
+        """Words at (x, y); bold, each stroke a third of a font pixel wider."""
+        if bold:
+            self.canvas.text(x * self.u + max(1, size * self.u // 3), y * self.u, words, colour, size * self.u)
         return self.canvas.text(x * self.u, y * self.u, words, colour, size * self.u) // self.u
 
-    def centred(self, y: int, words: str, colour: Colour, size: int = 1, room: int | None = None) -> None:
+    def centred(self, y: int, words: str, colour: Colour, size: int = 1, room: int | None = None,
+                bold: bool = False) -> None:
         words = _fit(words, room or self.width - 20, size)
-        self.text((self.width - card.text_width(words, size)) // 2, y, words, colour, size)
+        self.text((self.width - card.text_width(words, size)) // 2, y, words, colour, size, bold)
 
     def right(self, x: int, y: int, words: str, colour: Colour, size: int = 1) -> None:
         self.text(x - card.text_width(words, size), y, words, colour, size)
@@ -402,6 +465,24 @@ class _Pen:
     def box(self, x: int, y: int, w: int, h: int, radius: int, colour: Colour) -> None:
         u = self.u
         self.canvas.box(x * u, y * u, w * u, h * u, radius * u, colour)
+
+    def disc(self, cx: float, cy: float, r: float, colour: Colour) -> None:
+        u = self.u
+        cx, cy, r = round(cx * u), round(cy * u), round(r * u)
+        for dy in range(-r, r + 1):
+            half = int((r * r - dy * dy) ** 0.5)
+            self.canvas.rect(cx - half, cy + dy, 2 * half + 1, 1, colour)
+
+    def glow(self, cx: float, cy: float, r: float, colour: Colour, strength: float = 0.42, rings: int = 12) -> None:
+        """A soft light round a point: rings of the colour, fainter outwards."""
+        for k in range(rings, 0, -1):
+            self.disc(cx, cy, r * k / rings, bitart._mix(self.air(cy), colour, strength * (1 - k / rings) ** 1.6 + 0.02))
+
+    def icon(self, x: int, y: int, what: str, colour: Colour) -> None:
+        for gy, line in enumerate(ICONS.get(what, ICONS["TOKENS"]).split()):
+            for gx, bit in enumerate(line):
+                if bit == "1":
+                    self.rect(x + gx, y + gy, 1, 1, colour)
 
     def bit(self, x: int, y: int, accent: Colour, cell: int) -> None:
         """Bit, glad of the week, in confetti; cell is a terminal cell's width in design pixels."""
@@ -415,74 +496,104 @@ class _Pen:
         palette, rows = bitart.indexed(bitart.Frame(pose, bits), (cell * u, 2 * cell * u))
         self.canvas.blit(x * u, y * u, palette, rows)
 
-    def tile(self, x: int, y: int, room: int, tile: tuple[str, str, str], accent: Colour, first: bool) -> None:
-        what, number, note = tile
-        self.text(x, y, _fit(what, room, 1), MUTED)
-        self.text(x, y + 9, _fit(number, room, 2), accent if first else TEXT, 2)
-        self.text(x, y + 26, _fit(note, room, 1), GREEN if note.startswith("+") else MUTED)
+    def bars(self, x: int, y: int, values: list[float], width: int, height: int, accent: Colour,
+             labels: list[str] | None = None, peak: int | None = None) -> None:
+        """Bars from violet to the accent, left to right; the one at peak (or the last) in the accent
+        with its label lit; an empty one a sliver of the sky's own colour."""
+        count = len(values)
+        gap = 5 if count <= 7 else 3
+        bar = (width - gap * (count - 1)) // count
+        top = max(values) or 1
+        lit = count - 1 if peak is None else peak
+        for k, value in enumerate(values):
+            tall = max(1, round(value / top * height)) if value else 1
+            colour = accent if k == lit and value else bitart._mix(VIOLET, accent, k / max(1, count - 1) * 0.8)
+            self.box(x + k * (bar + gap), y + height - tall, bar, tall, 1 if tall > 3 else 0,
+                     colour if value else bitart._mix(self.air(y + height), PANEL, 0.8))
+            if labels and labels[k]:
+                self.text(x + k * (bar + gap) + (bar - card.text_width(labels[k])) // 2, y + height + 4, labels[k],
+                          accent if k == lit and value else MUTED)
+
+    def number(self, x: int, y: int, tile: tuple[str, str, str], colour: Colour, room: int, label_at: int) -> None:
+        """A line of the list: its sign, the number large, and beside it its name in its colour with
+        the word under it (in small letters)."""
+        what, figure, note = tile
+        self.icon(x, y + 3, what, colour)
+        self.text(x + 14, y, _fit(figure, label_at - x - 18, 2), TEXT, 2, bold=True)
+        self.text(label_at, y + 1, _fit(what.lower(), room, 1), colour, bold=True)
+        self.text(label_at, y + 10, _fit(note.lower(), room, 1), GREEN if note.startswith("+") else MUTED)
+
+    def footer(self, x: int, y: int, accent: Colour) -> None:
+        shown = self.text(x, y, "tabmancer", accent, bold=True)
+        self.text(x + shown + 5, y, "· " + REPO.lower(), MUTED)
 
 
 def _wide(pen: _Pen, week: Week, accent: Colour) -> None:
-    """1200x675: who the week made you along the top, Bit and the days on the left, eight numbers."""
-    shown = pen.text(14, 10, "CLAUDE CODE ", TEXT, 2)
-    pen.text(14 + shown + 2, 10, "WRAPPED", accent, 2)
-    pen.right(386, 14, span(week), MUTED)
+    """1200x675: Bit glowing on the left over the days, and on the right who the week made you and
+    six numbers, a line each."""
+    pen.keep_clear(140, 0, 260, 207)  # the words
+    pen.keep_clear(0, 138, 140, 87)  # the days and the footer
+    pen.keep_clear(8, 40, 112, 96)  # Bit
+    pen.stars(70, 7)
+    pen.glow(64, 92, 54, accent)  # first: nothing is drawn under it
+    shown = pen.text(150, 12, "CLAUDE CODE ", TEXT, 2, bold=True)
+    pen.text(150 + shown + 2, 12, "WRAPPED", accent, 2, bold=True)
+    pen.text(150, 30, span(week), MUTED)
     name, why = persona(week)
-    shown = pen.text(14, 30, "I'M ", TEXT, 2)
-    pen.text(14 + shown + 2, 30, _fit(name, 372 - shown, 2), accent, 2)
-    pen.text(14, 48, _fit(why, 372, 1), MUTED)
-
-    pen.bit(20, 60, accent, 8)
-    pen.text(16, 134, "TOKENS A DAY", MUTED)
-    peak = max(week.daily) or 1
-    for k, used in enumerate(week.daily):
-        x = 16 + k * 15
-        tall = max(1, round(used / peak * 34)) if used else 1
-        colour = accent if k == 6 else bitart._mix(GROUND, accent, 0.55)
-        pen.box(x, 180 - tall, 10, tall, 1 if tall > 2 else 0, colour if used else PANEL)
-        pen.text(x + 3, 184, "MTWTFSS"[(week.first + timedelta(days=k)).weekday()], TEXT if k == 6 else MUTED)
-
-    pen.box(136, 58, 250, 152, 6, PANEL)
+    shown = pen.text(150, 42, "I'M ", TEXT, 2, bold=True)
+    pen.text(150 + shown + 2, 42, _fit(name, 236 - shown, 2), accent, 2, bold=True)
+    pen.text(150, 59, _fit(why.lower(), 236, 1), MUTED)
     every = tiles(week)
+    colours = (accent, *HUES)
     for n, index in enumerate(WIDE_TILES):
-        pen.tile(150 + (n % 2) * 120, 68 + (n // 2) * 48, 110, every[index], accent, n == 0)
+        y = 72 + n * 22
+        pen.number(150, y, every[index], colours[n], 116, 270)
+        if n < len(WIDE_TILES) - 1:
+            pen.rect(150, y + 19, 236, 1, bitart._mix(pen.air(y + 19), VIOLET, 0.18))
 
-    shown = pen.text(14, 214, "TABMANCER", accent)
-    pen.text(14 + shown + 4, 214, "· " + REPO.upper(), MUTED)
+    pen.bit(14, 50, accent, 8)
+    pen.text(16, 146, "tokens a day", MUTED)
+    labels = ["MTWTFSS"[(week.first + timedelta(days=k)).weekday()] for k in range(7)]
+    pen.bars(16, 158, week.daily, 112, 28, accent, labels)
+    pen.footer(16, 212, accent)
 
 
 def _story(pen: _Pen, week: Week, accent: Colour) -> None:
-    """1080x1920: the name and Bit large, who the week made you, every number, the hours of the day."""
-    pen.centred(34, "CLAUDE CODE", TEXT, 3)
-    pen.centred(60, "WRAPPED", accent, 5)
+    """1080x1920: the name and Bit glowing large, who the week made you, every number a line, the
+    hours of the day."""
+    pen.keep_clear(0, 24, 360, 92)  # the name and the dates
+    pen.keep_clear(98, 104, 164, 128)  # Bit
+    pen.keep_clear(0, 232, 360, 408)  # who, the numbers, the hours, the footer
+    pen.stars(110, 11)
+    pen.glow(180, 172, 92, accent, 0.38, 14)  # first: the words go over it
+    pen.centred(34, "CLAUDE CODE", TEXT, 3, bold=True)
+    pen.centred(60, "WRAPPED", accent, 5, bold=True)
     pen.centred(102, span(week), MUTED)
-    pen.bit((360 - 154) // 2, 116, accent, 14)
+    pen.bit((360 - 154) // 2, 112, accent, 14)
     name, why = persona(week)
-    pen.centred(238, "I'M", MUTED, 2)
-    pen.centred(256, name, accent, 3, room=344)
-    pen.centred(284, why, TEXT)
+    pen.centred(238, "I'M", TEXT, 2, bold=True)
+    pen.centred(255, name, accent, 3, room=344, bold=True)
+    pen.centred(283, why.lower(), MUTED)
 
-    pen.box(14, 300, 332, 238, 8, PANEL)
+    colours = (accent, *HUES)
     for n, tile in enumerate(tiles(week)):
-        pen.tile(30 + (n % 2) * 162, 310 + (n // 2) * 45, 146, tile, accent, n == 0)
+        y = 304 + n * 25
+        pen.number(26, y, tile, colours[n % len(colours)], 150, 196)
+        if n < 9:
+            pen.rect(26, y + 21, 308, 1, bitart._mix(pen.air(y + 21), VIOLET, 0.18))
 
-    pen.text(30, 550, "WHEN I WORKED", MUTED)
-    peak = max(week.hours) or 1
+    pen.text(26, 560, "when i worked", MUTED)
     top = max(range(24), key=lambda h: week.hours[h])
-    for hour, spent in enumerate(week.hours):
-        x = 30 + hour * 13
-        tall = max(1, round(spent / peak * 34)) if spent else 1
-        colour = accent if hour == top and spent else bitart._mix(GROUND, accent, 0.55)
-        pen.box(x, 594 - tall, 10, tall, 1 if tall > 2 else 0, colour if spent else PANEL)
-        if hour % 6 == 0:
-            pen.text(x + (5 - card.text_width(str(hour)) // 2), 598, str(hour), MUTED)
-
-    pen.centred(614, TAG.upper(), TEXT)
-    pen.centred(626, f"TABMANCER · {REPO.upper()}", MUTED)
+    pen.bars(26, 572, week.hours, 308, 26, accent, [str(h) if h % 6 == 0 else "" for h in range(24)],
+             peak=top if week.hours[top] else None)
+    pen.centred(616, TAG, TEXT)
+    words = "tabmancer · " + REPO.lower()
+    shown = pen.text((360 - card.text_width(words)) // 2, 628, "tabmancer", accent, bold=True)
+    pen.text((360 - card.text_width(words)) // 2 + shown, 628, " · " + REPO.lower(), MUTED)
 
 
 def span(week: Week) -> str:
-    """28 OCT – 3 NOV 2026 (not %b: that is in the system's language)."""
+    """28 Oct – 3 Nov 2026 (not %b: that is in the system's language)."""
     first, last = week.first, week.last
     start = f"{first.day} {MONTHS[first.month - 1]}" + (f" {first.year}" if first.year != last.year else "")
     return f"{start} – {last.day} {MONTHS[last.month - 1]} {last.year}"

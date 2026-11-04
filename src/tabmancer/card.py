@@ -1,6 +1,6 @@
 """A picture drawn in pure Python, pixel art like Bit: a canvas of palette indices, a 5x7 pixel font
-in capitals, and the PNG it is saved as, or copied to the clipboard as, to paste where you share it.
-For the week's card (wrapped.py)."""
+(capitals and small letters), and the PNG it is saved as, or copied to the clipboard as, to paste
+where you share it. For the week's card (wrapped.py)."""
 
 from __future__ import annotations
 
@@ -49,7 +49,27 @@ _GLYPHS = {
     "–": "00000 00000 00000 11111 00000 00000 00000", "_": "00000 00000 00000 00000 00000 00000 11111",
     "~": "00000 00000 01000 10101 00010 00000 00000",
 }
-FONT: dict[str, list[str]] = {char: rows.split() for char, rows in _GLYPHS.items()}
+# Small letters, five pixels high on the same line as the capitals; g j p q y hang two rows under it.
+_SMALL = {
+    "a": "00000 00000 01110 00001 01111 10001 01111", "b": "10000 10000 11110 10001 10001 10001 11110",
+    "c": "00000 00000 01110 10000 10000 10001 01110", "d": "00001 00001 01111 10001 10001 10001 01111",
+    "e": "00000 00000 01110 10001 11111 10000 01110", "f": "00110 01001 01000 11100 01000 01000 01000",
+    "g": "00000 00000 01111 10001 10001 10001 01111 00001 01110",
+    "h": "10000 10000 10110 11001 10001 10001 10001", "i": "00100 00000 01100 00100 00100 00100 01110",
+    "j": "00010 00000 00110 00010 00010 00010 00010 10010 01100",
+    "k": "10000 10000 10010 10100 11000 10100 10010", "l": "01100 00100 00100 00100 00100 00100 01110",
+    "m": "00000 00000 11010 10101 10101 10101 10101", "n": "00000 00000 10110 11001 10001 10001 10001",
+    "o": "00000 00000 01110 10001 10001 10001 01110",
+    "p": "00000 00000 11110 10001 10001 10001 11110 10000 10000",
+    "q": "00000 00000 01111 10001 10001 10001 01111 00001 00001",
+    "r": "00000 00000 10110 11001 10000 10000 10000", "s": "00000 00000 01111 10000 01110 00001 11110",
+    "t": "01000 01000 11100 01000 01000 01001 00110", "u": "00000 00000 10001 10001 10001 10011 01101",
+    "v": "00000 00000 10001 10001 10001 01010 00100", "w": "00000 00000 10001 10001 10101 10101 01010",
+    "x": "00000 00000 10001 01010 00100 01010 10001",
+    "y": "00000 00000 10001 10001 10001 10001 01111 00001 01110",
+    "z": "00000 00000 11111 00010 00100 01000 11111",
+}
+FONT: dict[str, list[str]] = {char: rows.split() for char, rows in {**_GLYPHS, **_SMALL}.items()}
 
 
 def text_width(text: str, size: int = 1) -> int:
@@ -99,11 +119,12 @@ class Canvas:
                 self.rows[y + dy][left:right] = bytes([n]) * (right - left)
 
     def text(self, x: int, y: int, text: str, colour: Colour, size: int = 1) -> int:
-        """Capitals at (x, y), their top left; a character the font has not drawn is left a gap.
-        Returns the width written."""
+        """Letters at (x, y), their top left, as they are written (a small letter the font has not
+        drawn, as its capital); another character the font has not drawn is left a gap. Returns the
+        width written."""
         n = self.ink(colour)
-        for k, char in enumerate(text.upper()):
-            glyph = FONT.get(char)
+        for k, char in enumerate(text):
+            glyph = FONT.get(char) or FONT.get(char.upper())
             if glyph is None:
                 continue
             left = x + k * (GLYPH_W + 1) * size
