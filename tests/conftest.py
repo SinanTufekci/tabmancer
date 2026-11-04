@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -6,6 +7,20 @@ from tabmancer import app as app_module
 from tabmancer import sessions
 
 CWD = "C:/work/demo"
+
+
+def team_preview(dialog) -> str:
+    """What the new-team form says will open: the title of the card with the drawing, then the line
+    under it ("Opens 4 tabs in shop. The lead starts last..."), or what is still needed."""
+    from rich.text import Text
+
+    title = Text.from_markup(str(dialog.query_one("#graph-card").border_title)).plain  # kept as markup
+    return f"{title}. {dialog.query_one('#team-preview').render()}"
+
+
+def role_of(argv) -> str:
+    """The role a team member starts with: the file its command line names."""
+    return Path(argv[list(argv).index("--append-system-prompt-file") + 1]).read_text(encoding="utf-8")
 
 
 async def box_has_focus(pilot, app, tries: int = 150) -> None:

@@ -128,3 +128,17 @@ def test_failed_launches_come_back_as_shell_lines(monkeypatch):
     monkeypatch.setattr(L.subprocess, "run", lambda *a, **k: Result())
     (line,) = L.open_tabs([launch()])
     assert line.endswith("&& claude --resume abc-123")
+
+
+def test_many_long_tabs_go_in_several_command_lines_each_short_enough():
+    import subprocess
+
+    long = [Launch(title=f"t{i}", cwd=str(Path.home()), mode=Mode.NEW, session_id="", prompt="x" * 6000)
+            for i in range(8)]
+    commands = L.windows_terminal_commands(long, "new")
+    assert len(commands) > 1 and all(len(subprocess.list2cmdline(c)) <= L.WT_MOST for c in commands)
+    assert sum(c.count("new-tab") for c in commands) == 8  # every tab, once, in order
+    window = commands[0][2]
+    assert window.startswith("tabmancer-") and all(c[2] == window for c in commands)  # all in one window
+    assert L.windows_terminal_commands([launch()], "new") == [windows_terminal_command([launch()], "new")]
+    assert [c[2] for c in L.windows_terminal_commands(long, "0")] == ["0"] * len(commands)

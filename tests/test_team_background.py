@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from conftest import team_preview
 from test_new_team import Host
 from textual.widgets import Input, Static, TextArea
 
@@ -31,9 +32,9 @@ async def test_ctrl_b_in_the_dialog_runs_the_members_in_the_background(tmp_path)
         dialog.query_one("#team-name", Input).value = "shop"
         dialog.query_one("#team-goal", TextArea).text = "Add a checkout"
         await pilot.pause(0.1)
-        assert "Opens 4 tabs" in str(dialog.query_one("#team-preview", Static).render())
+        assert "Opens 4 tabs" in team_preview(dialog)
         await pilot.press("ctrl+b")
-        shown = str(dialog.query_one("#team-preview", Static).render())
+        shown = team_preview(dialog)
         assert "Starts 3 in the background" in shown and "then opens a tab for shop-lead" in shown
         assert "● the members in the background" in str(dialog.query_one("#team-where", Static).render())
         await pilot.press("ctrl+s")

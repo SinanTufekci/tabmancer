@@ -217,3 +217,19 @@ def test_new_command_takes_several_prompts_and_links_them(tmp_path, monkeypatch)
     assert [launch.prompt for launch in opened] == ["one", "two"]
     cli.main(["new", str(tmp_path / "proj"), "--prompt", "api: one", "--prompt", "two", "--linked"])
     assert teams.load()["proj"].peers and len(opened) == 4
+
+
+def test_a_slash_and_a_backslash_are_alike_in_the_filter():
+    shop = newsessions.Project(r"C:\Users\me\Desktop\web-app")
+    assert newsessions.matches("desktop/web", shop) and newsessions.matches(r"Desktop\web", shop)
+    assert newsessions.matches("web desk", shop)  # every word, in any order
+    assert not newsessions.matches("desktop/api", shop) and not newsessions.matches("web shop", shop)
+
+
+async def test_the_project_box_completes_a_folder_begun_with_either_slash():
+    from tabmancer.dialogs import FolderSuggester
+
+    suggest = FolderSuggester([r"C:\Users\me\Desktop\shop"])
+    assert await suggest.get_suggestion("c:/users/me/desk") == "c:/users/me/desktop/shop"
+    assert await suggest.get_suggestion(r"C:\Users\me\De") == r"C:\Users\me\Desktop\shop"
+    assert await suggest.get_suggestion("D:/") is None and await suggest.get_suggestion("") is None

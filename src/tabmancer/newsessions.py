@@ -8,6 +8,7 @@ opens a new session in each, all in one go, optionally with the same first messa
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -19,14 +20,14 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, Label, OptionList, TextArea
+from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from . import clis, picks, teams, workspaces
-from .dialogs import Choice, frame, title
+from .dialogs import Choice, cards, frame, light_rows, pill, title
 from .launch import Launch, Mode
 from .sessions import Session, folder_key
-from .theme import AMBER, CYAN, MUTED, TEXT, keys
+from .theme import AMBER, CYAN, GREEN, MUTED, TEXT, keys
 
 
 @dataclass
@@ -132,22 +133,37 @@ class FolderList(OptionList):
 class NewSessions(ModalScreen[Request | None]):
     """Tick folders, maybe write a first message, Enter opens a fresh session in each."""
 
-    # As tall as the window lets it be, the folders taking what the rest leaves: with many projects
-    # the list once pushed the message, the picks and the keys off a 120x30 window.
-    DEFAULT_CSS = frame("NewSessions", "large", height="90%") + """
-    NewSessions #top { height: 1; }
+    # Two columns: the folders on the left, in a card of their own; on the right the first message,
+    # the model and effort, and what will open. A card is lit (its frame and title in the theme's
+    # colour) while the cursor is in it. The help for the box in focus is one line under the cards;
+    # the keys are docked at the foot, so nothing above them can push them out of sight. As tall as
+    # the window lets it be: with many projects the list scrolls, the rest stays.
+    DEFAULT_CSS = frame("NewSessions", "large", height="90%") + cards("NewSessions") + """
+    NewSessions > Vertical { width: 95%; max-width: 150; max-height: 36; }
+    NewSessions #top { height: 1; margin-bottom: 1; }
     NewSessions #title { width: 1fr; }
     NewSessions #cli { width: auto; }
-    NewSessions Input, NewSessions TextArea { margin-top: 1; background: $panel; }
-    NewSessions Input:focus, NewSessions TextArea:focus { background: $panel-lighten-2; }
-    NewSessions FolderList { height: 1fr; min-height: 3; margin-top: 1; background: $surface; }
-    NewSessions #new-first { height: auto; max-height: 4; }
-    NewSessions #new-link { color: $text-muted; }
-    NewSessions .pick-row { height: 1; }
-    NewSessions #new-model-row { margin-top: 1; }
-    NewSessions .pick-row > Label { width: 8; color: $text-muted; }
-    NewSessions #new-pick-words { color: $text-muted; }
-    NewSessions #new-note { color: $text-muted; margin-top: 1; }
+    NewSessions #new-body { height: 1fr; }
+    NewSessions #folders-card { width: 46%; height: 1fr; margin-right: 1; }
+    NewSessions #new-side { width: 1fr; height: 1fr; }
+    NewSessions #new-find { height: 1; }
+    NewSessions #new-find > Label { width: 2; color: $text-muted; }
+    NewSessions #new-head { height: 1; margin-top: 1; }
+    NewSessions FolderList { height: 1fr; min-height: 3; border: none; padding: 0; background: $surface; }
+    NewSessions FolderList:focus { border: none; }
+    NewSessions #new-where { height: 1; color: $text-muted; }
+    NewSessions #message-card { height: auto; }
+    NewSessions #new-first { height: 3; }
+    NewSessions #new-link { height: auto; }
+    NewSessions #pick-card { height: auto; }
+    NewSessions .row { height: auto; }
+    NewSessions .row > .name { width: 7; color: $text-muted; }
+    NewSessions .row.-lit > .name { color: $text; text-style: bold; }
+    NewSessions #new-pick-words { color: $text-muted; height: auto; }
+    NewSessions #opens-card { height: 1fr; min-height: 4; }
+    NewSessions #new-opens { height: auto; }
+    NewSessions #new-note { color: $text-muted; height: auto; dock: bottom; }
+    NewSessions #new-help { height: 1; margin-top: 1; color: $text-muted; }
     """
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "cancel", "Close"),
@@ -172,28 +188,41 @@ class NewSessions(ModalScreen[Request | None]):
             with Horizontal(id="top"):
                 yield Label("", id="title")
                 yield Label("", id="cli")
-            yield Input(placeholder="Filter projects, or type a folder path", id="new-filter", compact=True)
-            yield FolderList(id="new-folders")
-            yield TextArea(id="new-first", compact=True,
-                           placeholder="First message (optional). Enter here adds a line: each line a session of its own")
-            yield Label("", id="new-link")
-            with Horizontal(classes="pick-row", id="new-model-row"):
-                yield Label("Model")
-                yield Choice([picks.DEFAULT, *picks.MODELS], id="new-model")
-            with Horizontal(classes="pick-row"):
-                yield Label("Effort")
-                yield Choice([picks.DEFAULT, *picks.EFFORTS], id="new-effort")
-            yield Label("", id="new-pick-words")
-            yield Label("These start clean. To carry a session's work on in a fresh one, press h on it in the list.",
-                        id="new-note")
+            with Horizontal(id="new-body"):
+                with Vertical(id="folders-card", classes="card"):
+                    with Horizontal(id="new-find"):
+                        yield Label("⌕")
+                        yield Input(placeholder="Filter, or type a folder path", id="new-filter", compact=True)
+                    yield Static("", id="new-head")
+                    yield FolderList(id="new-folders")
+                    yield Static("", id="new-where")
+                with Vertical(id="new-side"):
+                    with Vertical(id="message-card", classes="card"):
+                        yield TextArea(id="new-first", compact=True,
+                                       placeholder="Optional. A line each: a session for each line")
+                        yield Label("", id="new-link")
+                    with Vertical(id="pick-card", classes="card"):
+                        # The card's title names the rows: the model above, the effort under it.
+                        yield Choice([picks.DEFAULT, *picks.MODELS], id="new-model", labels=SHORT)
+                        yield Choice([picks.DEFAULT, *picks.EFFORTS], id="new-effort", labels=SHORT)
+                        yield Label("", id="new-pick-words")
+                    with Vertical(id="opens-card", classes="card"):
+                        yield Static("", id="new-opens")
+                        yield Label("These start clean: h in the list carries a session on.", id="new-note")
+            yield Label("", id="new-help")
             yield Label(keys(("Space", "tick"), ("Enter/Ctrl+S", "start them"), ("Tab", "next box"),
                              ("Ctrl+L", "linked"), ("Ctrl+O", "the CLI"), ("Esc", "cancel")), classes="hint")
 
     def on_mount(self) -> None:
+        self.query_one("#folders-card").border_title = "Folders"
+        self.query_one("#message-card").border_title = "First message"
+        self.query_one("#message-card").border_subtitle = "optional"
+        self.query_one("#pick-card").border_title = "Model · Effort"
         self.show_folders()
         self.show_cli()
         self.show_link()
         self.folders.focus()
+        self.call_after_refresh(self.show_folders)  # laid out: the columns as wide as the list is
 
     @property
     def message(self) -> TextArea:
@@ -212,21 +241,49 @@ class NewSessions(ModalScreen[Request | None]):
         return ""
 
     def show_link(self) -> None:
-        """Under the messages: what the lines open, apart or linked as a team of peers."""
+        """Under the messages, once there are two lines or more: what they open, apart or linked as a
+        team of peers. And on the right, what will open."""
         lines = len(topics(self.message.text))
         label = self.query_one("#new-link", Label)
-        if lines < 2:
-            label.update(Text("Two lines or more: a session for each; Ctrl+L links them as a team of peers.",
-                              style=MUTED))
+        label.display = lines >= 2
+        if lines >= 2:
+            why = self.can_link()
+            out = Text.assemble(pill(f"{lines} sessions apart", not self.linked or bool(why)), " ",
+                                pill("linked, as peers", self.linked and not why), "  ")
+            out.append(f"Ctrl+L ({why})" if why and self.linked else "Ctrl+L",
+                       style=AMBER if why and self.linked else MUTED)
+            label.update(out)
+        self.show_opens()
+
+    def show_opens(self) -> None:
+        """The card on the right: a line for each tab that will open, the folder and its message."""
+        card, opens = self.query_one("#opens-card"), self.query_one("#new-opens", Static)
+        known = {folder_key(p.cwd): p for p in self.extra + self.found} | self.shown
+        chosen = [known[key].cwd for key in self.ticked if key in known]
+        lines = topics(self.message.text)
+        if not chosen:
+            card.border_title = "Opens nothing yet"
+            opens.update(Text("Tick folders on the left with Space.", style=MUTED))
             return
-        why = self.can_link()
+        linked = self.linked and not self.can_link()
+        count = len(chosen) * max(1, len(lines))
+        card.border_title = Text(f"Opens {count} tab{'s' * (count != 1)}" + (", linked" if linked else ""),
+                                 style=f"bold {GREEN}")
+        card.border_subtitle = Text.assemble(clis.label(self.cli), (f" · {self.pick().words()}"
+                                                                    if self.pick() else ""))
+        room = max(1, (card.content_size.height or 4) - 2)  # under them, the note
+        rows = [(Path(cwd).name or cwd, line) for cwd in chosen for line in (lines or [""])]
         out = Text()
-        for on, words in ((not self.linked or bool(why), f"{lines} sessions apart"),
-                          (self.linked and not why, "linked: a team of peers that know of each other and message")):
-            out.append(("● " if on else "○ ") + words, style=f"bold {TEXT}" if on else MUTED)
-            out.append("   ")
-        out.append(f"Ctrl+L ({why})" if why and self.linked else "Ctrl+L", style=AMBER if why and self.linked else MUTED)
-        label.update(out)
+        for index, (folder, line) in enumerate(rows[:room]):
+            if index:
+                out.append("\n")
+            out.append("● ", style=GREEN)
+            out.append(folder, style=f"bold {CYAN}")
+            out.append(f"  {line}" if line else "  a fresh session", style=TEXT if line else MUTED)
+        if len(rows) > room:
+            out.append(f"\n  +{len(rows) - room} more", style=MUTED)
+        out.no_wrap, out.overflow = True, "ellipsis"
+        opens.update(out)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         self.show_link()
@@ -251,7 +308,7 @@ class NewSessions(ModalScreen[Request | None]):
         if not needle:
             return everything
         typed = Path(os.path.expanduser(needle))
-        hits = [p for p in everything if needle.casefold() in f"{p.name} {p.cwd}".casefold()]
+        hits = [p for p in everything if matches(needle, p)]
         if typed.is_dir() and folder_key(str(typed)) not in {folder_key(p.cwd) for p in hits}:
             hits.insert(0, Project(str(typed.resolve())))
         return hits
@@ -269,18 +326,69 @@ class NewSessions(ModalScreen[Request | None]):
             folders.add_option(Option(Text(f"Nothing matches “{typed}”. A folder path works too." if typed else
                                            "No recent projects. Type a folder path in the box above.",
                                            style=MUTED), disabled=True))
+        everything = len(self.extra) + len(self.found)
+        self.query_one("#folders-card").border_subtitle = (
+            f"{len(self.shown)} of {everything}" if self.filter_box.value.strip() else
+            f"{everything} project{'s' * (everything != 1)}")
+        self.query_one("#new-head", Static).update(self.heading())
+        self.show_where()
         self.show_title()
 
+    def columns(self) -> tuple[int, int]:
+        """How wide a row's name and its CLI are, from the list's width: the name takes what is left."""
+        # Room kept for the scrollbar, which comes only once the rows are in, and a cell free at the end.
+        list_ = self.folders
+        width = (list_.size.width - list_.styles.scrollbar_size_vertical - 1 if self.is_mounted else 0)
+        width = width if width > 24 else 48
+        tag = max((len(", ".join(sorted(p.used - {"claude"}))) for p in self.extra + self.found), default=0)
+        tag = tag + 2 if tag else 0
+        return max(8, width - 2 - TAIL - tag), tag
+
+    def heading(self) -> Text:
+        name, tag = self.columns()
+        return Text("  " + "PROJECT".ljust(name) + "SESSIONS".rjust(10) + "LAST".rjust(10) + " " * tag,
+                    style=f"bold {MUTED}")
+
     def prompt_for(self, key: str, project: Project) -> Text:
-        when = f"{project.sessions} session{'s' * (project.sessions != 1)}" if project.sessions else "no sessions"
-        if project.last:
-            when += f" · {_ago(project.last)}"
+        """A folder's row: ✓ when ticked, its name, its sessions, when it was last worked in, and any
+        CLI but Claude Code it was worked with. Where it is shows under the list (show_where). What
+        the filter found is lit."""
+        ticked = key in self.ticked
+        name_width, tag = self.columns()
+        name = Text(_fit(project.name, name_width).ljust(name_width), style=f"bold {CYAN if ticked else TEXT}")
+        for term in self.filter_box.value.split():
+            name.highlight_regex(_term_pattern(term), style=f"bold underline {AMBER}")
+        count = f"{project.sessions}" if project.sessions else "none"
         used = ", ".join(sorted(project.used - {"claude"}))
-        mark = "[x] " if key in self.ticked else "[ ] "
-        return Text.assemble((mark, f"bold {CYAN}" if key in self.ticked else MUTED),
-                             (f"{project.name[:22]:<23}", f"bold {TEXT}"),
-                             (f"{_clip(project.cwd, 48):<49}", MUTED), (when, MUTED),
-                             (f" · {used}" if used else "", CYAN))
+        row = Text.assemble(("✓ " if ticked else "· ", f"bold {CYAN}" if ticked else MUTED), name,
+                            (count.rjust(10), TEXT if project.sessions else MUTED),
+                            ((_ago(project.last) if project.last else "").rjust(10), MUTED),
+                            (f"  {used}".ljust(tag) if tag else "", CYAN))
+        row.no_wrap, row.overflow = True, "ellipsis"  # one line, however narrow the window
+        return row
+
+    def show_where(self) -> None:
+        """Under the list: where the highlighted folder is, your home as ~, the filter's words lit."""
+        folders, where = self.folders, self.query_one("#new-where", Static)
+        option = folders.get_option_at_index(folders.highlighted) if folders.highlighted is not None else None
+        project = self.shown.get(option.id) if option is not None and option.id else None
+        if project is None:
+            where.update("")
+            return
+        path = Text("▸ " + _clip(_home_as_tilde(project.cwd), max(8, (where.content_size.width or 48) - 2)),
+                    style=MUTED)
+        for term in self.filter_box.value.split():
+            path.highlight_regex(_term_pattern(term), style=f"bold underline {AMBER}")
+        where.update(path)
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if self.is_mounted:
+            self.show_where()
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self.is_mounted:  # the columns follow the list's width
+            self.show_folders()
+            self.show_opens()
 
     def toggle(self, key: str | None) -> None:
         if key is None or key not in self.shown:
@@ -320,15 +428,29 @@ class NewSessions(ModalScreen[Request | None]):
         words = self.query_one("#new-pick-words", Label)
         if self.cli != "claude":
             words.update(f"Model and effort are for Claude Code sessions; {clis.label(self.cli)} uses its own settings.")
-            return
-        model, effort = self.query_one("#new-model", Choice), self.query_one("#new-effort", Choice)
-        if self.focused is effort or (self.focused is not model and effort.value != picks.DEFAULT
-                                      and model.value == picks.DEFAULT):
-            words.update(f"{effort.value}: {picks.EFFORT_WORDS[effort.value]}")
-        elif self.focused is model or model.value != picks.DEFAULT:
-            words.update(f"{model.value}: {picks.MODEL_WORDS[model.value]}")
         else:
-            words.update("Your Claude Code settings pick the model and effort. Tab to a row, then ←/→ for others.")
+            model, effort = self.query_one("#new-model", Choice), self.query_one("#new-effort", Choice)
+            if self.focused is effort or (self.focused is not model and effort.value != picks.DEFAULT
+                                          and model.value == picks.DEFAULT):
+                words.update(f"{effort.value}: {picks.EFFORT_WORDS[effort.value]}")
+            elif self.focused is model or model.value != picks.DEFAULT:
+                words.update(f"{model.value}: {picks.MODEL_WORDS[model.value]}")
+            else:
+                words.update("default: your Claude Code settings pick them.")
+        if self.is_mounted:
+            self.show_opens()
+
+    def show_help(self) -> None:
+        """One line under the cards: how to use the box in focus."""
+        focused = self.focused
+        if focused is self.message:
+            about = "Enter adds a line: a session for each line, in every folder ticked. One folder: Ctrl+L links them."
+        elif isinstance(focused, Choice):
+            about = "←/→ picks. Left at default, your Claude Code settings decide; other CLIs use their own."
+        else:
+            about = ("Space ticks a folder. Type to filter by name or path (a / or a \\ alike); a folder path "
+                     "works too.")
+        self.query_one("#new-help", Label).update(about)
 
     def on_choice_changed(self, event: Choice.Changed) -> None:
         self.show_pick()
@@ -336,6 +458,11 @@ class NewSessions(ModalScreen[Request | None]):
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         if self.is_mounted:
             self.show_pick()
+            self.show_help()
+            light_rows(self)
+
+    def on_descendant_blur(self, event: events.DescendantBlur) -> None:
+        light_rows(self)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input is self.filter_box:
@@ -370,6 +497,8 @@ class NewSessions(ModalScreen[Request | None]):
         if self.focused is box and typed is not None and typed.is_dir():
             key = folder_key(str(typed))
             if key not in self.ticked:  # Enter on a typed folder ticks it; the next Enter starts
+                if key not in self.shown:  # typed a moment ago: the list may not have taken it in yet
+                    self.show_folders()
                 self.toggle(key)
                 box.value = ""
                 self.folders.focus()
@@ -387,6 +516,37 @@ class NewSessions(ModalScreen[Request | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+TAIL = 20  # the sessions and the last time, right-aligned at a row's end
+SHORT = {picks.DEFAULT: "default"}  # "your default" as the Model and Effort rows show it
+
+
+def _seps(text: str) -> str:
+    """Folders written with / or \\ alike: on Windows a path is written either way."""
+    return text.replace("\\", "/")
+
+
+def matches(needle: str, project: Project) -> bool:
+    """Whether a project is what the filter asks for: every word of it in its name or its folder,
+    whatever the case and whichever way a / or a \\ is written ("desktop/shop" finds C:\\...\\Desktop\\shop)."""
+    where = _seps(f"{project.name} {project.cwd}").casefold()
+    return all(_seps(term).casefold() in where for term in needle.split())
+
+
+def _term_pattern(term: str) -> str:
+    """A filter word as a pattern that finds it in a row, its / and \\ either way, in any case."""
+    return "(?i)" + "".join(r"[\\/]" if char in "/\\" else re.escape(char) for char in term)
+
+
+def _home_as_tilde(path: str) -> str:
+    home = str(Path.home())
+    inside = folder_key(path).startswith(folder_key(home)) and path[len(home):][:1] in ("", "\\", "/")
+    return "~" + path[len(home):] if inside else path
+
+
+def _fit(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def _clip(text: str, limit: int) -> str:

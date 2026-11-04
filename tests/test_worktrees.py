@@ -7,6 +7,7 @@ from __future__ import annotations
 import subprocess
 from datetime import datetime
 
+from conftest import team_preview
 from textual.app import App
 from textual.widgets import Input, Static, TextArea
 
@@ -46,7 +47,14 @@ def test_a_member_in_its_worktree_is_still_the_teams_and_goes_on_there(tmp_path)
     session = Session("s1", None, cwd=there, title="shop-api", last_active=datetime.now())
     assert teams.in_team_folder(team, there) and teams.member_of(session, {"shop": team})[1].name == "api"
     assert not teams.in_team_folder(team, str(tmp_path / "other" / ".claude" / "worktrees" / "shop-api"))
-    assert not teams.in_team_folder(team, str(tmp_path / "shop" / "src"))  # a folder of it is not a worktree
+    # A member that went into a folder of the project is still the member, and goes on in the project.
+    inside = Session("s2", None, cwd=str(tmp_path / "shop" / "src"), title="shop-api", last_active=datetime.now())
+    assert teams.in_team_folder(team, inside.cwd) and teams.member_of(inside, {"shop": team})[1].name == "api"
+    assert teams.launch(team, team.members[1], resume=inside).cwd == team.cwd
+    deeper = Session("s3", None, cwd=str(tmp_path / "shop" / ".claude" / "worktrees" / "shop-api" / "src"),
+                     title="shop-api", last_active=datetime.now())
+    assert teams.launch(team, team.members[1], resume=deeper).cwd == there  # on in its worktree
+    assert not teams.in_team_folder(team, str(tmp_path / "shopping"))
     assert teams.member_sessions(team, [session], live={})["api"] is session
     again = teams.launch(team, team.members[1], resume=session)
     assert again.mode is Mode.RESUME and again.cwd == there and "--worktree" not in again.argv  # made once
@@ -85,7 +93,7 @@ async def test_ctrl_o_gives_the_members_worktrees_in_a_repository_only(tmp_path)
         assert dialog.query_one(".hint").region.bottom <= 30
         dialog.query_one("#team-folder", Input).value = str(top)
         await pilot.pause(0.1)
-        assert str(dialog.query_one("#team-preview", Static).render()).startswith("Opens 4 tabs")
+        assert team_preview(dialog).startswith("Opens 4 tabs")
         await pilot.press("ctrl+s")
         await pilot.pause(0.1)
     assert host.result.worktrees

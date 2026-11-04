@@ -197,6 +197,25 @@ def windows_terminal_command(launches: list[Launch], window: str) -> list[str]:
     return args
 
 
+# Characters in one wt.exe command line. Windows takes 32767 at most: past that wt.exe never starts,
+# so many tabs, or tabs with long first messages, go in several command lines.
+WT_MOST = 30000
+
+
+def windows_terminal_commands(launches: list[Launch], window: str) -> list[list[str]]:
+    """wt.exe command lines for the launches, each short enough to run, in as few as that allows. When
+    there is more than one, a new window is given a name of its own, so that they all go in it."""
+    batches: list[list[Launch]] = []
+    for launch in launches:
+        if batches and len(subprocess.list2cmdline(windows_terminal_command([*batches[-1], launch], window))) <= WT_MOST:
+            batches[-1].append(launch)
+        else:
+            batches.append([launch])
+    if len(batches) > 1 and window == "new":
+        window = f"tabmancer-{os.getpid()}-{len(launches)}"
+    return [windows_terminal_command(batch, window) for batch in batches]
+
+
 def shell_line(launch: Launch) -> str:
     return f"cd {shlex.quote(launch.directory)} && {shlex.join(launch.argv)}"
 
@@ -287,12 +306,23 @@ def open_tabs(launches: list[Launch]) -> list[str]:
     """Open each launch in its own tab. Returns the commands left for the user to run.
 
     Inside Windows Terminal the tabs join the current window, otherwise a new one.
-    Anything that could not be opened comes back as a shell line to run by hand.
+    Anything that could not be opened comes back as a shell line to run by hand. Raises OSError
+    when Windows Terminal would not start.
     """
     kind = terminal_kind()
     if kind == "windows-terminal":
         window = "0" if os.environ.get("WT_SESSION") else "new"
-        subprocess.Popen(windows_terminal_command(launches, window), env=clean_env())
+        started = None
+        for command in windows_terminal_commands(launches, window):
+            if started is not None:  # in their order: a team's lead, which comes last, opens last
+                try:
+                    started.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+            try:
+                started = subprocess.Popen(command, env=clean_env())
+            except OSError as error:
+                raise OSError(f"Windows Terminal would not start: {error.strerror or error}") from error
         return []
     if kind in COMMAND_BUILDERS:
         failed = []

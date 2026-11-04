@@ -1644,7 +1644,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.poll_live()
                 return
             if how == "tab":
-                leftover = open_tabs([launch])
+                try:
+                    leftover = open_tabs([launch])
+                except OSError as error:
+                    self.notify(f"Could not open the tab: {error}", severity="error", timeout=15)
+                    return
                 if leftover:
                     self.notify("No supported terminal here. Run: " + leftover[0], severity="warning")
                 else:
@@ -2277,7 +2281,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 return
             login = Launch(title=f"Sign in{f': {email}' if email else ''}", cwd=str(Path.home()), mode=Mode.NEW,
                            session_id="", options=("auth", "login", *(("--email", email) if email else ())))
-            left = open_tabs([login])
+            try:
+                left = open_tabs([login])
+            except OSError as error:
+                self.notify(f"Could not open the tab: {error}", severity="error", timeout=15)
+                return
             if left:
                 self.notify(f"No terminal to open it in. Run it yourself: {left[0]}", timeout=15)
             else:
@@ -3059,7 +3067,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             launches = [launch for launch in launches if launch not in again]
             if not launches:
                 return
-        leftover = open_tabs(launches)
+        try:
+            leftover = open_tabs(launches)
+        except OSError as error:  # the terminal would not start: said, rather than the dashboard falling over
+            self.notify(f"Could not open {'the tab' if len(launches) == 1 else 'the tabs'}: {error}",
+                        severity="error", timeout=15)
+            return
         if leftover:
             # No terminal that can open tabs: close, and leave the commands to run by hand.
             self.exit(leftover)

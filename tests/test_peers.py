@@ -3,6 +3,7 @@ telling each other what touches the other's work. Made by leaving the lead line 
 
 from __future__ import annotations
 
+from conftest import role_of, team_preview
 from test_team_tree import peer, send, transcript
 from textual.app import App
 from textual.widgets import Input, Static, TextArea
@@ -23,7 +24,7 @@ def test_peers_have_no_lead_and_each_starts_on_its_own_part(tmp_path):
     assert team.lead is None and team.peers and [m.name for m in team.ordered] == ["api", "web"]
     api, web = team.members
     argv = teams.launch(team, api).argv
-    role = argv[argv.index("--append-system-prompt") + 1]
+    role = role_of(argv)
     assert "one of the peers" in role and "Nobody leads" in role and "docs-web (the site's pages)" in role
     assert "orchestrator" not in role and "--allowedTools=SendMessage,ListAgents" in argv
     assert argv[-1].startswith("Goal: Ship the docs site Your part: the API reference.")  # it starts by itself
@@ -67,7 +68,7 @@ async def test_leaving_the_lead_line_out_makes_peers(tmp_path):
         dialog.query_one("#team-name", Input).value = "docs"
         dialog.query_one("#team-goal", TextArea).text = "Ship the docs site"
         await pilot.pause(0.1)
-        preview = str(dialog.query_one("#team-preview", Static).render())
+        preview = team_preview(dialog)
         assert preview.startswith("Opens 2 tabs in") and "Nobody leads" in preview
         assert "each in a tab (peers: you talk to each)" in str(dialog.query_one("#team-where", Static).render())
         await pilot.press("ctrl+b")  # peers run in tabs: the switch says so and stays

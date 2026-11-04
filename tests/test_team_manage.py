@@ -33,10 +33,11 @@ def test_a_members_session_resumes_as_that_member(tmp_path, monkeypatch):
     assert launch.title == "shop: api" and launch.session_id == "api-1" and launch.mode is Mode.RESUME
     assert launch.argv[:3] == ["claude", "--resume", "api-1"]
     assert launch.options[:2] == ("--name", "shop-api") and "--settings" in launch.options
-    assert "--append-system-prompt" in launch.options
+    assert "--append-system-prompt-file" in launch.options
     # a fork is a session of its own; so is a session that only shares the name, in another folder
     assert teams.as_member(member, Launch("x", str(tmp_path), Mode.FORK, "api-1"), saved).options == ()
-    stranger = Session(session_id="s", path=None, cwd=str(tmp_path / "elsewhere"), title="shop-api")
+    stranger = Session(session_id="s", path=None, cwd=str(tmp_path.parent / f"{tmp_path.name}-elsewhere"),
+                       title="shop-api")  # beside the team's folder, its name beginning with that one's
     assert teams.as_member(stranger, plain, saved).options == ()
 
 

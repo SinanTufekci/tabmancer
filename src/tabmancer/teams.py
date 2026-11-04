@@ -6,7 +6,7 @@ tell each other what touches the other's work (two related topics worked on side
 
 Each member is an ordinary Claude Code session in its own tab, so it can be closed,
 resumed and handed over like any other. It starts with a name (`--name <team>-<member>`),
-a role (`--append-system-prompt`) and a setting that lets messages from other sessions in
+a role (`--append-system-prompt-file`, a file of tabmancer's own) and a setting that lets messages from other sessions in
 (`--settings`, a file of tabmancer's own: your settings are not touched). The members talk
 with Claude Code's own cross-session messaging: SendMessage to a member's name, and the
 message arrives in that session as a new turn, idle or not.
@@ -19,6 +19,7 @@ record whose origin is a peer.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import unicodedata
@@ -153,7 +154,7 @@ def parse_members(text: str, lead_ok: bool = False) -> list[Member]:
     line is the orchestrator's: its focus, model and effort; otherwise it is left out, as a team has
     one lead."""
     members, seen = [], set()
-    for part in re.split(r"[;\n]", text):
+    for part in (piece for line in text.split("\n") for piece in NEXT_MEMBER.split(line)):
         part, pick = picks.split(part)
         part = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", part)  # a list's bullet or number, as a model may write
         owned = OWNS.search(part)
@@ -171,6 +172,31 @@ def parse_members(text: str, lead_ok: bool = False) -> list[Member]:
 
 
 OWNS = re.compile(r"\s*\[([^\]]+)\]\s*$")  # "api: endpoints [src/api]"
+# A ';' that starts another member: a name and a colon follow it ("; ui team: screens"), or a word
+# alone, with an @model, its [files] or nothing after it ("; tests @haiku", "; docs"). Any other ';'
+# is part of what the member does ("drafts first; icons, splash and the store pictures"): split
+# there, the words after it became a member named after them.
+NEXT_MEMBER = re.compile(r";(?=\s*(?:[-*\u2022]|\d+[.)])?\s*[^\W\d_][\w-]*"
+                         r"(?:(?:\s+[\w-]+)*\s*:|\s*(?:[@\[;]|$)))")
+
+
+def tidy(goal: str) -> str:
+    """A goal as it was written, its lines kept (a plan pasted in stays readable in the roles), with
+    the spaces at the ends of its lines and runs of blank lines taken out."""
+    lines = [line.rstrip() for line in goal.strip().splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
+
+
+GOAL_IN_PROMPT = 300  # a first message names the goal on one line, this long at most
+
+
+def goal_line(team: Team) -> str:
+    """The goal as a first message names it: on one line, and a long one cut short, as the whole of it
+    is in the member's role. Whole, a goal of a few pages went into every tab's command line."""
+    line = " ".join(team.goal.split())
+    if len(line) <= GOAL_IN_PROMPT:
+        return line
+    return line[:GOAL_IN_PROMPT].rsplit(" ", 1)[0].rstrip(" ,;:.") + "… (the whole goal is in your role)"
 
 
 def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int = 0,
@@ -181,10 +207,10 @@ def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int 
     to each of them). With worktrees, each member but the lead works in a git worktree of its own."""
     stamp = datetime.now().isoformat(timespec="seconds")
     if peers:
-        return Team(clean(name), cwd, " ".join(goal.split()), [replace(m, lead=False) for m in members], stamp,
+        return Team(clean(name), cwd, tidy(goal), [replace(m, lead=False) for m in members], stamp,
                     worktrees=worktrees)
     lead = next((m for m in members if m.lead), Member(LEAD, LEAD_FOCUS, lead=True))
-    return Team(clean(name), cwd, " ".join(goal.split()), [lead, *(m for m in members if not m.lead)],
+    return Team(clean(name), cwd, tidy(goal), [lead, *(m for m in members if not m.lead)],
                 stamp, decide, background, worktrees)
 
 
@@ -271,7 +297,7 @@ def joining(team: Team, members: list[Member]) -> list[Launch]:
 def from_tabmancer(team: Team, text: str) -> bool:
     """Whether a prompt is one tabmancer started a member with (joining(), launch(), in_background()),
     not yours."""
-    return text.startswith((f"You just joined the team {team.name}.", f"Goal: {team.goal} ",
+    return text.startswith((f"You just joined the team {team.name}.", f"Goal: {goal_line(team)} ",
                             f"You are on the team {team.name}, in the background."))
 
 
@@ -379,7 +405,8 @@ def duties(member: Member) -> str:
 def _role(team: Team, member: Member) -> str:
     """A member's role without the worktree note (role adds it)."""
     others = roster(team, member)
-    common = (f"Team: {team.name}, working in {team.cwd}. Team goal: {team.goal}. "
+    goal = f"Team goal:\n\n{team.goal}\n\n" if "\n" in team.goal else f"Team goal: {team.goal}. "
+    common = (f"Team: {team.name}, working in {team.cwd}. {goal}"
               + (f"The other members, by the name to use with SendMessage: {others}. " if others else
                  "There are no other members yet. ")
               + "Messages from them arrive as new turns, so you never need to poll. Keep messages short "
@@ -435,7 +462,7 @@ def worktree_note(team: Team, member: Member) -> str:
 
 
 def role(team: Team, member: Member) -> str:
-    """The system prompt a member starts with. One line: it travels on a command line."""
+    """The system prompt a member starts with (from a file of its own: role_file)."""
     text = _role(team, member)
     note = worktree_note(team, member)
     return f"{text} {note}" if note else text
@@ -498,6 +525,7 @@ def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST) -> str:
         + "\nAnswer with the line-up only, one member a line, nothing before or after it, each line in this "
         "form:\nname: what it works on [the folders or files that are its own] @model @effort\n\n"
         f"- 2 to {most} members, fewer when the work is small. Names: one short lowercase word.\n"
+        "- Inside a line, use commas, not semicolons: a semicolon starts another member.\n"
         "- Give each a part that can go on at the same time as the others, and the folders or files that are "
         "its own, so that no two edit the same file.\n"
         "- Put a first line 'lead: plans the work, hands it out and checks it @opus @xhigh' only when the parts "
@@ -509,7 +537,7 @@ def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST) -> str:
         "who finds things out research.")
 
 
-MEMBER_LINE = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*[A-Za-z][\w-]*\s*:\s*\S")  # "- api: ...", not "Here you go:"
+MEMBER_LINE = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*[^\W\d_][\w-]*\s*:\s*\S")  # "- api: ...", not "Here you go:"
 
 
 def suggested_lines(answer: str) -> str:
@@ -519,28 +547,50 @@ def suggested_lines(answer: str) -> str:
     return "\n".join(member.line() for member in parse_members(named, lead_ok=True))
 
 
+ROLES = "roles"  # in tabmancer's folder: each member's role, <session name>.md
+
+
+def role_file(team: Team, member: Member) -> Path | None:
+    """The member's role in a file of its own, for --append-system-prompt-file; None when it cannot
+    be written. On the command line itself a team's goal went once for each member: with a plan of a
+    few pages pasted in as the goal, six tabs came to 38000 characters and none opened (Windows takes
+    32767 at most)."""
+    path = config_dir() / ROLES / f"{team.session_name(member)}.md"
+    text = role(team, member)
+    try:
+        if not path.is_file() or path.read_text(encoding="utf-8") != text:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+    except OSError:
+        return None
+    return path
+
+
 def options(team: Team, member: Member) -> tuple[str, ...]:
     # --allowedTools=... in one piece: written apart it takes every word after it as a tool.
     # A deciding lead may add members without asking: that one command, and only it.
     tools = f"SendMessage,ListAgents,Bash({ADD}:*)" if member.lead and team.decide else "SendMessage,ListAgents"
+    path = role_file(team, member)
+    told = (("--append-system-prompt-file", str(path)) if path is not None else
+            ("--append-system-prompt", " ".join(role(team, member).split())))
     return ("--name", team.session_name(member), *member.pick.flags(), "--settings", str(settings_file()),
-            f"--allowedTools={tools}", "--append-system-prompt", role(team, member))
+            f"--allowedTools={tools}", *told)
 
 
 def launch(team: Team, member: Member, resume: Session | None = None, prompt: str | None = None) -> Launch:
     """A member's tab: a fresh session, or its last one resumed with the same name and role."""
     if resume is not None:  # in its own folder: a member with a worktree goes on there
-        return Launch(title=f"{team.name}: {member.name}", cwd=resume.cwd or team.cwd, mode=Mode.RESUME,
+        return Launch(title=f"{team.name}: {member.name}", cwd=home_of(team, resume.cwd), mode=Mode.RESUME,
                       session_id=resume.session_id, prompt=prompt, options=options(team, member))
     if prompt is None and member.lead and team.decide and not any(not m.lead for m in team.members):
-        prompt = (f"Goal: {team.goal} The team is yours to make: decide the members the work needs (at most "
+        prompt = (f"Goal: {goal_line(team)} The team is yours to make: decide the members the work needs (at most "
                   f'{team.decide}), add them with {ADD} {team.name} "name: area; ...", then send each its first '
                   "task.")
     elif prompt is None and member.lead:
-        prompt = (f"Goal: {team.goal} Your team is starting now. Plan the work and send each member its "
+        prompt = (f"Goal: {goal_line(team)} Your team is starting now. Plan the work and send each member its "
                   "first task.")
     elif prompt is None and team.lead is None:  # peers: nobody hands out work, so each starts on its own part
-        prompt = (f"Goal: {team.goal} Your part: {member.focus or member.name}. The others start alongside you: "
+        prompt = (f"Goal: {goal_line(team)} Your part: {member.focus or member.name}. The others start alongside you: "
                   "say hello to them with SendMessage, agree where your parts meet, then start on yours.")
     # A fresh member with a worktree of its own: Claude Code makes it, .claude/worktrees/<session name>
     # on the branch worktree-<session name> (tried with 2.1.317), and the session works there.
@@ -565,10 +615,22 @@ def repository_root(folder: str) -> bool:
 
 
 def in_team_folder(team: Team, cwd: str) -> bool:
-    """Whether a session's folder is the team's: the project, or a worktree of it that Claude Code
-    made (<project>/.claude/worktrees/<name>), where a member with a worktree of its own works."""
+    """Whether a session's folder is the team's: the project or any folder in it. A transcript keeps
+    the folder its session was in last, so a member that had gone into src/ was lost to its team
+    (shown as never started, and started afresh). A worktree Claude Code made for a member
+    (<project>/.claude/worktrees/<name>) is in the project too."""
     key, here = folder_key(team.cwd), folder_key(cwd)
-    return here == key or folder_key(str(Path(here).parent)) == folder_key(str(Path(team.cwd, *WORKTREES)))
+    return bool(key) and (here == key or here.startswith(key.rstrip("\\/") + os.sep))
+
+
+def home_of(team: Team, cwd: str) -> str:
+    """Where a member's session goes on: in its worktree (<project>/.claude/worktrees/<name>, wherever
+    in it the member was last), else in the project, though the member was last in a folder of it."""
+    if cwd and in_team_folder(team, cwd) and folder_key(cwd) != folder_key(team.cwd):
+        inside = Path(os.path.relpath(folder_key(cwd), folder_key(team.cwd))).parts
+        if len(inside) >= 3 and tuple(part.casefold() for part in inside[:2]) == WORKTREES:
+            return str(Path(team.cwd, *inside[:3]))
+    return team.cwd
 
 
 def member_of(session: Session, saved: dict[str, Team] | None = None) -> tuple[Team, Member] | None:

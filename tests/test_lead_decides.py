@@ -3,6 +3,7 @@ a limit, with `tabmancer team add`, the one command it may run without asking.""
 
 from __future__ import annotations
 
+from conftest import role_of, team_preview
 from textual.app import App
 from textual.widgets import Input, Static, TextArea
 
@@ -24,7 +25,7 @@ def test_the_lead_is_told_to_make_the_team_and_may_run_only_the_add_command(tmp_
     argv = teams.launch(team, lead).argv
     tools = next(a for a in argv if a.startswith("--allowedTools="))
     assert tools == "--allowedTools=SendMessage,ListAgents,Bash(tabmancer team add:*)"
-    role = argv[argv.index("--append-system-prompt") + 1]
+    role = role_of(argv)
     assert 'tabmancer team add shop "name: area @model @effort; name: area"' in role and "at most 3" in role
     assert "There are no other members yet" in role
     assert "tabmancer team add shop" in argv[-1]  # its first prompt: make the team, then hand out work
@@ -55,7 +56,7 @@ def test_the_add_command_opens_their_tabs_and_says_whom_to_message(fake_home, tm
     assert "shop-api (the endpoints, sonnet), shop-ui (the screens)" in said and "SendMessage" in said
     assert [launch.title for launch in opened] == ["shop: api", "shop: ui"]
     assert "Introduce yourself to shop-lead" in opened[0].argv[-1]
-    role = opened[1].argv[opened[1].argv.index("--append-system-prompt") + 1]
+    role = role_of(opened[1].argv)
     assert "shop-api" in role and "shop-lead (orchestrator)" in role  # the newcomer knows the others
 
 
@@ -83,7 +84,7 @@ async def test_the_dialog_offers_the_lead_deciding_with_a_limit(tmp_path):
         dialog.query_one("#team-goal", TextArea).text = "Add a checkout"
         dialog.query_one("#team-most", Input).value = "6"
         await pilot.pause(0.1)
-        preview = str(dialog.query_one("#team-preview", Static).render())
+        preview = team_preview(dialog)
         assert preview.startswith("Opens 1 tab in") and "adds up to 6 members itself" in preview
         await pilot.press("ctrl+s")
         await pilot.pause(0.1)

@@ -8,31 +8,110 @@ a view with much in it. A dialog that is about to delete something has an amber 
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
 from textual import events
 from textual.binding import Binding
 from textual.message import Message
+from textual.suggester import Suggester
 from textual.widgets import Static
 
 from .theme import CYAN, MUTED, TEXT
 
 WIDTHS = {"small": 72, "medium": 96, "large": 112}
-GAP = "   "
+GAP = "  "
+PICKED = "#2d333b"  # the ground of the word picked, while its row is not in focus
+ON_CYAN = "#06181a"  # a word on cyan
+
+
+def pill(word: str, on: bool, focused: bool = False) -> Text:
+    """One of a few words: ' ● word ' on a ground of its own when it is the one picked (cyan while its
+    row has the focus), else '○ word' in grey."""
+    if not on:
+        return Text(f"○ {word}", style=MUTED)
+    return Text(f" ● {word} ", style=f"bold {ON_CYAN} on {CYAN}" if focused else f"bold {TEXT} on {PICKED}")
+
+
+def pills(words: list[str], picked: str, focused: bool = False, width: int = 0,
+          labels: dict[str, str] | None = None) -> Text:
+    """Words side by side, the one picked marked (pill), each shown as labels has it, if it does.
+    Given a width, they go on as many lines as they need, each word whole on its line (wrapped by
+    the terminal, a word broke in two)."""
+    out, used = Text(), 0
+    for word in words:
+        piece = pill((labels or {}).get(word, word), word == picked, focused)
+        if used and width and used + len(GAP) + piece.cell_len > width:
+            out.append("\n")
+            used = 0
+        elif used:
+            out.append(GAP)
+            used += len(GAP)
+        out.append_text(piece)
+        used += piece.cell_len
+    return out
+
+
+def cards(name: str) -> str:
+    """CSS for a dialog's cards (.card): a part of it in a frame of its own, its name in the frame;
+    the card the cursor is in (-lit, light_rows) framed in the theme's colour."""
+    return f"""
+    {name} .card {{ border: round $panel-lighten-2; border-title-color: $text-muted; border-title-style: bold;
+                    border-subtitle-color: $text-muted; padding: 0 1; background: $surface; }}
+    {name} .card.-lit {{ border: round $accent; border-title-color: $accent; }}
+    {name} Input, {name} TextArea {{ margin: 0; background: $panel; }}
+    {name} Input:focus, {name} TextArea:focus {{ background: $panel-lighten-1; }}
+    {name} .hint {{ dock: bottom; }}
+    """
+
+
+def light_rows(screen) -> None:
+    """A form's rows and cards (.row, .card) with the ones that hold the focus lit (-lit). Textual's
+    :focus-within kept the style a row had when the dialog opened, whatever had the focus after."""
+    focused = screen.focused
+    for row in screen.query(".row, .card"):
+        row.set_class(focused is not None and row in focused.ancestors_with_self, "-lit")
+
+
+class FolderSuggester(Suggester):
+    """Completes a folder from the ones given, whatever the case, and whether its / and \\ are written
+    as they are there or the other way (on Windows "C:/Users/me/Desk" completes to its Desktop too, in
+    the way it was begun)."""
+
+    def __init__(self, folders: list[str]) -> None:
+        super().__init__(use_cache=False, case_sensitive=True)
+        self.folders = folders
+
+    async def get_suggestion(self, value: str) -> str | None:
+        if not value:
+            return None
+        begun = value.replace("\\", "/").casefold()
+        for form in (form for folder in self.folders for form in (folder, tilde(folder))):  # ~ for home too
+            if len(form) > len(value) and form.replace("\\", "/").casefold().startswith(begun):
+                rest = form[len(value):]
+                return value + (rest.replace("\\", "/") if "/" in value and "\\" not in value else rest)
+        return None
+
+
+def tilde(path: str) -> str:
+    """A folder with your home folder written ~ (expanded again by os.path.expanduser)."""
+    home = str(Path.home())
+    inside = path.casefold().startswith(home.casefold()) and path[len(home):][:1] in ("", "\\", "/")
+    return "~" + path[len(home):] if path and inside else path
 
 
 class Choice(Static, can_focus=True):
-    """One of a few words, shown side by side with the one picked marked: ● opus   ○ sonnet.
-    ←/→ (or Space) moves the mark while it has the focus; a click picks a word."""
+    """One of a few words, shown side by side with the one picked marked: ● opus   ○ sonnet, on
+    two lines or more where one is too narrow. ←/→ (or Space) moves the mark while it has the
+    focus; a click picks a word. labels: how a word is shown, where it is not shown as it is."""
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("left", "step(-1)", "Previous", show=False),
         Binding("right,space", "step(1)", "Next", show=False),
     ]
     DEFAULT_CSS = """
-    Choice { height: 1; width: 1fr; }
-    Choice:focus { background: $panel-lighten-2; }
+    Choice { height: auto; width: 1fr; }
     Choice.-off { opacity: 0.5; }
     """
 
@@ -45,18 +124,14 @@ class Choice(Static, can_focus=True):
         def control(self) -> Choice:
             return self.choice
 
-    def __init__(self, words: list[str], value: str = "", **kwargs) -> None:
+    def __init__(self, words: list[str], value: str = "", labels: dict[str, str] | None = None, **kwargs) -> None:
         super().__init__("", **kwargs)
         self.words = list(words)
+        self.labels = labels or {}
         self.value = value if value in self.words else self.words[0]
 
     def render(self) -> Text:
-        out = Text()
-        for word in self.words:
-            on = word == self.value
-            out.append(("● " if on else "○ ") + word, style=f"bold {CYAN if self.has_focus else TEXT}" if on else MUTED)
-            out.append(GAP)
-        return out
+        return pills(self.words, self.value, self.has_focus, width=self.content_size.width, labels=self.labels)
 
     def pick(self, value: str) -> None:
         if value in self.words and value != self.value:
@@ -68,13 +143,18 @@ class Choice(Static, can_focus=True):
         self.pick(self.words[(self.words.index(self.value) + step) % len(self.words)])
 
     def on_click(self, event: events.Click) -> None:
-        start = 0
+        # Where each word stands, line by line, as pills() lays them out.
+        line, start, width = 0, 0, self.content_size.width
         for word in self.words:
-            end = start + len(word) + 2
-            if start <= event.x < end:
+            size = len(self.labels.get(word, word)) + (4 if word == self.value else 2)  # ' ● word ', '○ word'
+            if start and width and start + len(GAP) + size > width:
+                line, start = line + 1, 0
+            elif start:
+                start += len(GAP)
+            if event.y == line and start <= event.x < start + size:
                 self.pick(word)
                 return
-            start = end + len(GAP)
+            start += size
 
     def on_focus(self) -> None:
         self.refresh()

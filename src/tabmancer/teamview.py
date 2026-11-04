@@ -4,27 +4,28 @@ arrows between the members' lanes. Enter on a team's row opens it from the dashb
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.suggester import SuggestFromList
 from textual.widget import Widget
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from . import background, context, focus, summarize, teams, teamtree, viewmodel
-from .dialogs import frame, title
+from .dialogs import FolderSuggester, cards, frame, light_rows, pill, pills, tilde, title
 from .safework import work
 from .sessions import Exit, Session, Status
 from .statsview import copy_text
-from .theme import AMBER, BLUE, CYAN, GREEN, MUTED, ORANGE, RED, TEXT, keys, mix
+from .theme import AMBER, BLUE, CYAN, DEFAULT_THEME, GREEN, MUTED, ORANGE, RED, TEXT, THEMES, keys, mix
 from .tokens import human
 
 PALETTE = [CYAN, GREEN, AMBER, ORANGE, "#c678dd", "#61afef", "#e5c07b", "#56b6c2"]
@@ -119,6 +120,7 @@ class TeamGraph(Widget):
     by side on one wire, and their messages run along it."""
 
     DEFAULT_CSS = "TeamGraph { height: auto; }"
+    card_h, least, gap = CARD_H, CARD_LEAST, GAP  # smaller in the new-team form's preview
 
     def __init__(self, team: teams.Team, accent: str, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -151,22 +153,22 @@ class TeamGraph(Widget):
         middle, each row of members under a wire of its own. Peers start at the top, under theirs."""
         members = [m.name for m in self.order if not m.lead]
         count = max(1, len(members))
-        card = max(CARD_LEAST, min(CARD_MOST, (width - (count - 1) * GAP) // count))
-        per_row = max(1, (width + GAP) // (card + GAP))
+        card = max(self.least, min(CARD_MOST, (width - (count - 1) * self.gap) // count))
+        per_row = max(1, (width + self.gap) // (card + self.gap))
         rows = [members[i:i + per_row] for i in range(0, len(members), per_row)] or [[]]
         places = {self.lead: ((width - card) // 2, 0, card)} if self.lead else {}
-        top = CARD_H + 1 if self.lead else 1  # under a row's wire
+        top = self.card_h + 1 if self.lead else 1  # under a row's wire
         for row in rows:
-            span = len(row) * card + (len(row) - 1) * GAP
+            span = len(row) * card + (len(row) - 1) * self.gap
             left = max(0, (width - span) // 2)
             for i, name in enumerate(row):
-                places[name] = (left + i * (card + GAP), top, card)
-            top += CARD_H + 1
+                places[name] = (left + i * (card + self.gap), top, card)
+            top += self.card_h + 1
         return places, rows
 
     def height_for(self, rows: list[list[str]]) -> int:
         # The lead's card, the rows of cards each under its wire, and the focus line.
-        return (CARD_H if self.lead else 0) + len(rows) * (CARD_H + 1) + 2
+        return (self.card_h if self.lead else 0) + len(rows) * (self.card_h + 1) + 2
 
     def path(self, sender: str, receiver: str, places: dict[str, tuple[int, int, int]]) -> list[tuple[int, int]]:
         """The cells a message passes on its way: out of the lead's card, down the trunk to a
@@ -184,7 +186,7 @@ class TeamGraph(Widget):
         def down_to(name: str) -> list[tuple[int, int]]:
             x, top, card = places[name]
             middle, wire = x + card // 2, top - 1
-            cells = [(lead_x, y) for y in range(CARD_H - 1, wire + 1)]
+            cells = [(lead_x, y) for y in range(self.card_h - 1, wire + 1)]
             step = 1 if middle > lead_x else -1
             cells += [(c, wire) for c in range(lead_x + step, middle + step, step)] if middle != lead_x else []
             return [*cells, (middle, top)]
@@ -226,7 +228,7 @@ class TeamGraph(Widget):
         lead_x = lx + lcard // 2
         chosen = self.selected_member()
         lead_picked = chosen is self.team.lead
-        canvas.put(lead_x, CARD_H - 1, "┳" if lead_picked else "┬", f"bold {self.accent}" if lead_picked else WIRE)
+        canvas.put(lead_x, self.card_h - 1, "┳" if lead_picked else "┬", f"bold {self.accent}" if lead_picked else WIRE)
         wires = []
         for row in rows:
             if not row:
@@ -246,10 +248,10 @@ class TeamGraph(Widget):
             if right in middles and right != lead_x:
                 canvas.put(right, wire, "╮", WIRE)
             wires.append(wire)
-        last = max(wires, default=CARD_H - 1)
+        last = max(wires, default=self.card_h - 1)
         cards = [(cx, cy, cw) for name, (cx, cy, cw) in places.items() if name != lead]
-        for y in range(CARD_H, last + 1):  # the trunk, down to the last row's wire, behind the cards
-            if any(cx <= lead_x < cx + cw and cy <= y < cy + CARD_H for cx, cy, cw in cards):
+        for y in range(self.card_h, last + 1):  # the trunk, down to the last row's wire, behind the cards
+            if any(cx <= lead_x < cx + cw and cy <= y < cy + self.card_h for cx, cy, cw in cards):
                 continue
             here = canvas.char_at(lead_x, y)
             alone = canvas.char_at(lead_x - 1, y) == " " and canvas.char_at(lead_x + 1, y) == " "
@@ -311,9 +313,9 @@ class TeamGraph(Widget):
         edge = f"bold {colour}" if chosen else mix("#000000", colour, 0.45)
         corner = ("┏", "┓", "┗", "┛", "━", "┃") if chosen else ("╭", "╮", "╰", "╯", "─", "│")
         canvas.put(x, y, corner[0] + corner[4] * (card - 2) + corner[1], f"bold {colour}" if chosen else colour)
-        for row in range(1, CARD_H - 1):
+        for row in range(1, self.card_h - 1):
             canvas.put(x, y + row, corner[5] + " " * (card - 2) + corner[5], edge)
-        canvas.put(x, y + CARD_H - 1, corner[2] + corner[4] * (card - 2) + corner[3], edge)
+        canvas.put(x, y + self.card_h - 1, corner[2] + corner[4] * (card - 2) + corner[3], edge)
         inner = card - 4
         session = self.sessions.get(member.name)
         name = ("★ " if member.lead else "") + member.name
@@ -378,6 +380,12 @@ class TeamGraph(Widget):
 
 def _one_line(text: str) -> str:
     return " ".join(text.split())
+
+
+def _clip_goal(goal: str, most: int = 220) -> str:
+    """A goal on one line, cut short where it is long."""
+    line = _one_line(goal)
+    return line if len(line) <= most else line[:most - 1].rstrip() + "…"
 
 
 ADD_QUESTION = "Add members as name: what they work on (several with ;, @sonnet at the end picks a model)"
@@ -495,7 +503,8 @@ class TeamScreen(Screen):
             ("  ·  members in the background" if self.team.background else "", MUTED),
             ("  ·  peers, no lead" if self.team.peers else "", MUTED),
             ("  ·  each member on a worktree-<name> branch" if self.team.worktrees else "", MUTED),
-            ("\nGoal  ", MUTED), (self.team.goal, TEXT)))
+            # On one line and cut short: a goal of a few pages pushed the team itself out of sight.
+            ("\nGoal  ", MUTED), (_clip_goal(self.team.goal), TEXT)))
 
     def spent(self) -> int:
         """What the members' sessions have used, as the dashboard counts it (each card has its own)."""
@@ -688,7 +697,7 @@ class TeamScreen(Screen):
 
         def chosen(goal: str | None) -> None:
             goal = " ".join((goal or "").split())
-            if not goal or goal == self.team.goal:
+            if not goal or goal == _one_line(self.team.goal):  # a goal of several lines comes back on one
                 return
             team = teams.set_goal(self.team.name, goal)
             if team is None:
@@ -697,7 +706,7 @@ class TeamScreen(Screen):
             self.tell_lead(teams.goal_note(team), "The goal is changed.")
 
         self.app.push_screen(LineDialog("The team's goal", "e.g. Add Stripe checkout with tests",
-                                        value=self.team.goal), chosen)
+                                        value=_one_line(self.team.goal)), chosen)
 
     def tell_lead(self, note: str, done: str) -> None:
         """A change made here, for the lead to hear: nothing can type into its tab, so the note goes
@@ -851,6 +860,60 @@ class RoleDialog(ModalScreen[None]):
         self.dismiss(None)
 
 
+class LineupGraph(TeamGraph):
+    """The team the new-team form will open, drawn as the team view draws a team, in its colours:
+    the lead's card on top, the members' under it on their wires (peers side by side on one wire).
+    Smaller cards, of a line each: the name, and its model and effort when picked. Nothing has
+    started yet, so there are no states, tokens or messages to show."""
+
+    card_h, least, gap = 3, 12, 2
+
+    def layout_boxes(self, width: int) -> tuple[dict[str, tuple[int, int, int]], list[list[str]]]:
+        """As the team view lays them out, but the lead's card as wide as its name and model need,
+        however narrow the members' are (three of them side by side in a 120-column window)."""
+        places, rows = super().layout_boxes(width)
+        if self.lead in places:
+            lead = next(m for m in self.order if m.lead)
+            wide = min(width, max(places[self.lead][2], len(lead.name) + len(lead.pick.short()) + 9, 24))
+            places[self.lead] = ((width - wide) // 2, 0, wide)
+        return places, rows
+
+    def show(self, team: teams.Team) -> None:
+        self.team, self.palette = team, colours(team, self.accent)
+        self.selected = len(team.members)  # nobody picked: no card drawn heavier than the others
+        self.refresh(layout=True)
+
+    def height_for(self, rows: list[list[str]]) -> int:  # the cards only: no line under them
+        rows = [row for row in rows if row]
+        return (self.card_h if self.lead else 0) + len(rows) * (self.card_h + 1)
+
+    def draw_wires(self, canvas: Canvas, places: dict, rows: list[list[str]]) -> None:
+        if any(rows):  # a lead that picks its members has nobody under it yet
+            super().draw_wires(canvas, places, rows)
+
+    def draw_traffic(self, canvas: Canvas, places: dict, rows: list[list[str]]) -> None:
+        pass  # nobody has said anything yet
+
+    def draw_focus(self, canvas: Canvas) -> None:
+        pass
+
+    def draw_box(self, canvas: Canvas, member: teams.Member, place: tuple[int, int, int]) -> None:
+        x, y, card = place
+        colour = self.palette.get(member.name, TEXT)
+        edge = mix("#000000", colour, 0.55)
+        canvas.put(x, y, "╭" + "─" * (card - 2) + "╮", colour)
+        canvas.put(x, y + 1, "│" + " " * (card - 2) + "│", edge)
+        canvas.put(x, y + 2, "╰" + "─" * (card - 2) + "╯", edge)
+        inner = card - 4
+        quiet = self.team.background and not member.lead and self.team.lead is not None
+        right = ("◌ " if quiet else "") + member.pick.short()
+        name = ("★ " if member.lead else "") + member.name
+        right = right if len(name) + 1 + len(right) <= inner else ""
+        canvas.put(x + 2, y + 1, name[:inner], f"bold {colour}")
+        if right:
+            canvas.put(x + 2 + inner - len(right), y + 1, right, MUTED)
+
+
 LEAD_LINE = f"{teams.LEAD}: {teams.LEAD_FOCUS}"
 # One line, so the keys stay on screen in a 120x30 window; the examples show how a line is written.
 MEMBERS_HELP = "name: area @model @effort · lead @opus @xhigh · code @opus @high · tests, docs @sonnet @medium"
@@ -862,18 +925,37 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
     """A name, a folder, a goal and the line-up, one member a line. Below it, what will open,
     or what is still missing, as you type. Enter goes to the next box; Ctrl+S creates."""
 
-    DEFAULT_CSS = frame("NewTeamDialog", "large") + """
-    NewTeamDialog .row { height: auto; margin-top: 1; }
-    NewTeamDialog .row > Label { width: 10; color: $text-muted; }
-    NewTeamDialog .row > Vertical { width: 1fr; height: auto; }
-    NewTeamDialog Input, NewTeamDialog TextArea { margin: 0; background: $panel; }
-    NewTeamDialog Input:focus, NewTeamDialog TextArea:focus { background: $panel-lighten-2; }
-    NewTeamDialog #team-goal { height: 2; }
-    NewTeamDialog #team-members { height: 5; }
-    NewTeamDialog #team-members.alone { height: 1; }
+    # The form on the left in two cards (the team; its line-up), and on the right the team it will
+    # open, drawn as the team view draws one, over where the members run. A card is lit (its frame
+    # and title in the theme's colour) while the cursor is in it. The help for the box in focus is
+    # one line under the cards; the keys are docked at the foot, so nothing can push them off.
+    DEFAULT_CSS = frame("NewTeamDialog", "large", height="90%") + cards("NewTeamDialog") + """
+    NewTeamDialog > Vertical { width: 95%; max-width: 150; max-height: 36; }
+    NewTeamDialog #team-top { height: 1; margin-bottom: 1; }
+    NewTeamDialog #team-title { width: 1fr; }
+    NewTeamDialog #team-ready { width: auto; }
+    NewTeamDialog #team-body { height: 1fr; }
+    NewTeamDialog #team-form { width: 1fr; height: 1fr; margin-right: 1; }
+    NewTeamDialog #team-side { width: 48%; height: 1fr; }
+    NewTeamDialog #team-card { height: auto; }
+    NewTeamDialog #lineup-card { height: 1fr; }
+    NewTeamDialog .row { height: auto; }
+    NewTeamDialog .row > .name { width: 9; color: $text-muted; }
+    NewTeamDialog Input { padding: 0 1; }
+    NewTeamDialog TextArea { padding: 0 0; }
+    NewTeamDialog .row.-lit > .name { color: $text; text-style: bold; }
+    NewTeamDialog #team-goal { height: 3; }
+    NewTeamDialog #team-lineup { height: auto; margin-bottom: 1; }
+    NewTeamDialog #team-members { height: 1fr; min-height: 3; }
+    NewTeamDialog #team-members.alone { height: 1; min-height: 1; }
+    NewTeamDialog #team-most-row { margin-top: 1; }
     NewTeamDialog #team-most { width: 3; }
-    NewTeamDialog .aside { width: 1fr; color: $text-muted; }
-    NewTeamDialog #team-preview { margin-top: 1; height: auto; }
+    NewTeamDialog .aside { width: 1fr; color: $text-muted; padding-left: 2; }
+    NewTeamDialog #graph-card { height: 1fr; }
+    NewTeamDialog #team-preview { height: auto; margin-bottom: 1; }
+    NewTeamDialog #team-graph-box { height: 1fr; scrollbar-size-vertical: 1; }
+    NewTeamDialog #runs-card { height: auto; }
+    NewTeamDialog #team-help { height: 1; margin-top: 1; color: $text-muted; }
     """
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "cancel", "Cancel"),
@@ -903,69 +985,99 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
     def compose(self) -> ComposeResult:
         first = next(iter(teams.TEMPLATES))
         with Vertical():
-            yield Label(title("New team", "every member is a session of its own; with no lead line, they work as peers"))
-            with Horizontal(classes="row"):
-                yield Label("Name")
-                yield Input(placeholder="e.g. checkout", id="team-name", compact=True)
-            with Horizontal(classes="row"):
-                yield Label("Project")
-                with Vertical():
-                    yield Input(value=self.folder, id="team-folder", compact=True,
-                                suggester=SuggestFromList(self.folders, case_sensitive=False))
-                    yield Label(Text("→ completes a folder you have worked in", style=MUTED))
-            with Horizontal(classes="row"):
-                yield Label("Goal")
-                yield TextArea(id="team-goal", compact=True, placeholder="e.g. Add Stripe checkout with tests")
-            with Horizontal(classes="row"):
-                yield Label("Line-up")
-                with Vertical():
-                    yield Static(self.lineup(), id="team-lineup")
-                    yield Static(self.where(), id="team-where")  # tabs or the background: Ctrl+B
-            with Horizontal(classes="row"):
-                yield Label("Members")
-                with Vertical():
-                    yield TextArea(f"{LEAD_LINE}\n{teams.TEMPLATES[first]}", id="team-members", compact=True)
-                    yield Static(MEMBERS_HELP, id="team-members-help", classes="aside")
-            with Horizontal(classes="row", id="team-most-row"):  # only when the lead decides
-                yield Label("At most")
-                yield Input(str(teams.DECIDE_MOST), id="team-most", compact=True, restrict=r"[0-9]*", max_length=1)
-                yield Static("  members: the lead reads the goal and picks them, fewer when the work is small",
-                             classes="aside")
-            yield Static("", id="team-preview")
+            with Horizontal(id="team-top"):
+                yield Label(title("New team"), id="team-title")
+                yield Label("", id="team-ready")
+            with Horizontal(id="team-body"):
+                with Vertical(id="team-form"):
+                    with Vertical(id="team-card", classes="card"):
+                        with Horizontal(classes="row"):
+                            yield Label("Name", classes="name")
+                            yield Input(placeholder="e.g. checkout", id="team-name", compact=True)
+                        with Horizontal(classes="row"):
+                            yield Label("Project", classes="name")
+                            yield Input(value=tilde(self.folder), id="team-folder", compact=True,
+                                        suggester=FolderSuggester(self.folders))
+                        with Horizontal(classes="row"):
+                            yield Label("Goal", classes="name")
+                            yield TextArea(id="team-goal", compact=True,
+                                           placeholder="e.g. Add Stripe checkout with tests")
+                    with Vertical(id="lineup-card", classes="card"):
+                        yield Static("", id="team-lineup")
+                        yield TextArea(f"{LEAD_LINE}\n{teams.TEMPLATES[first]}", id="team-members", compact=True)
+                        with Horizontal(classes="row", id="team-most-row"):  # only when the lead decides
+                            yield Label("At most", classes="name")
+                            yield Input(str(teams.DECIDE_MOST), id="team-most", compact=True, restrict=r"[0-9]*",
+                                        max_length=1)
+                            yield Static("members, picked by the lead", classes="aside")
+                with Vertical(id="team-side"):
+                    with Vertical(id="graph-card", classes="card"):
+                        yield Static("", id="team-preview")
+                        with VerticalScroll(id="team-graph-box"):
+                            yield LineupGraph(teams.Team("", "", ""), self.accent(), id="team-graph")
+                    with Vertical(id="runs-card", classes="card"):
+                        yield Static("", id="team-where")  # tabs or the background: Ctrl+B; worktrees: Ctrl+O
+            yield Label("", id="team-help")
             # One line, even in a 120x30 window: a second one would be cut off there.
             yield Label(keys(("Ctrl+S", "create"), ("Tab", "next"), ("Ctrl+T", "line-up"), ("Ctrl+L", "keep"),
                              ("Ctrl+R", "suggest"), ("Ctrl+G", "role"), ("Esc", "cancel")), classes="hint")
 
     def on_mount(self) -> None:
+        self.query_one("#team-card").border_title = "Team"
+        self.query_one("#lineup-card").border_title = "Line-up"
+        self.query_one("#runs-card").border_title = "Runs"
         self.show_preview()
+        self.show_help()
+        self.call_after_refresh(self.show_preview)  # laid out: the line-ups wrap to the card's width
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self.is_mounted:
+            self.show_preview()
+
+    def accent(self) -> str:
+        theme = getattr(self.app, "theme", "") if self.is_attached else ""
+        return THEMES.get(theme, THEMES[DEFAULT_THEME])[1]
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        light_rows(self)
+        self.show_help()
+
+    def on_descendant_blur(self, event: events.DescendantBlur) -> None:
+        light_rows(self)
+
+    def show_help(self) -> None:
+        """One line under the cards: how to fill the box in focus."""
+        focused = self.focused
+        about = {
+            "team-name": "One word: each member's tab is named after it, checkout-api.",
+            "team-folder": "→ completes a folder you worked in. With worktrees (Ctrl+O), a repository's top folder.",
+            "team-goal": "What the team is for. A plan pasted in keeps its lines; every member gets all of it.",
+            "team-members": LEAD_HELP if self.deciding() else MEMBERS_HELP,
+            "team-most": "At most this many members: the lead reads the goal and picks them, fewer for small work.",
+        }.get(focused.id if focused is not None else "",
+              "Every member is a session of its own; with no lead line, they work as peers.")
+        self.query_one("#team-help", Label).update(about)
 
     def lineup(self) -> Text:
         """The ready-made line-ups, the one in the box marked; "your own" once it has been edited."""
         own = self.is_mounted and self.members_text() != self.template_text(self.lineups[self.template])
-        out = Text()
-        for index, name in enumerate([*self.lineups, "your own"]):
-            on = (name == "your own") if own else (index == self.template)
-            out.append(("● " if on else "○ ") + name, style=f"bold {TEXT}" if on else MUTED)
-            out.append("   ")
-        return out
+        picked = "your own" if own else self.lineups[self.template]
+        width = self.query_one("#team-lineup").content_size.width if self.is_mounted else 0
+        return pills([*self.lineups, "your own"], picked, width=width or 60)  # Ctrl+T: the keys say so
 
     def where(self) -> Text:
         """Where the members run: each in a tab, or in the background with only the lead in a tab.
-        Peers each in a tab: you talk to every one of them."""
-        out = Text()
+        Peers each in a tab: you talk to every one of them. And where they work: the project, or
+        worktrees of their own."""
         if self.is_mounted and self.peers():
-            out.append("● each in a tab", style=f"bold {TEXT}")
-            out.append(" (peers: you talk to each)", style=MUTED)
+            out = Text.assemble(pill("each in a tab", True), ("(peers: you talk to each)", MUTED))
         else:
-            for on, words in ((not self.background, "each in a tab"),
-                              (self.background, "the members in the background")):
-                out.append(("● " if on else "○ ") + words, style=f"bold {TEXT}" if on else MUTED)
-                out.append("   ")
-            out.append("Ctrl+B", style=MUTED)
-        out.append("   │   ", style=MUTED)  # and where they work: the project, or worktrees of their own
+            out = Text.assemble(pill("each in a tab", not self.background), "  ", ("Ctrl+B", MUTED), "\n",
+                                pill("the members in the background", self.background))
+        out.append("\n")
         out.append("[x] " if self.worktrees else "[ ] ", style=f"bold {CYAN}" if self.worktrees else MUTED)
         out.append("own git worktrees", style=f"bold {TEXT}" if self.worktrees else MUTED)
-        out.append("   Ctrl+O", style=MUTED)
+        out.append("  Ctrl+O", style=MUTED)
         return out
 
     def is_repository(self, folder: str) -> bool:
@@ -1079,8 +1191,8 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
 
     def read(self) -> tuple[str, str, str, list[teams.Member]]:
         return (teams.clean(self.query_one("#team-name", Input).value),
-                self.query_one("#team-folder", Input).value.strip(),
-                " ".join(self.query_one("#team-goal", TextArea).text.split()),
+                os.path.expanduser(self.query_one("#team-folder", Input).value.strip()),  # shown with ~
+                teams.tidy(self.query_one("#team-goal", TextArea).text),  # its lines kept
                 teams.parse_members(self.members_text(), lead_ok=True))
 
     def missing(self) -> list[str]:
@@ -1098,6 +1210,8 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
             ("how many members at most, 1 to 9", deciding and not 1 <= self.most() <= 9)) if wrong]
 
     def show_preview(self) -> None:
+        """The cards as the boxes now say: the line-ups, where the members run, and on the right the
+        team that will open, drawn, under a line on what opens and how (or what is still needed)."""
         if not self.is_mounted:
             return
         self.query_one("#team-lineup", Static).update(self.lineup())
@@ -1106,40 +1220,45 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         self.query_one("#team-most-row").display = deciding
         # Deciding, the box holds the lead's line alone: one row, and what is left to say about it.
         self.query_one("#team-members", TextArea).set_class(deciding, "alone")
-        self.query_one("#team-members-help", Static).update(LEAD_HELP if deciding else MEMBERS_HELP)
+        self.show_help()
+        name, folder, _, members = self.read()
+        team = teams.new_team(name or "team", folder or ".", "", members, peers=self.peers(),
+                              background=self.background)
+        self.query_one(LineupGraph).show(team)  # drawn as it stands, whatever is still missing
+        card, ready = self.query_one("#graph-card"), self.query_one("#team-ready", Label)
         preview = self.query_one("#team-preview", Static)
         if self.asking:
+            card.border_title = "Asking Claude…"
+            ready.update("")
             preview.update(Text("Asking Claude for a line-up for the goal: your plan, your default model, "
                                 "about half a minute…", style=f"italic {MUTED}"))
             return
         missing = self.missing()
         if missing:
+            card.border_title = "Will open"
+            ready.update("")
             style = f"bold {AMBER}" if self.tried else MUTED
             preview.update(Text.assemble(("Still needed: ", style), (", ".join(missing), style)))
             return
-        name, folder, _, members = self.read()
-        team = teams.new_team(name, folder, "", members, peers=self.peers())
-        tabs = ", ".join(team.session_name(m) + (f" ({m.pick.words()})" if m.pick else "") for m in team.members)
         if team.peers:
-            preview.update(Text.assemble((f"Opens {len(team.members)} tabs in {team.project}: ", MUTED), (tabs, TEXT),
-                                         ((". Nobody leads: each starts on its part, you talk to each, and they tell "
-                                           "each other what touches the other's work."), MUTED)))
-            return
-        each = "each in the background" if self.background else "each in its own tab"
-        if deciding:
-            preview.update(Text.assemble((f"Opens 1 tab in {team.project}: ", MUTED), (tabs, TEXT),
-                                         ((f". It reads the goal and adds up to {self.most()} members itself, {each}; "
-                                           "you see them join in the team view."), MUTED)))
-            return
-        if self.background:
-            members = ", ".join(team.session_name(m) for m in team.members if not m.lead)
-            preview.update(Text.assemble((f"Starts {len(team.members) - 1} in the background in {team.project}: ",
-                                          MUTED), (members, TEXT), (", then opens a tab for ", MUTED),
-                                         (team.session_name(team.lead), TEXT),
-                                         (", which hands out the work. B lists the background ones.", MUTED)))
-            return
-        preview.update(Text.assemble((f"Opens {len(team.members)} tabs in {team.project}: ", MUTED), (tabs, TEXT),
-                                     (". The lead starts last and hands out the work.", MUTED)))
+            tabs = f"Opens {len(team.members)} tabs in {team.project}"
+            peers = ". Nobody leads: each starts on its part, you talk to each, and they tell each other what touches theirs."
+            head = Text.assemble((tabs, f"bold {TEXT}"), (peers, MUTED))
+        elif deciding:
+            tabs = f"Opens 1 tab in {team.project}"
+            each = "each in the background" if self.background else "each in its own tab"
+            head = Text.assemble((tabs, f"bold {TEXT}"),
+                                 (f". It reads the goal and adds up to {self.most()} members itself, {each}.", MUTED))
+        elif self.background:
+            tabs = f"Starts {len(team.members) - 1} in the background in {team.project}"
+            head = Text.assemble(((f"{tabs}, then opens a tab for {team.session_name(team.lead)}"), f"bold {TEXT}"),
+                                 (", which hands out the work. B lists the background ones.", MUTED))
+        else:
+            tabs = f"Opens {len(team.members)} tabs in {team.project}"
+            head = Text.assemble((tabs, f"bold {TEXT}"), (". The lead starts last and hands out the work.", MUTED))
+        card.border_title = Text(tabs, style=f"bold {GREEN}")
+        ready.update(Text.assemble(("● ", GREEN), ("ready", f"bold {GREEN}"), ("  Ctrl+S creates it", MUTED)))
+        preview.update(head[len(tabs) + 2:])  # the card's title says what opens; this line, how
 
     # --- help with the roles ---------------------------------------------------------------
 

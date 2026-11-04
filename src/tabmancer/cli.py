@@ -166,7 +166,10 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def launch_all(launches: list[Launch]) -> None:
-    print_leftover(open_tabs(launches))
+    try:
+        print_leftover(open_tabs(launches))
+    except OSError as error:
+        sys.exit(f"Could not open the tabs: {error}")
 
 
 def print_leftover(leftover: list[str] | None) -> None:
@@ -222,7 +225,12 @@ def add_to_team(name: str, spec: str) -> int:
                 print(f"{launch.title} did not start in the background: {error}")
         where = "They are starting in the background, with no tabs,"
     else:
-        leftover = open_tabs(joining)
+        try:
+            leftover = open_tabs(joining)
+        except OSError as error:
+            print(f"They joined the team {team.name}, but their tabs could not open: {error}. The dashboard's s "
+                  "starts them.")
+            return 1
         where = "Their tabs are opening"
     names = ", ".join(f"{team.session_name(m)} ({m.focus or m.name}{f', {m.pick.words()}' if m.pick else ''})"
                       for m in added)

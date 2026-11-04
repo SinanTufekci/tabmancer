@@ -3,11 +3,12 @@ as you type, and the project folder completed from the folders you have worked i
 
 from __future__ import annotations
 
+from conftest import team_preview
 from textual.app import App
 from textual.widgets import Input, Static, TextArea
 
 from tabmancer import teams
-from tabmancer.teamview import LEAD_LINE, NewTeamDialog
+from tabmancer.teamview import LEAD_LINE, LineupGraph, NewTeamDialog
 
 
 def test_a_model_per_member_and_a_lead_line_of_its_own():
@@ -74,8 +75,11 @@ async def test_the_dialog_says_what_is_missing_and_then_what_will_open(tmp_path)
         dialog.query_one("#team-goal", TextArea).text = "Add a checkout"
         dialog.query_one("#team-members", TextArea).text = "lead @opus\napi: endpoints\ntests @sonnet"
         await pilot.pause(0.1)
-        shown = str(preview.render())
-        assert shown.startswith("Opens 3 tabs in shop: check-out-lead (opus), check-out-api, check-out-tests (sonnet)")
+        assert team_preview(dialog).startswith("Opens 3 tabs in shop. The lead starts last")
+        # ...and the team drawn as the team view draws it: the lead on top, each card with its model.
+        drawn = dialog.query_one(LineupGraph).render().plain.split("\n")
+        assert "★ lead" in drawn[1] and "opus" in drawn[1]
+        assert "api" in drawn[5] and "tests" in drawn[5] and "sonnet" in drawn[5] and "┴" in drawn[4]
         await pilot.press("ctrl+s")
         await pilot.pause(0.1)
         assert isinstance(host.result, teams.Team) and host.result.name == "check-out"

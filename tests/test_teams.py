@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from conftest import box_has_focus
+from conftest import box_has_focus, role_of
 
 from tabmancer import app as app_module
 from tabmancer import teams
@@ -40,9 +40,9 @@ def test_each_member_starts_with_its_name_role_and_the_inbound_setting(tmp_path)
     with open(settings, encoding="utf-8") as f:
         assert json.load(f) == {"crossSessionInbound": "accept"}
     assert "--allowedTools=SendMessage,ListAgents" in argv  # one piece, or it swallows the prompt
-    prompt = argv[argv.index("--append-system-prompt") + 1]
+    prompt = role_of(argv)
     assert "shop-lead" in prompt and "shop-ui" in prompt and "endpoints" in prompt and "\n" not in prompt
-    assert argv[-1] == prompt  # members wait for their first task: no prompt of their own
+    assert argv[-1].endswith("shop-api.md")  # members wait for their first task: no prompt of their own
     lead_argv = teams.launch(made, lead).argv
     assert lead_argv[-1].startswith("Goal: Add a checkout") and "orchestrator" in teams.role(made, lead)
 
@@ -198,3 +198,35 @@ async def test_the_dashboard_creates_a_team_and_shows_it(fake_home, tmp_path, mo
         assert [launch.title for launch in opened] == ["shop: ui"]
         await pilot.press("escape")
         assert not isinstance(app.screen, TeamScreen)
+
+
+def test_a_long_goal_of_several_lines_goes_in_the_role_file_and_the_tabs_still_open(tmp_path):
+    import subprocess
+
+    from tabmancer import launch as L
+
+    plan = "## Status\n- master pushed\n\n\n\n## Build\n```\ngit checkout -- i18n/ ; gradlew --stop\n```\n" + (
+        "A line of the plan, long enough to count. " * 90)
+    lineup = "lead @opus @xhigh\n" + "\n".join(f"m{i}: part {i}; and more of it [src/m{i}] @sonnet" for i in range(5))
+    team = teams.new_team("big", str(tmp_path), plan, teams.parse_members(lineup, lead_ok=True))
+    assert [m.name for m in team.members] == ["lead", "m0", "m1", "m2", "m3", "m4"]
+    assert team.members[1].focus == "part 0; and more of it" and team.members[1].owns == "src/m0"
+    assert "\n\n\n" not in team.goal and "```\ngit checkout" in team.goal  # its lines kept
+    launches = teams.start(team, {})
+    role = role_of(launches[0].argv)
+    assert "Team goal:\n\n## Status" in role and team.goal in role  # the whole goal, as written
+    first = launches[-1].argv[-1]  # the lead's first message names the goal on one line, cut short
+    assert first.startswith("Goal: ## Status - master pushed") and "the whole goal is in your role" in first
+    assert len(first) < 500 and teams.from_tabmancer(team, first)
+    for command in L.windows_terminal_commands(launches, "0"):
+        assert len(subprocess.list2cmdline(command)) <= L.WT_MOST
+
+
+def test_a_semicolon_inside_a_members_part_stays_in_it():
+    members = teams.parse_members("art: drafts first; icons, splash and the store pictures [assets/] @sonnet @high\n"
+                                  "ui: the screens; worktree _wt/ui; docs: the guide; tests @haiku; review")
+    assert [(m.name, m.focus, m.owns, m.model) for m in members] == [
+        ("art", "drafts first; icons, splash and the store pictures", "assets/", "sonnet"),
+        ("ui", "the screens; worktree _wt/ui", "", ""), ("docs", "the guide", "", ""), ("tests", "", "", "haiku"),
+        ("review", "", "", "")]
+    assert teams.suggested_lines("- örnek: bir iş\nHere you go:") == "ornek: bir iş"  # a name in any letters
