@@ -117,3 +117,16 @@ async def test_cleanup_app_select_confirm_and_delete(home, monkeypatch):
         await pilot.press("enter", "y")
         assert sorted(trashed) == ["old", "old.jsonl"]
         assert set(app.items) == {"new"} and app.selected == set()
+
+
+def test_trash_asks_again_what_is_open(home, monkeypatch):
+    # Listed while closed, then resumed while the clean-up screen stood open: still not moved.
+    _, add = home
+    add("later-open")
+    trashed = []
+    monkeypatch.setattr(cleanup, "_trash_one", lambda path: trashed.append(path.name))
+    items = cleanup.collect()  # nothing open yet
+    assert not items[0].is_open
+    monkeypatch.setattr(cleanup, "live_sessions", lambda: {"later-open": {"sessionId": "later-open"}})
+    moved, problems = cleanup.trash(items)
+    assert not moved and not trashed and problems == ["demo: open right now, skipped"]

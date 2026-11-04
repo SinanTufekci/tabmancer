@@ -25,10 +25,13 @@ def test_the_digest_groups_the_periods_sessions_by_project():
     first = date.today() - timedelta(days=6)
     sessions = [session("a1", "C:/work/api"), session("a2", "C:/work/api", days_ago=1),
                 session("w1", "C:/work/web", days_ago=2), session("old", "C:/work/web", days_ago=30)]
-    text = report.digest(sessions, first, date.today(), {"a2": {"summary": "Added rate limits."}})
+    text = report.digest(sessions, first, date.today(), {"a2": {"summary": "Added rate limits.", "size": 0},
+                                                         "w1": {"summary": "Began the page.", "size": 5}})
     assert text.index("# Project api") < text.index("# Project web")  # most sessions first
     assert "start a1" in text and "finish a1" in text and "Finished a1." in text
-    assert "summary: Added rate limits." in text and "Finished a2." not in text  # a summary wins
+    assert "summary: Added rate limits." in text and "Finished a2." not in text  # a summary of it as it is wins
+    # One written before the latest work (the transcript has grown since): the last reply, and the summary as older.
+    assert "Finished w1." in text and "summary, written before the latest work: Began the page." in text
     assert "files: src/app.py" in text and "lines: +10 -2" in text
     assert "old" not in text  # before the period
 

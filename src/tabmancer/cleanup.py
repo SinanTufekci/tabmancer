@@ -115,11 +115,14 @@ def _trash_one(path: Path) -> None:
 
 
 def trash(items: list[Item]) -> tuple[list[Item], list[str]]:
-    """Move sessions to the Recycle Bin. Returns the ones moved and any problems."""
+    """Move sessions to the Recycle Bin. Returns the ones moved and any problems. Which are open is
+    asked again here, not taken from the list: one resumed while the clean-up screen stood open went
+    to the Recycle Bin from under the Claude Code still writing it."""
     root = claude_dir().resolve()
     moved, problems = [], []
+    open_now = set(live_sessions())
     for item in items:
-        if item.is_open:
+        if item.is_open or item.session.session_id in open_now:
             problems.append(f"{item.session.project}: open right now, skipped")
             continue
         ok = True

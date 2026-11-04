@@ -117,9 +117,12 @@ def desktop_exec(argv: list[str]) -> str:
 def _powershell(script: str, **values: str) -> str:
     # Values travel in the environment, so no quoting can leak into the script.
     env = dict(os.environ, **{f"SC_{key.upper()}": value for key, value in values.items()})
+    # PowerShell writes to a pipe in the console's OEM code page, Python read it in the ANSI one: a
+    # folder such as OneDrive\Masaüstü came back mangled or raised UnicodeDecodeError. UTF-8 both ways.
+    script = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " + script
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                            capture_output=True, text=True, env=env, check=False,
-                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+                            check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if result.returncode != 0:
         raise OSError(result.stderr.strip() or "PowerShell failed")
     return result.stdout.strip()

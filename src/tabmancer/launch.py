@@ -86,23 +86,23 @@ class Launch:
         if self.mode is Mode.NEW and self.new_id:
             more = ["--session-id", self.new_id, *more]
         if self.mode is Mode.RESUME:
-            return ["claude", "--resume", self.session_id, *more, *([self.prompt] if self.prompt else [])]
+            return ["claude", "--resume", self.session_id, *more, *_said(self.prompt)]
         if self.mode is Mode.AUTO:
-            return ["claude", "--resume", self.session_id, *more, self.prompt or continue_prompt()]
+            return ["claude", "--resume", self.session_id, *more, *_said(self.prompt or continue_prompt())]
         if self.mode is Mode.FORK:
             return ["claude", "--resume", self.session_id, "--fork-session", *more]
         if self.mode is Mode.CONTINUE:
             return ["claude", "--continue", *more]
         if self.mode is Mode.ATTACH:
             return ["claude", "attach", self.session_id]
-        return ["claude", *more, *([self.prompt] if self.prompt else [])]
+        return ["claude", *more, *_said(self.prompt)]
 
     def _codex_argv(self) -> list[str]:
-        prompt = [self.prompt] if self.prompt else []
+        prompt = _said(self.prompt)
         if self.mode is Mode.RESUME:
             return ["codex", "resume", self.session_id, *prompt]
         if self.mode is Mode.AUTO:
-            return ["codex", "resume", self.session_id, self.prompt or continue_prompt()]
+            return ["codex", "resume", self.session_id, *_said(self.prompt or continue_prompt())]
         if self.mode is Mode.FORK:
             return ["codex", "fork", self.session_id]
         if self.mode is Mode.CONTINUE:
@@ -125,6 +125,21 @@ class Launch:
         return self.cwd if self.cwd and Path(self.cwd).is_dir() else str(Path.home())
 
 
+def _said(prompt: str | None) -> list[str]:
+    """A first message as the last arguments: after a '--' when it begins with a dash, or claude took
+    it for an option ("error: unknown option '- fix the login'", a list's line written as a bullet)."""
+    if not prompt:
+        return []
+    return ["--", prompt] if prompt.startswith("-") else [prompt]
+
+
+def _for_cmd(arg: str) -> str:
+    """An argument for a claude.cmd (npm's shim): cmd.exe runs it, and takes no backslash for an
+    escape, so a " in a message ended the quotes and a & after it ran as a command of its own. It
+    travels as a single quote, as for Windows PowerShell 5.1."""
+    return arg.replace('"', "'")
+
+
 def run_in_background(launch: Launch) -> str:
     """Continue a session as a background session: `claude --bg --resume <id> <prompt>`.
 
@@ -134,9 +149,12 @@ def run_in_background(launch: Launch) -> str:
     claude = shutil.which("claude")
     if not claude:
         raise OSError("The claude CLI is not on PATH.")
+    rest = launch.argv[1:]
+    if Path(claude).suffix.lower() in (".cmd", ".bat"):
+        rest = [_for_cmd(arg) for arg in rest]
     try:
         result = subprocess.run(
-            [claude, "--bg", *launch.argv[1:]], cwd=launch.directory, env=clean_env(),
+            [claude, "--bg", *rest], cwd=launch.directory, env=clean_env(),
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.SubprocessError as error:

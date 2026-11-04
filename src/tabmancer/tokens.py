@@ -116,12 +116,18 @@ class Report:
     def start(self) -> float:
         return datetime.combine(self.first, time.min).timestamp()
 
+    @property
+    def last(self) -> date:
+        """The window's last day: the day the report was collected, which is not today any more once
+        midnight has passed and the report is still the one from before it."""
+        return self.first + timedelta(days=self.days - 1)
+
     def in_window(self, day: int) -> bool:
         return day >= self.first.toordinal()
 
     def total(self, sessions: set[str] | None = None, last_days: int | None = None) -> Tokens:
         """Use inside the window, or only over today and the last_days - 1 before it."""
-        start = self.first.toordinal() if last_days is None else date.today().toordinal() - last_days + 1
+        start = self.first.toordinal() if last_days is None else self.last.toordinal() - last_days + 1
         out = Tokens()
         for (sid, day), use in self.cells.items():
             if day >= start and (sessions is None or sid in sessions):
@@ -247,7 +253,7 @@ class Report:
         window is too short to hold both."""
         if self.days < 14:
             return None
-        today = date.today()
+        today = self.last  # past midnight, date.today() ran the index out of the window (IndexError)
         weeks = []
         for back in (0, 7):
             last = today - timedelta(days=back)
@@ -437,6 +443,28 @@ def collect(days: float = 14) -> Report:
         return _collect(days)
 
 
+def _born(path: Path, stat) -> float:
+    """When a transcript was begun: the file's birth time where the system keeps one (Windows, macOS),
+    else the time of its first record. Linux has no birth time, and the change time it fell back to
+    moves with every write: a parent that went on after its fork looked born after it, and the
+    fork was given the parent's replies."""
+    born = getattr(stat, "st_birthtime", None)
+    if born:
+        return born
+    try:
+        with path.open("rb") as f:
+            for raw in f.read(64 * 1024).split(b"\n")[:50]:
+                try:
+                    stamp = json.loads(raw).get("timestamp")
+                except (ValueError, AttributeError):
+                    continue
+                if isinstance(stamp, str):
+                    return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (OSError, ValueError):
+        pass
+    return stat.st_mtime
+
+
 def _collect(days: float) -> Report:
     span = max(1, math.ceil(days))
     first = date.today() - timedelta(days=span - 1)
@@ -459,7 +487,7 @@ def _collect(days: float) -> Report:
             entry = {"session": sid, "cli": cli, "main": cli == "codex" or path.stem == sid,
                      "rows": [], "offset": 0, "cwd": "",
                      # Created first wins a reply that a fork copied.
-                     "born": getattr(stat, "st_birthtime", stat.st_ctime)}
+                     "born": _born(path, stat)}
         try:
             (_scan_codex if cli == "codex" else _scan)(path, entry)
         except OSError:

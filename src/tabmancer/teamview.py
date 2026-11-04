@@ -1207,6 +1207,9 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
             ("two members at least, as peers (or a lead line)", peers and len(members) < 2),
             ("for worktrees, the top folder of a git repository", self.worktrees and folder
              and Path(folder).is_dir() and not self.is_repository(folder)),
+            # A fresh member would start in the old one's worktree, on its branch, with its work in it.
+            (f"another name: an earlier team {name} left its worktrees in this project", self.worktrees and name
+             and folder and any(Path(folder, *teams.WORKTREES, f"{name}-{m.name}").exists() for m in members)),
             ("how many members at most, 1 to 9", deciding and not 1 <= self.most() <= 9)) if wrong]
 
     def show_preview(self) -> None:

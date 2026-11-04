@@ -84,7 +84,9 @@ def reveal(path: Path) -> None:
     """The file's folder, with the file picked where the system can."""
     try:
         if sys.platform == "win32":
-            subprocess.Popen(["explorer", f"/select,{path}"])
+            # As one line: given as a list, a path with a space had the switch quoted with it
+            # ("/select,C:\Users\John Smith\..."), which Explorer does not take for a switch.
+            subprocess.Popen(f'explorer /select,"{path}"')
         elif sys.platform == "darwin":
             subprocess.Popen(["open", "-R", str(path)])
         else:

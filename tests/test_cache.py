@@ -26,9 +26,9 @@ def counting_reads(monkeypatch):
     calls = []
     real = S.read_session
 
-    def counted(path):
+    def counted(path, strict=False):
         calls.append(path.stem)
-        return real(path)
+        return real(path, strict)
 
     monkeypatch.setattr(S, "read_session", counted)
     return calls

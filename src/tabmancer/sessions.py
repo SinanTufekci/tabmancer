@@ -25,7 +25,7 @@ from . import __version__
 from .config import read_json, write_json
 
 CACHE_FILE = "index.json"
-CACHE_FORMAT = 5  # bump when Session or the parser changes shape
+CACHE_FORMAT = 6  # bump when Session or the parser changes shape (6: a member told only by its lead is read)
 HEAD_BYTES = 512 * 1024
 TAIL_BYTES = 2 * 1024 * 1024
 MAX_HEAD_BYTES = 8 * 1024 * 1024
@@ -234,6 +234,13 @@ def _text(content) -> str:
     return ""
 
 
+# What Claude Code itself puts in a user record: <command-name>, <local-command-stdout>, <bash-input>,
+# <system-reminder>, <task-notification>, <ide_opened_file>... a tag with a dash or an underscore in its
+# name. A prompt of yours that begins with markup (<div class="card"> why is this not centred?) was
+# taken for one, and a session with no other prompt was left out of the list.
+CLAUDE_TAG = re.compile(r"<[a-z][a-z0-9]*[-_][a-z0-9_-]*[\s>/]")
+
+
 def _is_real_prompt(record: dict) -> bool:
     if record.get("type") != "user" or record.get("isSidechain") or record.get("isMeta"):
         return False
@@ -244,7 +251,7 @@ def _is_real_prompt(record: dict) -> bool:
                                          for b in content):
         return False
     text = _text(content).strip()
-    return bool(text) and not text.startswith("<") and not text.startswith("[Request interrupted")
+    return bool(text) and not CLAUDE_TAG.match(text) and not text.startswith("[Request interrupted")
 
 
 def _conversation_status(record: dict) -> Status:
@@ -311,8 +318,9 @@ def _shorten(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def read_session(path: Path) -> Session | None:
-    """Summarise one transcript. None if it holds no real prompt (nothing to resume)."""
+def read_session(path: Path, strict: bool = False) -> Session | None:
+    """Summarise one transcript. None if it holds no real prompt (nothing to resume), or (unless
+    strict, when the error is raised) when it cannot be read."""
     try:
         stat = path.stat()
     except OSError:
@@ -328,6 +336,8 @@ def read_session(path: Path) -> Session | None:
                 return None
             _read_tail(f, stat.st_size, session)
     except OSError:
+        if strict:
+            raise
         return None
     except Exception as error:  # noqa: BLE001 - a shape this version cannot read: this transcript goes, never the list
         unreadable(error)
@@ -335,11 +345,27 @@ def read_session(path: Path) -> Session | None:
     return session
 
 
+def _peer_text(record: dict) -> str:
+    """What another session said, when the record is its message coming in (a team member's); ''
+    otherwise, and for a subagent of the session handing its report back."""
+    origin = record.get("origin") if isinstance(record.get("origin"), dict) else {}
+    attached = record.get("attachment") if isinstance(record.get("attachment"), dict) else {}
+    if record.get("type") == "attachment" and attached.get("type") == "queued_command":
+        # The lead's message reaching a member that was busy (starting up, say): taken in mid-turn.
+        origin = attached.get("origin") if isinstance(attached.get("origin"), dict) else {}
+    elif record.get("type") != "user":
+        return ""
+    if origin.get("kind") != "peer" or origin.get("senderTaskId"):
+        return ""
+    return str(origin.get("body") or _text((record.get("message") or {}).get("content")))
+
+
 def _read_head(f, size: int, session: Session) -> None:
     span = HEAD_BYTES
     while True:
         f.seek(0)
         chunk = f.read(min(span, size))
+        peer = ""  # a team member starts with no message of its own: the lead's first one is its first prompt
         for record in _parse_lines(chunk, drop_first=False, drop_last=len(chunk) < size):
             if record.get("isSidechain"):
                 continue
@@ -356,7 +382,11 @@ def _read_head(f, size: int, session: Session) -> None:
             if _is_real_prompt(record):
                 session.first_prompt = _shorten(_text(record["message"]["content"]), 300)
                 return
+            peer = peer or _peer_text(record)
         if len(chunk) >= size or span >= MAX_HEAD_BYTES:
+            # Never written to, only told by the lead: it is still a session, to see and to resume.
+            # Taken for nothing to resume, such a member was missing from the list for good.
+            session.first_prompt = _shorten(peer, 300) if peer else ""
             return
         span *= 4
 
@@ -626,7 +656,11 @@ def _read_cached(paths: list[Path], reader=None) -> list[Session]:
                 pass  # an entry from an older layout: parse again
         if not reused:
             try:
-                session = (reader or read_session)(path)
+                session = reader(path) if reader else read_session(path, strict=True)
+            except OSError:
+                # Held by another program a moment (a backup, an antivirus): not cached as nothing to
+                # resume, which hid a finished session until its file changed, maybe for good.
+                continue
             except Exception as error:  # noqa: BLE001 - another CLI's reader, say: this file goes, never the list
                 unreadable(error)
                 session = None

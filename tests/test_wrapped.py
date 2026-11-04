@@ -342,3 +342,24 @@ def test_tabmancer_wrapped_saves_the_picture_and_turns_the_friday_word_off(home,
     assert not wrapped.enabled()
     main(["wrapped", "on"])
     assert wrapped.enabled()
+
+
+def test_the_folder_shown_picks_the_card_even_with_a_space_in_its_path(monkeypatch):
+    import importlib.util
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from tabmancer import share
+
+    # The tests put a stand-in in place of reveal: this is a copy of the module's own.
+    spec = importlib.util.spec_from_file_location("tabmancer._share_as_shipped", share.__file__)
+    shipped = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, shipped)  # its dataclasses look themselves up there
+    spec.loader.exec_module(shipped)
+    started = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **kwargs: started.append(args))
+    card = Path("C:/Users/John Smith/Downloads/card.png")
+    shipped.reveal(card)
+    assert started == [f'explorer /select,"{card}"']  # the switch outside the quotes, the path inside

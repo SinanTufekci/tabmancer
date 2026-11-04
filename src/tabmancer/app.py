@@ -1572,7 +1572,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def launch_for(self, session: Session, saved: dict[str, teams.Team] | None = None) -> Launch:
         """How a closed session opens: a team member's as that member (teams.as_member), one tabmancer
-        opened with an effort at that effort again (picks.resumed)."""
+        opened with an effort at that effort again (picks.resumed). One running in the background is
+        attached to, as its preview says: resumed, it was dropped as open already, and nothing opened."""
+        job = self.background_live.get(session.session_id) if session.status is Status.BACKGROUND else None
+        if job and job.get("id"):
+            return Launch(title=_clip(f"{session.project}: {session.title}", 48), cwd=session.cwd, mode=Mode.ATTACH,
+                          session_id=str(job["id"]), cli=session.cli)
         mode = self.mode(session)
         return picks.resumed(teams.as_member(session, Launch(
             title=_clip(f"{session.project}: {session.title}", 48), cwd=session.cwd, mode=mode,
@@ -1754,10 +1759,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                         "h again cancels.", title=f"Handing over {session.project}", timeout=10)
             self.update_row(now)
             return
-        closing = "Closing it; " if session.exit is Exit.RUNNING else ""
+        # As the list has it now, not as it was when h was pressed: it may have opened or closed
+        # while the dialog stood, and an open one written to by a second process was not closed.
+        closing = "Closing it; " if now.exit is Exit.RUNNING else ""
         self.notify(f"{closing}{writer} in the background. The fresh session opens when it is done.",
                     title=f"Handing over {session.project}", timeout=10)
-        self.hand_over(session, how)
+        self.hand_over(now, how)
 
     def open_ones(self) -> list[Session]:
         return [s for s in self.sessions.values() if s.exit is Exit.RUNNING]
@@ -2115,7 +2122,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def open_team(self, team: teams.Team, launches: list[Launch]) -> None:
         """A team's sessions: in tabs, or for a team whose members run in the background, its members
-        as background sessions first and then the lead's tab, once they are up."""
+        as background sessions first and then the lead's tab, once they are up. A member opened a
+        moment ago, here or by `tabmancer team start`, is not opened again: s twice, while the first
+        claude --bg calls were still running, started every member twice."""
+        coming = teams.opening()
+        launches = [launch for launch in launches if teams.session_name_of(team, launch) not in coming]
+        if not launches:
+            self.notify(f"The members of {team.name} are opening already.", timeout=3)
+            return
+        teams.note_opening([teams.session_name_of(team, launch) for launch in launches])
         quiet = [launch for launch in launches if teams.in_background(team, launch)]
         tabs = [launch for launch in launches if launch not in quiet]
         if quiet:
@@ -2507,8 +2522,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         session = self.current()
         if session is None:
             return ("none", False, waiting)
-        if self.selected:
-            return ("ticked", False, waiting)
+        if self.selected:  # with how many: the footer says "Open 3", and stood at "Open 1" from the first tick
+            return ("ticked", len(self.selected), waiting)
         member = "member-" if session.session_id in self.member_rows else ""
         return (member + ("open" if session.status is Status.RUNNING else "closed"), False, waiting)
 
@@ -2805,6 +2820,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.notify(f"The project {name} is back in sight.", timeout=4)
         else:
             self.marks.projects.add(key)
+            # Ticks on rows out of sight went on counting: Enter opened a session the list no longer showed.
+            self.selected -= {s.session_id for s in sessions if s.exit is not Exit.RUNNING}
             self.notify(f"Hid the project {name} ({self.counted(sessions)}; open ones still show). X shows it "
                         "again, and x on it brings it back.", timeout=6)
         self.marks.save()

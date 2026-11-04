@@ -98,8 +98,10 @@ def linked_team(folder: str, message: str, pick: picks.Pick, taken: set[str]) ->
         while member.name in {m.name for m in members}:
             member = replace(member, name=f"{member.name}{index + 1}")
         members.append(replace(member, model=member.model or pick.model, effort=member.effort or pick.effort))
-    base = teams.clean(Path(folder).name)[:18] or "team"
-    name = next(n for n in (base if k == 1 else f"{base}-{k}" for k in range(1, 100)) if n not in taken)
+    # Cleaned as new_team will clean it: cut to 18, "my-shop-frontends-" became "my-shop-frontends"
+    # there, a name taken already, and the second linked team was saved over the first.
+    base = teams.clean(teams.clean(Path(folder).name)[:18]) or "team"
+    name = next(n for n in (teams.clean(base if k == 1 else f"{base}-{k}") for k in range(1, 100)) if n not in taken)
     goal = "; ".join(m.focus for m in members)
     return teams.new_team(name, folder, goal, members, peers=True)
 

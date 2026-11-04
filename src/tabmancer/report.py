@@ -58,11 +58,15 @@ def digest(sessions: list[Session], first: date, last: date, summaries: dict[str
             lines.append(f"  asked first: {_shorten(session.first_prompt, 240)}")
             if session.last_prompt and session.last_prompt != session.first_prompt:
                 lines.append(f"  asked last: {_shorten(session.last_prompt, 240)}")
-            summary = summaries.get(session.session_id, {}).get("summary")
-            if summary:
+            kept = summaries.get(session.session_id, {})
+            summary, fresh = kept.get("summary"), kept.get("size") == session.size
+            if summary and fresh:
                 lines.append(f"  summary: {_shorten(summary, 400)}")
-            elif session.last_reply:
-                lines.append(f"  last reply: {_shorten(session.last_reply, 400)}")
+            else:  # a summary written before the latest work says what was, not what is
+                if session.last_reply:
+                    lines.append(f"  last reply: {_shorten(session.last_reply, 400)}")
+                if summary:
+                    lines.append(f"  summary, written before the latest work: {_shorten(summary, 300)}")
             if session.files:
                 lines.append("  files: " + ", ".join(session.files[:8]))
             if session.lines_added is not None:

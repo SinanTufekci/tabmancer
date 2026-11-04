@@ -32,7 +32,7 @@ from .sessions import Session, _registry_sessions, _shorten, sanitize
 MODEL = os.environ.get("TABMANCER_HANDOVER_MODEL", "sonnet")
 WRITE_SECONDS = 900  # a crowded session reads its whole context back before it writes
 CLOSE_SECONDS = 15
-IDLE = {"idle", "done"}  # live states in which a session waits for you
+IDLE = {"idle", "done", "resting"}  # live states in which a session waits (resting: a member, for its lead)
 AGAIN = "Close it yourself (/exit), then press h again"  # when an open session cannot be closed
 # The handover travels on the command line of the new tab, which Windows caps at 32K characters.
 MAX_CHARS = 20_000

@@ -185,11 +185,11 @@ def at_work(spans: dict[str, list[list[float]]]) -> tuple[list[float], float, fl
         for begin, end in own:
             minutes.update(range(int(begin // 60), max(int(begin // 60) + 1, math.ceil(end / 60))))
     hours, weekend = [0.0] * 24, 0.0
-    for hour, count in Counter(minute // 60 for minute in minutes).items():
-        moment = datetime.fromtimestamp(hour * 3600)  # local time: an hour of the day, a day of the week
-        hours[moment.hour] += count * 60
+    for minute in minutes:  # each in its own local hour: grouped by UTC hours, a zone half an hour off
+        moment = datetime.fromtimestamp(minute * 60)  # (India, Iran, Adelaide...) had every hour 30 minutes out
+        hours[moment.hour] += 60
         if moment.weekday() >= 5:
-            weekend += count * 60
+            weekend += 60
     return hours, weekend, longest
 
 

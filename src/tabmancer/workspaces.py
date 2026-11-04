@@ -15,7 +15,7 @@ from pathlib import Path
 from . import picks, teams
 from .config import read_json, write_json
 from .launch import Launch, Mode, default_mode
-from .sessions import Session, Status
+from .sessions import Exit, Session
 
 FILE = "workspaces.json"
 
@@ -97,10 +97,12 @@ def resolve(workspace: Workspace, sessions: list[Session]) -> tuple[list[Launch]
             continue
         here = [s for s in sessions if s.cwd and _folder_key(s.cwd) == key]
         wanted = sum(e.mode == CONTINUE for e in entries)
-        missing = max(0, wanted - sum(s.status is Status.RUNNING for s in here))
+        # Open in a tab or in the background (claude --bg): either way a process writes it, and a
+        # background one taken for closed was resumed a second time.
+        missing = max(0, wanted - sum(s.exit is Exit.RUNNING for s in here))
         if wanted and not missing:
             notes.append(f"{name}: already open")
-        resumable = [s for s in here if s.status is not Status.RUNNING][:missing]
+        resumable = [s for s in here if s.exit is not Exit.RUNNING][:missing]
         launches += [picks.resumed(teams.as_member(s, Launch(f"{name}: {s.title}", s.cwd, default_mode(s.status),
                                                              s.session_id, cli=s.cli), saved)) for s in resumable]
         for _ in range(missing - len(resumable)):

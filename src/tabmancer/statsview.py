@@ -8,7 +8,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import ClassVar
 
 from rich.console import Group, RenderableType
@@ -187,7 +187,7 @@ def tokens_parts(report: Report, sessions: dict[str, Session], accent: str) -> l
         out.append(line)
 
     newest = list(reversed(report.daily()))
-    out.append(BarChart("BY DAY", [f"{date.today() - timedelta(days=offset):%a %d %b}" for offset in range(len(newest))],
+    out.append(BarChart("BY DAY", [f"{report.last - timedelta(days=offset):%a %d %b}" for offset in range(len(newest))],
                         [use.total for use in newest],
                         [(human(use.total) if use.total else Text("·", style=MUTED), _out(use)) for use in newest]))
 
@@ -258,7 +258,7 @@ def work_parts(report: Report, sessions: dict[str, Session], accent: str) -> lis
     for offset in range(report.days):
         index = report.days - 1 - offset
         seconds, count = activity.day_seconds[index], activity.sessions_per_day[index]
-        dates.append(f"{date.today() - timedelta(days=offset):%a %d %b}")
+        dates.append(f"{report.last - timedelta(days=offset):%a %d %b}")
         values.append(seconds)
         figures.append((duration(seconds) if seconds else Text("·", style=MUTED),
                         Text(_sessions(count) if count else "", style=MUTED)))
@@ -666,8 +666,13 @@ class StatsScreen(ModalScreen[None]):
 
     @work(thread=True, exclusive=True, group="report")
     def write_report(self) -> None:
+        from .sessions import find_sessions
+
         try:
-            entry = reports.write(self.sessions, self.report)
+            # The sessions of the report's whole period, as tabmancer report reads them: the dashboard
+            # lists only its --days (14), and a 90-day report's notes told of the last 14 alone.
+            period = {s.session_id: s for s in find_sessions(self.report.days, quick=True)}
+            entry = reports.write(period | self.sessions, self.report)
             path, error = reports.save(entry), None
         except (summarize.SummaryError, OSError) as failure:
             path, error = None, str(failure)

@@ -94,6 +94,14 @@ async def test_ctrl_o_gives_the_members_worktrees_in_a_repository_only(tmp_path)
         dialog.query_one("#team-folder", Input).value = str(top)
         await pilot.pause(0.1)
         assert team_preview(dialog).startswith("Opens 4 tabs")
+        # An earlier team "shop" left its worktrees: a fresh member would start in the old one's.
+        (top / ".claude" / "worktrees" / "shop-api").mkdir(parents=True)
+        dialog.query_one("#team-name", Input).value = "shop "  # a change, to look again
+        await pilot.pause(0.1)
+        assert "an earlier team shop left its worktrees" in team_preview(dialog)
+        dialog.query_one("#team-name", Input).value = "shop2"
+        await pilot.pause(0.1)
+        assert team_preview(dialog).startswith("Opens 4 tabs")
         await pilot.press("ctrl+s")
         await pilot.pause(0.1)
-    assert host.result.worktrees
+    assert host.result.worktrees and host.result.name == "shop2"

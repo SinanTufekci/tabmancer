@@ -197,9 +197,11 @@ def copy_picture(canvas: Canvas) -> bool:
                                       timeout=10).returncode == 0
             for tool in (["wl-copy", "--type", "image/png"], ["xclip", "-selection", "clipboard", "-t", "image/png"]):
                 if shutil.which(tool[0]):
+                    # Not captured: xclip (and a wl-copy that does not detach) leaves a child serving
+                    # the clipboard with the pipes open, and run() waited the whole timeout for them.
                     with open(path, "rb") as source:
-                        return subprocess.run(tool, check=False, stdin=source, capture_output=True,
-                                              timeout=10).returncode == 0
+                        return subprocess.run(tool, check=False, stdin=source, stdout=subprocess.DEVNULL,
+                                              stderr=subprocess.DEVNULL, timeout=10).returncode == 0
             return False
         finally:
             os.unlink(path)

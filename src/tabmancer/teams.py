@@ -18,13 +18,15 @@ record whose origin is a peer.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
 import subprocess
+import time
 import unicodedata
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import picks
@@ -64,6 +66,7 @@ PEERS_MARK = "~peers\n"  # a kept line-up of peers begins with it (keep_lineup)
 DECIDE = "lead decides"  # the line-up the lead makes itself, with `tabmancer team add`
 DECIDE_MOST = 4  # members it may add unless told otherwise
 ADD = "tabmancer team add"  # the one command a deciding lead may run without asking
+START = "tabmancer team start"  # what a lead runs, without asking, to bring a closed member back
 
 
 @dataclass
@@ -205,7 +208,7 @@ def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int 
     picks the rest itself, at most that many; with background, the members run without tabs. With
     peers, nobody leads: the members as given, each in its tab (never in the background, as you talk
     to each of them). With worktrees, each member but the lead works in a git worktree of its own."""
-    stamp = datetime.now().isoformat(timespec="seconds")
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")  # with its offset: a zone change cannot move it
     if peers:
         return Team(clean(name), cwd, tidy(goal), [replace(m, lead=False) for m in members], stamp,
                     worktrees=worktrees)
@@ -402,6 +405,13 @@ def duties(member: Member) -> str:
     return " ".join(out)
 
 
+def reopen(team: Team) -> str:
+    """What a lead is told about a member that has closed: how to bring it back itself."""
+    return (f"A member that has closed (ListAgents no longer shows it, and it is not just starting) comes back as "
+            f"itself, where it left off, with the shell command {START} {team.name} <member>; with no member "
+            "named, every closed one does.")
+
+
 def _role(team: Team, member: Member) -> str:
     """A member's role without the worktree note (role adds it)."""
     others = roster(team, member)
@@ -423,14 +433,14 @@ def _role(team: Team, member: Member) -> str:
                    else "opens in its own tab and introduces ")
                 + "itself to you. Then send each its first task with SendMessage, keep track of who does what, "
                 "answer their questions, sort out overlaps and check the results. Do small glue work yourself. "
-                "Tell the user here when the goal is met or a decision is theirs.")
+                "Tell the user here when the goal is met or a decision is theirs. " + reopen(team))
     if member.lead:
         return (f"You are {team.session_name(member)}, the orchestrator of this team. {common} Split the "
                 "goal into tasks, send each member its first task with SendMessage, keep track of who does "
                 "what, answer their questions, sort out overlaps and check the results. Do small glue work "
                 "yourself and leave the members' areas to them. Tell the user here when the goal is met or "
                 "a decision is theirs. The members start alongside you: if ListAgents does not show one yet, "
-                "wait a moment and look again.")
+                "wait a moment and look again. " + reopen(team))
     if team.lead is None:
         text = (f"You are {team.session_name(member)}, one of the peers on this team. Your part: "
                 f"{member.focus or member.name}. {common} Nobody leads this team: your part is yours to plan and "
@@ -569,7 +579,9 @@ def role_file(team: Team, member: Member) -> Path | None:
 def options(team: Team, member: Member) -> tuple[str, ...]:
     # --allowedTools=... in one piece: written apart it takes every word after it as a tool.
     # A deciding lead may add members without asking: that one command, and only it.
-    tools = f"SendMessage,ListAgents,Bash({ADD}:*)" if member.lead and team.decide else "SendMessage,ListAgents"
+    # A lead may bring its closed members back without asking: that one command, and only it.
+    tools = "SendMessage,ListAgents" + (f",Bash({START}:*)" if member.lead else "") + (
+        f",Bash({ADD}:*)" if member.lead and team.decide else "")
     path = role_file(team, member)
     told = (("--append-system-prompt-file", str(path)) if path is not None else
             ("--append-system-prompt", " ".join(role(team, member).split())))
@@ -633,11 +645,62 @@ def home_of(team: Team, cwd: str) -> str:
     return team.cwd
 
 
+SKEW = timedelta(minutes=2)  # a member's session starts this long before its team at the most (clocks)
+
+
+@functools.lru_cache(maxsize=64)
+def _made(created: str) -> datetime | None:
+    """When a team was made, as a moment: one saved without its offset is the local time it was saved in."""
+    try:
+        made = datetime.fromisoformat(created)
+    except (TypeError, ValueError):
+        return None  # a team saved before teams kept the time they were made
+    return made if made.tzinfo else made.astimezone()
+
+
+def since_made(team: Team, session: Session) -> bool:
+    """Whether the session began once the team was made: a session of an earlier team of the same name,
+    in the same folder, is not this one's member. A new team is a fresh one: the old team's sessions
+    were taken for its members, and s (or tabmancer team start) brought them back instead. Compared as
+    moments, so a change of time zone or the clocks going back cannot drop a team's own members."""
+    made = _made(team.created)
+    began = session.started or session.last_active
+    if made is None or began is None:
+        return True
+    return (began if began.tzinfo else began.astimezone()) >= made - SKEW
+
+
+def session_name_of(team: Team, launch: Launch) -> str:
+    """The session name a member's launch opens under: its tab is titled '<team>: <member>'."""
+    return f"{team.name}-{launch.title.partition(': ')[2]}"
+
+
+OPENING_FILE = "opening.json"  # members tabmancer team start opened a moment ago: session name -> time
+OPENING_SECONDS = 45  # long enough for a tab to start claude and its session to be listed as open
+
+
+def opening(now: float | None = None) -> set[str]:
+    """The session names team start opened in the last OPENING_SECONDS: a second start of the same
+    member while its tab is still coming up would have two processes write one transcript."""
+    data = read_json(OPENING_FILE)
+    now = time.time() if now is None else now
+    return {name for name, when in (data.items() if isinstance(data, dict) else ())
+            if isinstance(when, (int, float)) and 0 <= now - when < OPENING_SECONDS}
+
+
+def note_opening(names: list[str], now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    data = read_json(OPENING_FILE)
+    kept = {name: when for name, when in (data.items() if isinstance(data, dict) else ())
+            if isinstance(when, (int, float)) and now - when < OPENING_SECONDS}
+    write_json(OPENING_FILE, {**kept, **dict.fromkeys(names, now)})
+
+
 def member_of(session: Session, saved: dict[str, Team] | None = None) -> tuple[Team, Member] | None:
     """The team and member a session plays: it bears a member's session name, in the team's folder
-    (or a worktree of it)."""
+    (or a worktree of it), and began once the team was made."""
     for team in (load() if saved is None else saved).values():
-        if not in_team_folder(team, session.cwd):
+        if not in_team_folder(team, session.cwd) or not since_made(team, session):
             continue
         for member in team.members:
             if session.title == team.session_name(member):
@@ -663,11 +726,15 @@ def lead_last(sessions: list[Session], saved: dict[str, Team] | None = None) -> 
     return sorted(sessions, key=lambda s: bool((found := member_of(s, saved)) and found[1].lead))
 
 
-def start(team: Team, sessions: dict[str, Session | None], fresh: bool = False) -> list[Launch]:
-    """Tabs for the members that are not open: closed ones resumed (unless fresh), missing ones new.
-    The orchestrator goes last, so the others are up when it starts handing out work."""
+def start(team: Team, sessions: dict[str, Session | None], fresh: bool = False,
+          only: set[str] | None = None) -> list[Launch]:
+    """Tabs for the members that are not open (of only, the members named, when given): closed ones
+    resumed (unless fresh), missing ones new. The orchestrator goes last, so the others are up when
+    it starts handing out work."""
     out = []
     for member in sorted(team.members, key=lambda m: m.lead):
+        if only is not None and member.name not in only:
+            continue
         session = sessions.get(member.name)
         if session is not None and session.exit is Exit.RUNNING:
             continue
@@ -691,8 +758,10 @@ def member_sessions(team: Team, sessions: list[Session], live: dict[str, dict] |
         name = team.session_name(member)
         info = live.get(name)
         found = by_id.get(str(info.get("sessionId"))) if info else None
+        if found is not None and not since_made(team, found):
+            found = None  # an earlier team's member of that name, open still
         if found is None:
-            named = [s for s in sessions if s.title == name and in_team_folder(team, s.cwd)]
+            named = [s for s in sessions if s.title == name and in_team_folder(team, s.cwd) and since_made(team, s)]
             found = max(named, key=lambda s: s.last_active, default=None)
         out[member.name] = found
     return out

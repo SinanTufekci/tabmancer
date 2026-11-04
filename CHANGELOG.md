@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased
+
+- **`tabmancer team start`.** A team's closed members come back from the command line, as `s` brings
+  them back in the dashboard: each as itself, where it left off, one that never started new, the
+  lead last, in the background where the team runs its members there; name some, or none for every
+  one that is not open. A lead may run it without asking and its role says so: `tabmancer team add`
+  took only members new to the team, so a lead whose member had closed could not bring it back. A
+  member open under its name (even one up and not yet written to), or opened by it a moment ago, is
+  left be, so no two sessions answer to one name; where no tab could open, it says so and exits 1.
+- **A new team is a fresh one.** A session counts as a team's member only if it began once the team
+  was made: a team made again under an earlier one's name, in the same folder, took that team's old
+  sessions for its own members, and `s` brought them back instead of starting afresh. The moment a
+  team is made is kept with its time zone, so a change of zone or the clocks going back drop no
+  member. A team with worktrees asks for another name where an earlier team of its name left its
+  worktrees in the project: a fresh member would have started in the old one's, on its branch.
+- **A member told only by its lead is in the list.** A member starts with no message of its own and
+  waits for the lead's; one never typed into was taken for a session with nothing to resume and
+  left out, so its team showed it as never started and `s` would have opened it a second time.
+- **Fixed, from a sweep of the whole code for bugs:**
+  - `s` twice on a team, while its first `claude --bg` calls were still running, started every
+    member twice; a member opened a moment ago (from the dashboard or `team start`) is not opened
+    again now.
+  - A handover chosen while the session opened or closed behind the dialog went by the session as it
+    was: an open one was written to by a second process and not closed.
+  - An idle member waiting for its lead (resting) could never be handed over or continued.
+  - Enter on a background session's row opened nothing ("open already"): it attaches now, as its
+    preview says.
+  - `tabmancer open` took a session running in the background for closed and resumed it a second
+    time.
+  - Clean-up asks again what is open before it moves anything: a session resumed while its screen
+    stood open went to the Recycle Bin.
+  - The stats screen crashed just after midnight with yesterday's report still in hand, and its days
+    were named one off.
+  - A 30- or 90-day report told only of the dashboard's last 14 days; a summary written before the
+    latest work no longer stands in for the last reply.
+  - A first message beginning with a dash (a list's line) was taken by claude for an option; one in
+    quotes through npm's `claude.cmd` lost everything after an `&`.
+  - A prompt beginning with markup (`<div …>`) was taken for Claude Code's own tag and its session
+    left out; a transcript a backup held for a moment stayed out of the list until it changed.
+  - A second team linked from `n` in a folder with a long name could be saved over the first.
+  - A background session still starting was cleared away by `c` twice in `B`.
+  - `tabmancer shortcut` and `startup` broke on a Desktop or Startup folder with non-ASCII letters
+    (PowerShell's output read in the wrong code page).
+  - Older model ids with a date (`claude-opus-4-20250514`) were read as 1M windows.
+  - On Linux, a forked session's replies went to the wrong one of the two; copying the Wrapped card
+    there froze the screen for 10 s; and in half-hour time zones the card's hours were 30 minutes out.
+  - Hiding a project left its sessions ticked; the footer's "Open N" stood at the first count; the
+    card's folder was not picked in Explorer where the path had a space.
+
 ## 0.1.3
 
 - **Model and effort where sessions start.** The `n` dialog has Model and Effort rows (left at

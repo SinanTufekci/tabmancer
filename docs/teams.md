@@ -66,6 +66,18 @@ without asking you (`--allowedTools=...,Bash(tabmancer team add:*)`). Each membe
 its own tab (or, with `Ctrl+B`, in the background) and introduces itself to the lead, and the
 team view shows them join.
 
+A member that has closed comes back with `tabmancer team start <team> [member ...]`, as `s` brings
+it back in the dashboard: as itself (its name, its role), where it left off; one that never started
+opens new; the lead last; in the background where the team runs its members there. With no member
+named, every one that is not open starts; one that is open, in a tab or in the background, is left
+be. Every lead may run it without asking (`--allowedTools=...,Bash(tabmancer team start:*)`) and is
+told of it in its role, so it can bring back a member it needs; `tabmancer team add` is for members
+new to the team.
+
+A new team is always a fresh one: a session is a team's member only if it began once the team was
+made, so sessions left by an earlier team of the same name, in the same folder, stay sessions of
+their own and are never brought back as the new team's members.
+
 ### Peers: no lead
 
 Or no lead at all: **peers**. Take the lead line out of the members box (or pick the line-up

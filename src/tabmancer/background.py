@@ -57,8 +57,9 @@ class Job:
 
     @property
     def tidy(self) -> bool:
-        """Safe to clear away: nothing is working and nothing waits for an answer."""
-        return not self.running or self.idle
+        """Safe to clear away: nothing is working and nothing waits for an answer. A session still
+        starting has no pid yet but works: it was cleared away as stopped (c twice), worktree and all."""
+        return (not self.running and self.state.lower() not in WORKING) or self.idle
 
 
 def jobs() -> list[Job] | None:

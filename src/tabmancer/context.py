@@ -15,7 +15,9 @@ from .sessions import Session
 
 SMALL, LARGE = 200_000, 1_000_000
 WARN_SHARE = float(os.environ.get("TABMANCER_CONTEXT_WARN", "0.6"))  # when a handover is worth suggesting
-MODEL = re.compile(r"(opus|sonnet|haiku|fable)-(\d+)(?:-(\d+))?")
+# The version after the family, one or two digits each: the date of an older id (claude-opus-4-20250514,
+# claude-3-7-sonnet-20250219) was read as a version above every one, and their windows as 1M.
+MODEL = re.compile(r"(opus|sonnet|haiku|fable)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)")
 
 
 def window(model: str, seen: int = 0) -> int:

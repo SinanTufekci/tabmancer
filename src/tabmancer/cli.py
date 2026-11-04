@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from dataclasses import asdict
@@ -87,10 +88,13 @@ def main(argv: list[str] | None = None) -> None:
                           help="open this workspace directly instead of the picker")
     startup = sub.add_parser("startup", help="open the picker at login when sessions were left open")
     startup.add_argument("action", choices=["on", "off", "status"])
-    teaming = sub.add_parser("team", help="add members to a team (what a lead that decides runs)")
-    teaming.add_argument("action", choices=["add"])
+    teaming = sub.add_parser("team", help="add members to a team (what a lead that decides runs), or start the "
+                                          "ones that are closed (what a lead runs to bring one back)")
+    teaming.add_argument("action", choices=["add", "start"])
     teaming.add_argument("team", help="the team's name")
-    teaming.add_argument("members", help='"name: area @model @effort; name: area" (model and effort are optional)')
+    teaming.add_argument("members", nargs="?", default="",
+                         help='add: "name: area @model @effort; name: area" (model and effort are optional); '
+                              "start: the members to start, by name (none: every one that is not open)")
     telling = sub.add_parser("notifications", help="desktop notifications when a session wants you back")
     telling.add_argument("action", nargs="?", choices=["on", "off", "test"])
     checking = sub.add_parser("updates", help="say when a newer tabmancer is out (PyPI, once a day): on or off")
@@ -152,7 +156,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "wrapped":
         save_wrapped(args.action, args.out, "story" if args.story else "wide", args.share)
     elif args.command == "team":
-        sys.exit(add_to_team(args.team, args.members))
+        sys.exit(start_team(args.team, args.members) if args.action == "start" else add_to_team(args.team, args.members))
     elif args.command == "startup-run":
         startup_main()
     else:
@@ -239,9 +243,115 @@ def add_to_team(name: str, spec: str) -> int:
           f"{told}. Message them with SendMessage by those names.")
     if note:
         print(f"Note: {note}.")
-    if leftover:
+    if leftover:  # nothing opened: said in the exit code too, so a lead does not wait for them
         print("No terminal could open their tabs. Run these:\n" + "\n".join(leftover))
+        return 1
     return 0
+
+
+MEMBER_DAYS = 90  # how far back a member's last session is looked for
+
+
+def start_team(name: str, spec: str = "") -> int:
+    """A team's members that are not open, started, as the dashboard's s starts them: a closed one
+    resumed as itself (its name, its role, where it left off), one that never started new, the lead
+    last; in the background where the team runs its members there. spec names the members (by name
+    or session name, apart by spaces, commas or semicolons); none, every one that is not open. What a
+    lead runs when a member it needs has closed: `tabmancer team add` takes only members new to it.
+
+    A member is left be when a session of its name is open (in a tab, in the background, or just up
+    and not yet written to: a member waits for the lead's first message with nothing in its
+    transcript) or when this command opened it a moment ago; two sessions of one name would both
+    answer to it, and two processes on one transcript would both write to it."""
+    from . import teams
+    from .launch import Mode, run_in_background
+    from .sessions import Exit, live_sessions, mark_live
+
+    saved = teams.load()
+    team = saved.get(teams.clean(name))
+    if team is None:
+        print(f"There is no team called {name}. Teams: {', '.join(saved) or 'none'}.")
+        return 1
+    names = [m.name for m in team.members]
+    prefix = f"{team.name}-"
+    wanted = set()
+    for part in re.split(r"[\s,;]+", spec):
+        word = part.strip().casefold()
+        if word.startswith(prefix) and teams.clean(word[len(prefix):]) in names:
+            word = word[len(prefix):]  # a session name, as ListAgents shows it: not cut to a name's length first
+        if teams.clean(word):
+            wanted.add(teams.clean(word))
+    if unknown := sorted(wanted - set(names)):
+        print(f"No member {', '.join(unknown)} on the team {team.name}. Its members: {', '.join(names)}.")
+        return 1
+    # Which are open is asked afresh, background sessions too, and once.
+    registry = teams.live_names()
+    live = live_sessions()
+    listed = find_sessions(MEMBER_DAYS, include_all=True, quick=True)
+    for session in listed:
+        mark_live(session, live.get(session.session_id))
+    found = teams.member_sessions(team, listed, live=registry)
+    # The session open under each name now: its id, from the pid files or the background sessions.
+    open_ids = {called: str(info.get("sessionId")) for called, info in registry.items()}
+    open_ids |= {str(entry.get("name")): sid for sid, entry in live.items() if entry.get("name")}
+    by_id = {session.session_id: session for session in listed}
+    just_opened = teams.opening()
+    chosen = [m for m in team.members if not wanted or m.name in wanted]
+    already, starting, other = [], [], []
+    for member in chosen:
+        session, called = found.get(member.name), team.session_name(member)
+        if session is not None and session.exit is Exit.RUNNING:
+            already.append(called)
+        elif called in just_opened:
+            starting.append(called)
+        elif called in open_ids:
+            # Open under its name: this member, up and not yet written to (it waits for the lead's
+            # first message), or a session of an earlier team of the name, open still.
+            seen = by_id.get(open_ids[called])
+            (other if seen is not None and not teams.since_made(team, seen) else already).append(called)
+    left_be = set(already) | set(starting) | set(other)
+    launches = teams.start(team, found, only={m.name for m in chosen if team.session_name(m) not in left_be})
+    if already:
+        print(f"Open already: {', '.join(already)}. Message them with SendMessage.")
+    if starting:
+        print(f"Opening a moment ago, so not opened again: {', '.join(starting)}. Wait for ListAgents to show them.")
+    if other:
+        print(f"A session of the name {', '.join(other)} is open, not this team's: close it, then start the member.")
+    if not launches:
+        return 0 if not other else 1
+    quiet = [launch for launch in launches if teams.in_background(team, launch)]
+    tabs = [launch for launch in launches if launch not in quiet]
+    started, failed = [], []
+    for launch in quiet:
+        try:
+            run_in_background(teams.background_start(team, launch))
+            started.append(launch)
+        except OSError as error:
+            failed.append(f"{teams.session_name_of(team, launch)} did not start in the background: {error}")
+    if tabs:
+        try:
+            leftover = open_tabs(tabs)
+        except OSError as error:
+            print(f"Their tabs could not open: {error}. The dashboard's s starts them.")
+            return 1
+        if leftover:  # no terminal here could open tabs: say so, so nobody waits for them
+            print("No terminal here could open their tabs, so none started. Run these:\n" + "\n".join(leftover))
+            return 1
+        started += tabs
+    teams.note_opening([teams.session_name_of(team, launch) for launch in started])
+
+    def said(launch: Launch) -> str:
+        how = "where it left off" if launch.mode is Mode.RESUME else "new, as it never started"
+        return f"{teams.session_name_of(team, launch)} ({how})"
+
+    if started:
+        where = ("in the background" if all(launch in quiet for launch in started) else
+                 "in their tabs" if not any(launch in quiet for launch in started) else "in tabs and the background")
+        print(f"Starting {', '.join(said(launch) for launch in started)} {where}. Each comes back with its name "
+              "and role; message them with SendMessage by those names once ListAgents shows them.")
+    for line in failed:
+        print(line)
+    return 0 if not failed and not other else 1
 
 
 def manage_notifications(action: str | None) -> None:

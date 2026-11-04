@@ -3,6 +3,8 @@ telling each other what touches the other's work. Made by leaving the lead line 
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from conftest import role_of, team_preview
 from test_team_tree import peer, send, transcript
 from textual.app import App
@@ -14,9 +16,11 @@ from tabmancer.teamview import NewTeamDialog, TeamScreen
 
 
 def pair(folder) -> teams.Team:
-    return teams.new_team("docs", str(folder), "Ship the docs site",
+    team = teams.new_team("docs", str(folder), "Ship the docs site",
                           teams.parse_members("api: the API reference @sonnet\nweb: the site's pages", lead_ok=True),
                           peers=True)
+    team.created = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")  # before its sessions
+    return team
 
 
 def test_peers_have_no_lead_and_each_starts_on_its_own_part(tmp_path):

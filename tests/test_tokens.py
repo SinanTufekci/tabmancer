@@ -172,3 +172,15 @@ def test_tokens_command_prints_json(home, capsys):
     assert data["sessions"][0]["session_id"] == "s1" and data["sessions"][0]["output"] == 7
     assert len(data["days"]) == 14 and data["days"][-1]["output"] == 7
     assert data["models"]["claude-opus-5-5"]["total"] == 7 + 1000 + 2 + 50
+
+
+def test_a_report_from_before_midnight_still_compares_its_weeks():
+    # The dashboard open overnight: the report collected yesterday, the stats asked for just after
+    # midnight. Counted from today, the week ran past the window's end (IndexError).
+    from datetime import date, timedelta
+
+    from tabmancer import tokens
+
+    report = tokens.Report(date.today() - timedelta(days=14), 14)
+    assert report.last == date.today() - timedelta(days=1)
+    assert report.week_against_last() is not None

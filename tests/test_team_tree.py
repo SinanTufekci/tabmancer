@@ -53,6 +53,7 @@ def shop(home, tmp_path, monkeypatch, api_open=True):
     folder = tmp_path / "shop"
     folder.mkdir()
     made = teams.new_team("shop", str(folder), "Add a checkout", teams.parse_members("api: endpoints; ui: screens"))
+    made.created = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")  # before its sessions
     teams.save({"shop": made})
     transcript(home, folder, "lead-1", "shop-lead", [send("shop-api", "make the endpoint", 9),
                                                     peer("shop-api", "endpoint done", 2)])
@@ -168,6 +169,7 @@ async def test_e_folds_a_team_and_its_row_opens_the_team_view(fake_home, tmp_pat
     shop(fake_home, tmp_path, monkeypatch)
     # A second team, listed first, so that the shop's row is not the first one.
     blog = teams.new_team("blog", str(tmp_path / "shop"), "Write posts", [])
+    blog.created = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")  # before its sessions
     teams.save({"blog": blog, **teams.load()})
     transcript(fake_home, tmp_path / "shop", "blog-1", "blog-lead", [])
     live = sessions._agents_json()
