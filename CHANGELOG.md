@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3
 
 - **Model and effort where sessions start.** The `n` dialog has Model and Effort rows (left at
   your default, nothing is passed), `tabmancer new` takes `--model` and `--effort`, and a team's
@@ -36,6 +36,36 @@
   The tabs are titled by their lines. `tabmancer new` takes `--prompt` more than once, and
   `--linked`. The dialog keeps its message box, model, effort and keys on a 120x30 screen however
   many projects there are: the list of folders once pushed them out of sight.
+- **A team with a long goal opens.** A member's role now goes to Claude Code in a file of its own
+  (`--append-system-prompt-file`), and a first message names the goal on one line, cut short when
+  it is long. With a plan of a few pages pasted in as the goal, each tab's command line carried it
+  once or twice, six tabs came to 38,000 characters, past Windows' 32,767, and no tab opened. A
+  goal keeps its lines now, so a pasted plan stays readable in the roles. Many tabs at once go to
+  Windows Terminal in several command lines when one would be too long, and a terminal that will
+  not start is said in the dashboard rather than ending it.
+- **A `;` inside a member's part stays in it.** `art: drafts first; icons and the splash [assets/]`
+  made a second member named after the words after the `;` (Claude's suggested line-ups write
+  them too, and so does a lead adding members). A `;` starts another member only when a name
+  follows it (`; ui: screens`, `; tests @haiku`). Names may be written in any letters.
+- **A member that went into a folder of the project is still the team's.** A transcript keeps the
+  folder its session was in last, so a member that had gone into `src/` showed as never started
+  and `s` started a fresh one; it is found, and resumed in the project, now.
+- **Wrapped under a night sky.** Both cards are drawn on a sky going from deep blue to purple, with
+  stars where nothing is written and Bit glowing in the theme's colour; each number is a line of
+  its own, with a sign, the number large and in a heavier stroke, and its name in a colour of its
+  own. Labels are in small letters now (the pixel font has them, the tails of g, j, p, q and y
+  under the line). The `W` window is the card's sky too, with the wide and the story card to pick
+  at its top; the share menu matches it, and so does the card in words where no pictures are drawn.
+- **`n` and the new-team form, made over.** Each is in framed cards, the one the cursor is in lit
+  in the theme's colour, with one line of help for the box in focus instead of many grey ones, and
+  its keys always on screen. `n` has two columns: the folders on the left (headings, ✓ for the ones
+  ticked, where the highlighted one is under the list, your home as `~`, what the filter found
+  lit), and on the right the first message, the model and effort, and every tab that will open.
+  A `/` and a `\` are alike in the filter (`desktop/shop` finds `C:\...\Desktop\shop`) and in the
+  team's project box, and every word typed must match. The new-team form has the team and its
+  line-up on the left, and on the right the team it will open, drawn as the team view draws one
+  (the lead on top, the members on their wires, each card with its model and effort), over where
+  the members run. A goal written in the form keeps its lines.
 
 ## 0.1.2
 
