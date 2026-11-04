@@ -820,6 +820,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def faded_in(self) -> None:
         """The fade-in over: every widget takes its colours afresh (faded says so to the tests)."""
         self.refresh_css(animate=False)
+        # And is drawn again: refresh_css redraws only a widget whose own styles changed, and a part
+        # drawn during the fade, its styles the same all along, kept its lines blended towards black
+        # (the preview's facts column, seen black for good on the Linux and macOS runners).
+        for widget in (self.body, *self.body.query("*")):
+            widget.refresh()
         self.faded = True
 
     # --- rows ---------------------------------------------------------------------

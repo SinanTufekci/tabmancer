@@ -48,6 +48,8 @@
     there froze the screen for 10 s; and in half-hour time zones the card's hours were 30 minutes out.
   - Hiding a project left its sessions ticked; the footer's "Open N" stood at the first count; the
     card's folder was not picked in Explorer where the path had a space.
+  - A part of the dashboard drawn while it faded in could stay blended towards black for good (the
+    preview's facts column): every part is drawn again once the fade is over.
 
 ## 0.1.3
 
