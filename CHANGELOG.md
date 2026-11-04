@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4
 
 - **`tabmancer team start`.** A team's closed members come back from the command line, as `s` brings
   them back in the dashboard: each as itself, where it left off, one that never started new, the
