@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import ClassVar
 
@@ -20,10 +20,10 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import background, context, focus, summarize, teams, teamtree, viewmodel
+from . import background, context, focus, newsessions, summarize, teams, teamtree, viewmodel
 from .dialogs import FolderSuggester, cards, frame, light_rows, pill, pills, tilde, title
 from .safework import work
-from .sessions import Exit, Session, Status
+from .sessions import Exit, Session, Status, folder_key
 from .statsview import copy_text
 from .theme import AMBER, BLUE, CYAN, DEFAULT_THEME, GREEN, MUTED, ORANGE, RED, TEXT, THEMES, keys, mix
 from .tokens import human
@@ -919,9 +919,37 @@ LEAD_LINE = f"{teams.LEAD}: {teams.LEAD_FOCUS}"
 MEMBERS_HELP = "name: area @model @effort · lead @opus @xhigh · code @opus @high · tests, docs @sonnet @medium"
 LEAD_HELP = ("@opus @xhigh (any model, any effort) at the end: the lead's own; "
              "it picks the members' itself")
+SAID_HERE = 160  # characters of the message to a team at work's lead the form shows: all of it is sent
+TOWARD_HELP = {  # the box's help when Ctrl+R said to add to a team at work, or that it has the goal
+    teams.ADD_TO: "The members to add, one a line as in a line-up: each opens in its tab and joins the team at work.",
+    teams.HAS_IT: "The message for the lead, yours to change: Ctrl+S types it into its tab once it waits for you.",
+}
 
 
-class NewTeamDialog(ModalScreen[teams.Team | None]):
+class ProjectList(OptionList, can_focus=False):
+    """The projects to pick the team's from, moved through from the Project box (↑/↓, Enter) or
+    clicked: it never takes the focus itself, so Tab goes from box to box as before."""
+
+
+@dataclass
+class JoinTeam:
+    """The new-team form's answer when the goal adds to a team at work: these members join it."""
+    team: str
+    members: str  # one a line, as in a line-up
+    to: str       # the session told: its lead, or among peers the member the goal concerns most
+    message: str
+    goal: str     # what the team's goal grows by
+
+
+@dataclass
+class TellTeam:
+    """The new-team form's answer when a team at work has the goal already: its lead is told."""
+    team: str
+    to: str
+    message: str
+
+
+class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
     """A name, a folder, a goal and the line-up, one member a line. Below it, what will open,
     or what is still missing, as you type. Enter goes to the next box; Ctrl+S creates."""
 
@@ -952,6 +980,13 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
     NewTeamDialog #team-most { width: 3; }
     NewTeamDialog .aside { width: 1fr; color: $text-muted; padding-left: 2; }
     NewTeamDialog #graph-card { height: 1fr; }
+    NewTeamDialog #team-atwork { height: auto; display: none; }
+    NewTeamDialog #projects-card { height: 1fr; display: none; }
+    NewTeamDialog #team-side.-picking #projects-card { display: block; }
+    NewTeamDialog #team-side.-picking #graph-card { display: none; }
+    NewTeamDialog #team-project-head { height: 1; }
+    NewTeamDialog ProjectList { height: 1fr; min-height: 3; border: none; padding: 0; background: $surface; }
+    NewTeamDialog #team-project-where { height: 1; color: $text-muted; }
     NewTeamDialog #team-preview { height: auto; margin-bottom: 1; }
     NewTeamDialog #team-graph-box { height: 1fr; scrollbar-size-vertical: 1; }
     NewTeamDialog #runs-card { height: auto; }
@@ -966,12 +1001,25 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         Binding("ctrl+r", "suggest", "Suggest a line-up", priority=True),
         Binding("ctrl+g", "show_role", "What a member is told", priority=True),
         Binding("ctrl+s", "create", "Create", priority=True),
+        Binding("ctrl+n", "new_instead", "A new team after all", priority=True),
     ]
 
-    def __init__(self, folder: str, taken: set[str], folders: list[str] | None = None) -> None:
+    def __init__(self, folder: str, taken: set[str], folders: list[str] | None = None,
+                 projects: list[newsessions.Project] | None = None,
+                 working: list[tuple[teams.Team, set[str]]] | None = None) -> None:
         super().__init__()
         self.folder, self.taken = folder, taken
-        self.folders = folders or []  # known project folders, newest first: the folder box completes them
+        # The teams at work now (each with its open members' names): one in the project is weighed
+        # by Ctrl+R, which may add the goal's members to it, or leave the goal to it (self.toward).
+        self.working = working or []
+        self.toward: teams.Suggestion | None = None
+        self.before_toward: str | None = None  # the line-up in the box before Ctrl+R put another team's in it
+        # The projects you worked in, newest first, listed to pick from while the Project box has the
+        # focus (as n lists them); their folders are what the box completes with →.
+        self.projects = projects if projects is not None else [newsessions.Project(f) for f in folders or []]
+        self.folders = folders if folders is not None else [p.cwd for p in self.projects]
+        self.picking_from = ""  # the Project box's words when it took the focus: typing other ones filters
+        self.listed: dict[str, newsessions.Project] = {}  # folder key -> the project on that row
         self.template = 0
         self.tried = False  # once Ctrl+S has been pressed, what is missing is said louder
         self.saved = teams.saved_lineups()  # line-ups of your own, kept with Ctrl+L
@@ -1011,7 +1059,13 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
                                         max_length=1)
                             yield Static("members, picked by the lead", classes="aside")
                 with Vertical(id="team-side"):
+                    # In the graph's place while the Project box has the focus.
+                    with Vertical(id="projects-card", classes="card"):
+                        yield Static("", id="team-project-head")
+                        yield ProjectList(id="team-projects")
+                        yield Static("", id="team-project-where")
                     with Vertical(id="graph-card", classes="card"):
+                        yield Static("", id="team-atwork")  # a team at work in the project, said
                         yield Static("", id="team-preview")
                         with VerticalScroll(id="team-graph-box"):
                             yield LineupGraph(teams.Team("", "", ""), self.accent(), id="team-graph")
@@ -1039,21 +1093,131 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         return THEMES.get(theme, THEMES[DEFAULT_THEME])[1]
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
-        light_rows(self)
+        if self.picking() and not self.query_one("#team-side").has_class("-picking"):
+            self.picking_from = self.folder_box.value.strip()  # every project, until other words are typed
+        self.show_projects()
+        self.light()
         self.show_help()
 
     def on_descendant_blur(self, event: events.DescendantBlur) -> None:
+        self.light()
+
+    def light(self) -> None:
+        """The cards that hold the focus lit, and the projects' while it is the Project box's."""
         light_rows(self)
+        self.query_one("#projects-card").set_class(self.picking(), "-lit")
+
+    # --- the project, picked from the ones you worked in ---------------------------------------
+
+    @property
+    def folder_box(self) -> Input:
+        return self.query_one("#team-folder", Input)
+
+    def picking(self) -> bool:
+        """The Project box has the focus: the projects are listed on the right to pick from."""
+        return self.is_mounted and self.focused is self.folder_box
+
+    def project_candidates(self) -> list[newsessions.Project]:
+        """Every project until other words than the box's are typed (its own folder among them), then
+        the ones they find, as n finds them (newsessions.find)."""
+        typed = self.folder_box.value.strip()
+        if typed != self.picking_from:
+            return newsessions.find(typed, self.projects)
+        hits = list(self.projects)
+        path = Path(os.path.expanduser(typed)) if typed else None
+        if path is not None and path.is_dir() and folder_key(str(path)) not in {folder_key(p.cwd) for p in hits}:
+            hits.insert(0, newsessions.Project(str(path.resolve())))
+        return hits
+
+    def project_row(self, project: newsessions.Project, width: int, terms: list[str]) -> Text:
+        """A project as n lists it: its name, its sessions, when it was last worked in."""
+        row = newsessions.project_columns(project, width, terms)
+        row.no_wrap, row.overflow = True, "ellipsis"
+        return row
+
+    def show_projects(self, again: bool = True) -> None:
+        """While the Project box has the focus, the projects in the graph's place, the box's folder
+        (or the first one found) highlighted. Shown a moment ago, the list has no width yet: again
+        once it is laid out, and only once, so it can never go on asking."""
+        if not self.is_mounted:
+            return
+        picking = self.picking()
+        self.query_one("#team-side").set_class(picking, "-picking")
+        if not picking:
+            return
+        listing = self.query_one(ProjectList)
+        hits = self.project_candidates()
+        self.listed = {folder_key(p.cwd): p for p in hits}
+        typed = self.folder_box.value.strip()
+        terms = typed.split() if typed != self.picking_from else []
+        width = max(8, (listing.content_size.width or 50) - listing.styles.scrollbar_size_vertical - 1
+                    - newsessions.TAIL)
+        listing.clear_options()
+        listing.add_options([Option(self.project_row(p, width, terms), id=key) for key, p in self.listed.items()])
+        if self.listed:
+            here = folder_key(os.path.expanduser(typed)) if typed else ""
+            keys_ = list(self.listed)
+            listing.highlighted = keys_.index(here) if here in self.listed and not terms else 0
+        else:
+            listing.add_option(Option(Text(f"Nothing matches “{typed}”. A folder path works too.", style=MUTED),
+                                      disabled=True))
+        self.query_one("#team-project-head", Static).update(Text(
+            "PROJECT".ljust(width) + "SESSIONS".rjust(10) + "LAST".rjust(10), style=f"bold {MUTED}"))
+        card = self.query_one("#projects-card")
+        card.border_title = "Projects"
+        card.border_subtitle = (f"{len(self.listed)} of {len(self.projects)}" if terms
+                                else f"{len(self.projects)} project{'s' * (len(self.projects) != 1)}")
+        self.show_project_where()
+        if again and not listing.content_size.width:
+            self.call_after_refresh(self.show_projects, False)
+
+    def highlighted_project(self) -> newsessions.Project | None:
+        listing = self.query_one(ProjectList)
+        if listing.highlighted is None or not listing.option_count:
+            return None
+        return self.listed.get(listing.get_option_at_index(listing.highlighted).id or "")
+
+    def show_project_where(self) -> None:
+        """Under the list: where the highlighted project is, your home as ~."""
+        project = self.highlighted_project()
+        where = self.query_one("#team-project-where", Static)
+        room = max(8, (where.content_size.width or 50) - 2)
+        where.update(Text("▸ " + newsessions.clip(tilde(project.cwd), room), style=MUTED) if project is not None else "")
+
+    def pick_project(self, key: str | None = None) -> None:
+        """The project highlighted (or the one clicked) into the box."""
+        project = self.listed.get(key) if key else self.highlighted_project()
+        if project is not None and os.path.expanduser(self.folder_box.value.strip()) != project.cwd:
+            self.folder_box.value = tilde(project.cwd)
+
+    def on_key(self, event: events.Key) -> None:
+        # In the Project box ↑/↓ move through the projects (the box itself has no use for them).
+        moves = {"up": "cursor_up", "down": "cursor_down", "pageup": "page_up", "pagedown": "page_down"}
+        if self.picking() and event.key in moves:
+            getattr(self.query_one(ProjectList), f"action_{moves[event.key]}")()
+            event.stop()
+            event.prevent_default()
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if isinstance(event.option_list, ProjectList):
+            self.show_project_where()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if isinstance(event.option_list, ProjectList):  # a click on one
+            event.stop()
+            self.pick_project(event.option.id)
+            self.query_one("#team-goal", TextArea).focus()
 
     def show_help(self) -> None:
         """One line under the cards: how to fill the box in focus."""
         focused = self.focused
         about = {
             "team-name": "One word: each member's tab is named after it, checkout-api.",
-            "team-folder": "→ completes a folder you worked in. With worktrees (Ctrl+O), a repository's top folder.",
+            "team-folder": "Type to find a project; ↑/↓ and Enter pick it. A folder path works too, → completes it.",
             "team-goal": "What the team is for. A plan pasted in keeps its lines; every member gets all of it.",
-            "team-members": LEAD_HELP if self.deciding() else MEMBERS_HELP,
-            "team-most": "At most this many members: the lead reads the goal and picks them, fewer for small work.",
+            "team-members": (TOWARD_HELP[self.toward.kind] if self.toward is not None
+                             else LEAD_HELP if self.deciding() else MEMBERS_HELP),
+            "team-most": "At most this many: the lead picks them from the goal, fewer for small work. Ctrl+R suggests one.",
         }.get(focused.id if focused is not None else "",
               "Every member is a session of its own; with no lead line, they work as peers.")
         self.query_one("#team-help", Label).update(about)
@@ -1127,9 +1291,92 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
                 and not any(not m.lead for m in teams.parse_members(self.members_text(), lead_ok=True)))
 
     def action_template(self) -> None:
+        if self.toward is not None:  # from members for a team at work back to a team of its own
+            self.leave_toward()
+            return
         self.template = (self.template + 1) % len(self.lineups)
         self.query_one("#team-members", TextArea).text = self.template_text(self.lineups[self.template])
         self.show_preview()
+
+    # --- a team at work in the project -----------------------------------------------------------
+
+    def teams_here(self, folder: str) -> list[tuple[teams.Team, set[str]]]:
+        """The teams at work in the project (or a folder of it), each with its open members."""
+        return [(team, names) for team, names in self.working if folder and teams.in_team_folder(team, folder)]
+
+    def working_team(self, name: str) -> teams.Team | None:
+        return next((team for team, _ in self.working if team.name == name), None)
+
+    def leave_toward(self) -> None:
+        """A team of its own after all: the line-up that was in the box before, as you left it."""
+        self.toward = None
+        before, self.before_toward = self.before_toward, None
+        self.query_one("#team-members", TextArea).text = (
+            before if before is not None else self.template_text(self.lineups[self.template]))
+        self.show_preview()
+
+    def action_new_instead(self) -> None:
+        """Ctrl+N: after Ctrl+R said to add to a team at work, or leave the goal to it: a new team."""
+        if self.toward is not None:
+            self.leave_toward()
+
+    def show_at_work(self, folder: str) -> None:
+        """A line at the top of the drawing's card: the teams at work in this project."""
+        here = self.teams_here(folder)
+        line = self.query_one("#team-atwork", Static)
+        line.display = bool(here) and self.toward is None
+        if here:
+            names = ", ".join(f"{team.name} ({len(open_names)} open)" for team, open_names in here)
+            line.update(Text.assemble(("▲ ", AMBER), (names, f"bold {AMBER}"),
+                                      (" at work in this project: Ctrl+R weighs the goal against it.", MUTED)))
+
+    def show_toward(self) -> None:
+        """The cards when Ctrl+R said to add members to a team at work, or that it has the goal: what
+        joins it (or what its lead is told), the team drawn, and what Ctrl+S does."""
+        toward = self.toward
+        team = self.working_team(toward.team)
+        if team is None:
+            self.leave_toward()
+            return
+        box = self.query_one("#team-members", TextArea)
+        self.query_one("#team-lineup").display = False
+        self.query_one("#team-most-row").display = False
+        box.set_class(False, "alone")
+        self.show_help()
+        card, ready = self.query_one("#graph-card"), self.query_one("#team-ready", Label)
+        preview = self.query_one("#team-preview", Static)
+        if toward.kind == teams.ADD_TO:
+            self.query_one("#lineup-card").border_title = f"Members to add to {toward.team}"
+            new = [m for m in teams.parse_members(box.text) if m.name not in {m.name for m in team.members}]
+            self.query_one(LineupGraph).show(replace(team, members=[*team.members, *new]))
+            told = team.session_name(team.lead) if team.lead is not None else "the others"
+            heading = Text(f"Adds {len(new)} to {toward.team}", style=f"bold {GREEN}")
+            # Its start only: a whole message (a long one, often) pushed the team out of the card. All of it is sent.
+            said = teams.cut(toward.message, SAID_HERE)
+            how = Text.assemble((f"{toward.team} is at work here, and this goal adds to its work. ", f"bold {AMBER}"),
+                                ((f"Each one opens in its tab and introduces itself to {told}; {toward.to} is told: "
+                                  f"“{said}” Ctrl+N: a new team instead."), MUTED))
+            does = "Ctrl+S adds them"
+            self.query_one("#team-title", Label).update(title("Add to a team at work", toward.team))
+        else:
+            self.query_one("#team-title", Label).update(title("Tell a team at work", toward.team))
+            self.query_one("#lineup-card").border_title = f"To {toward.to}"
+            self.query_one(LineupGraph).show(team)
+            heading = Text(f"{toward.team} has this goal", style=f"bold {AMBER}")
+            how = Text.assemble((f"{toward.team} is at work on this goal already: no new team needed. ",
+                                 f"bold {AMBER}"),
+                                ((f"Ctrl+S sends the message on the left to {toward.to}: typed into its tab once it "
+                                  "waits for you. Ctrl+N: a new team anyway."), MUTED))
+            does = "Ctrl+S sends it"
+        card.border_title = heading
+        missing = self.missing()
+        if missing:
+            ready.update("")
+            style = f"bold {AMBER}" if self.tried else MUTED
+            preview.update(Text.assemble(("Still needed: ", style), (", ".join(missing), style)))
+        else:
+            ready.update(Text.assemble(("● ", GREEN), ("ready", f"bold {GREEN}"), (f"  {does}", MUTED)))
+            preview.update(how)
 
     def action_keep_lineup(self) -> None:
         """Ctrl+L: keep the members in the box as a line-up of your own, under a name. On a kept
@@ -1181,9 +1428,13 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
+        if event.input.id == "team-folder":
+            self.pick_project()  # the project highlighted: the box's own, or the one found
         self.focus_next()  # Enter goes on to the next box; Ctrl+S creates
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "team-folder":
+            self.show_projects()
         self.show_preview()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -1196,6 +1447,11 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
                 teams.parse_members(self.members_text(), lead_ok=True))
 
     def missing(self) -> list[str]:
+        if self.toward is not None:  # joining a team at work, or telling it: no name, no line-up of its own
+            text = self.members_text().strip()
+            if self.toward.kind == teams.ADD_TO:
+                return [] if teams.parse_members(text) else ["a member to add"]
+            return [] if text else ["a message for the lead"]
         name, folder, goal, members = self.read()
         deciding, peers = self.deciding(), self.peers()
         return [problem for problem, wrong in (
@@ -1217,6 +1473,17 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         team that will open, drawn, under a line on what opens and how (or what is still needed)."""
         if not self.is_mounted:
             return
+        _, folder, _, _ = self.read()
+        if self.toward is not None and not any(t.name == self.toward.team for t, _ in self.teams_here(folder)):
+            self.leave_toward()  # another project now: that team is not at work in it
+            return
+        self.show_at_work(folder)
+        if self.toward is not None and not self.asking:
+            self.show_toward()
+            return
+        self.query_one("#team-title", Label).update(title("New team"))
+        self.query_one("#lineup-card").border_title = "Line-up"
+        self.query_one("#team-lineup").display = True
         self.query_one("#team-lineup", Static).update(self.lineup())
         self.query_one("#team-where", Static).update(self.where())
         deciding = self.deciding()
@@ -1266,9 +1533,10 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
     # --- help with the roles ---------------------------------------------------------------
 
     def action_suggest(self) -> None:
-        """Ctrl+R: Claude reads the goal and the project's top level and writes a line-up into the
-        box, each member with its part, its own files, a model and an effort, a lead only when the
-        parts need one. One call on your plan; the box is yours to change after."""
+        """Ctrl+R: Claude reads the goal and the project's top level and suggests the team's size, and
+        why, with a line-up: each member with its part, its own files, a model and an effort, a lead
+        only when the parts need one. The line-up goes into the box; where the lead decides, the size
+        goes into At most instead. One call on your plan; it is yours to change after."""
         if self.asking:
             return
         _, folder, goal, _ = self.read()
@@ -1276,32 +1544,59 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
             self.notify("Write the goal and the project folder first: the line-up is suggested for them.",
                         severity="warning", timeout=5)
             return
-        most = self.most() if self.deciding() and self.most() >= 2 else teams.SUGGEST_MOST
-        prompt = teams.suggestion_prompt(goal, str(Path(folder).resolve()), most)
+        here = self.teams_here(folder)
+        prompt = teams.suggestion_prompt(goal, str(Path(folder).resolve()), working=here)
+        if self.toward is not None:  # weighed afresh, from the line-up you had
+            self.leave_toward()
         self.asking = True
         self.show_preview()
-        self.run_worker(lambda: self.ask_for_lineup(prompt), thread=True, exclusive=True, group="suggest",
-                        exit_on_error=False)
+        self.run_worker(lambda: self.ask_for_lineup(prompt, [team for team, _ in here], goal), thread=True,
+                        exclusive=True, group="suggest", exit_on_error=False)
 
-    def ask_for_lineup(self, prompt: str) -> None:
+    def ask_for_lineup(self, prompt: str, here: list[teams.Team] | None = None, goal: str = "") -> None:
         """In a thread: the answer, or why there is none."""
         try:
-            lines = teams.suggested_lines(summarize.ask(prompt, "", timeout=180, effort=teams.SUGGEST_EFFORT))
-            error = "" if lines else "Claude's answer named no members."
+            answer = summarize.ask(prompt, "", timeout=180, effort=teams.SUGGEST_EFFORT)
+            suggestion = teams.read_suggestion(answer, here, goal)
+            error = "" if suggestion.lines or suggestion.kind != teams.OWN_TEAM else "Claude's answer named no members."
         except Exception as problem:  # noqa: BLE001 - a failed suggestion leaves the box as it was, and says why
-            lines, error = "", str(problem) or type(problem).__name__
-        self.app.call_from_thread(self.suggested, lines, error)
+            suggestion, error = None, str(problem) or type(problem).__name__
+        self.app.call_from_thread(self.suggested, suggestion, error)
 
-    def suggested(self, lines: str, error: str) -> None:
+    def suggested(self, suggestion: teams.Suggestion | None, error: str) -> None:
         self.asking = False
         if not self.is_mounted:
             return
-        if error:
+        if error or suggestion is None:
             self.notify(f"No line-up suggested: {error}", severity="warning", timeout=8)
+            self.show_preview()
+            return
+        lines, count, lead = suggestion.lines, suggestion.count, suggestion.lead
+        why = suggestion.why.rstrip(" .")
+        why = f" — {why}" if why else ""  # "because ...", or in the language Claude answers in ("çünkü ...")
+        box = self.query_one("#team-members", TextArea)
+        if suggestion.kind == teams.ADD_TO:  # the goal adds to a team at work: members for it, its lead told
+            self.toward, self.before_toward = suggestion, box.text
+            box.text = lines
+            self.notify(f"{suggestion.team} is at work here, and this goal adds to it: Claude suggests adding "
+                        f"{count} member{'s' * (count != 1)}{why}. Ctrl+S adds them and tells {suggestion.to}; "
+                        "Ctrl+N makes a new team instead.", timeout=15)
+        elif suggestion.kind == teams.HAS_IT:  # a team at work has it: the goal, as a prompt for its lead
+            self.toward, self.before_toward = suggestion, box.text
+            box.text = suggestion.message
+            self.notify(f"{suggestion.team} is at work on this goal already. Ctrl+S sends it to {suggestion.to}: "
+                        "the message is on the left, yours to change. Ctrl+N makes a new team anyway.",
+                        severity="warning", timeout=15)
+        elif self.deciding():  # the lead picks the members: the size is what is asked for, its limit
+            count = min(max(count, 1), teams.SUGGEST_MOST)  # the box takes one digit
+            self.query_one("#team-most", Input).value = str(count)
+            self.notify(f"Claude suggests at most {count} member{'s' if count > 1 else ''}{why}. The lead picks "
+                        "them; for the members written out, Ctrl+T to another line-up, then Ctrl+R.", timeout=12)
         else:
-            self.query_one("#team-members", TextArea).text = lines
-            self.notify("A line-up for the goal: change what you like. Ctrl+G on a line shows what that member "
-                        "is told.", timeout=8)
+            box.text = lines
+            whom = f"{count} members and a lead" if lead else f"{count} members, as peers"
+            self.notify(f"Claude suggests {whom}{why}. Change what you like; Ctrl+G on a line shows what that "
+                        "member is told.", timeout=12)
         self.show_preview()
 
     def action_show_role(self) -> None:
@@ -1325,6 +1620,13 @@ class NewTeamDialog(ModalScreen[teams.Team | None]):
         self.tried = True
         if self.missing():
             self.show_preview()
+            return
+        toward = self.toward
+        if toward is not None and toward.kind == teams.ADD_TO:
+            self.dismiss(JoinTeam(toward.team, self.members_text(), toward.to, toward.message, self.read()[2]))
+            return
+        if toward is not None:
+            self.dismiss(TellTeam(toward.team, toward.to, " ".join(self.members_text().split())))
             return
         name, folder, goal, members = self.read()
         peers = self.peers()

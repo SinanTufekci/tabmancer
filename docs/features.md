@@ -13,8 +13,9 @@
   minutes; that is a local command, not a model call. With Codex on, its limits show too.
   Beside them, the account each is signed in with and its plan (`you@example.com · Max 5x`),
   read from the CLIs' own files: after a `/login` with another account, the bar says so
-  within seconds. Antigravity keeps its sign-in in the system's credential store, which
-  tabmancer does not read.
+  within seconds. `A` switches to another of your accounts through Claude Code's own sign-in,
+  its page opening in the browser profile signed in to that account, or a private window.
+  Antigravity keeps its sign-in in the system's credential store, which tabmancer does not read.
 - **Stats.** Where the tokens went, when you work (a map of the hours of the week), which
   tools and files, and how fast your plan limits fill, with a forecast of when they run
   out. Over 7 to 90 days, this week against the last, and an export to JSON and CSV.
@@ -52,7 +53,10 @@
   to whom, and `Enter` on it opens the full view: the members' cards on a tree of wires,
   every message flying from card to card, and the conversation drawn as arrows between the
   members' lanes. A closed team comes back as
-  a team: `s` on its row resumes every member as itself. `T` lists your teams and starts new ones.
+  a team: `s` on its row resumes every member as itself. `T` lists your teams and starts new ones;
+  in its form `Ctrl+R` has Claude suggest the line-up for the goal and how many it needs, and,
+  with a team at work in the project, whether the goal is that team's (members added to it, or
+  the goal sent to its lead) or a team's of its own.
 - **Crowded sessions, handed over.** How full every context is, a word when one passes
   60%, and `h` to move the work to a fresh session with a full handover, when you say so.
 - **All at once.** Every chosen session opens in its own tab in one go, in the same

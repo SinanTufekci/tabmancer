@@ -105,8 +105,9 @@ def signed_in() -> list[Account]:
 
 # --- the Claude accounts you use (A switches between them) -----------------------------------------
 # tabmancer's own file keeps the accounts it has seen Claude Code signed in with, their email and plan
-# and nothing more (a sign-in itself stays Claude Code's: A runs `claude auth login --email`), and on
-# which of them each session stopped at a usage limit: signed in with another since, it can go on.
+# and nothing more (a sign-in itself stays Claude Code's: A runs `claude auth login --email`), where
+# each one's sign-in page opens (see browsers), and on which of them each session stopped at a usage
+# limit: signed in with another since, it can go on.
 KNOWN = "accounts.json"
 
 
@@ -155,6 +156,23 @@ def keep_limited(limited: dict[str, str]) -> None:
     saved = _known_file()
     if saved.get("limited") != limited:
         saved["limited"] = limited
+        _save_known(saved)
+
+
+ANY_OTHER = "*"  # opens_in's key for an account not listed yet
+
+
+def opens_in() -> dict[str, str]:
+    """Email (or ANY_OTHER) -> where its sign-in page opens (a browsers.Place id), as picked in A."""
+    found = _known_file().get("opens_in", {})
+    return {str(k): str(v) for k, v in found.items()} if isinstance(found, dict) else {}
+
+
+def keep_opens_in(email: str, place: str) -> None:
+    saved = _known_file()
+    picked = opens_in()
+    if picked.get(email) != place:
+        saved["opens_in"] = {**picked, email: place}
         _save_known(saved)
 
 

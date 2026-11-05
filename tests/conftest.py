@@ -73,6 +73,12 @@ def isolated(monkeypatch, tmp_path):
 
     monkeypatch.setattr(share, "open_page", lambda address: None)  # never a real browser
     monkeypatch.setattr(share, "reveal", lambda path: None)  # nor a real folder window
+    from tabmancer import browsers
+
+    monkeypatch.setattr(browsers, "places", list)  # nor your browsers' profiles
+    # browsers.main sets one and drops the other for what it starts: put back after every test.
+    monkeypatch.delenv(browsers.OPENING, raising=False)
+    monkeypatch.delenv("BROWSER", raising=False)
     from tabmancer import card
 
     monkeypatch.setattr(card, "copy_picture", lambda canvas: False)  # nor your clipboard

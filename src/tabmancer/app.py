@@ -33,6 +33,7 @@ from . import (
     __version__,
     accounts,
     background,
+    browsers,
     clis,
     context,
     focus,
@@ -83,10 +84,12 @@ from .statsview import StatsScreen, copy_text
 from .teamview import (
     ADD_EXAMPLE,
     ADD_QUESTION,
+    JoinTeam,
     LineDialog,
     NewTeamDialog,
     TeamScreen,
     TeamsDialog,
+    TellTeam,
     close_tabs,
     closing_note,
     open_names,
@@ -597,6 +600,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.search_version = 0  # goes up when the index has read more
         self.found: tuple[str, int, set[str]] = ("", -1, set())  # filter, version, sessions
         self.queued: dict[str, str] = {}  # h on a busy session: id -> how, handed over once it finishes
+        # Messages for team members (a lead told of a goal, from T's Ctrl+R): id -> (its name, the
+        # message), typed into its tab once it waits for you (deliver_notes).
+        self.notes: dict[str, tuple[str, str]] = {}
         self.full_poll_due = False  # a full live poll is on its way: quick ones wait (poll_live)
         self.full_polls = 0  # full live polls come back so far: open_elsewhere asks the CLI itself before the first
         self.marks = marks.Marks.load()  # hidden and pinned sessions
@@ -1900,7 +1906,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         else:
             folder = here.cwd if here is not None else ""
 
-        def made(team: teams.Team | None) -> None:
+        def made(team: teams.Team | JoinTeam | TellTeam | None) -> None:
+            if isinstance(team, JoinTeam):
+                self.join_team(team)
+                return
+            if isinstance(team, TellTeam):
+                self.tell_team(team.team, team.to, team.message)
+                return
             if team is None:
                 return
             saved = teams.load()
@@ -1911,7 +1923,110 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
         newest = sorted(self.sessions.values(), key=lambda s: s.last_active, reverse=True)
         folders = list(dict.fromkeys(s.cwd for s in newest if s.cwd))  # the folder box completes these
-        self.push_screen(NewTeamDialog(folder or str(Path.home()), set(teams.load()), folders), made)
+        found = newsessions.projects(list(self.sessions.values()))  # and lists these, as n does
+        working = [(state.team, self.open_members(state)) for state in self.team_states.values()]
+        self.push_screen(NewTeamDialog(folder or str(Path.home()), set(teams.load()), folders, found,
+                                       [(team, names) for team, names in working if names]), made)
+
+    def open_members(self, state: teamtree.TeamState) -> set[str]:
+        """The names of a team's members whose sessions are open, as the list knows them now."""
+        return {name for name, s in state.sessions.items()
+                if s is not None and self.sessions.get(s.session_id, s).exit is Exit.RUNNING}
+
+    def join_team(self, join: JoinTeam) -> None:
+        """T's Ctrl+R found the goal adds to a team at work: the goal grows by it, the members join and
+        open, each introducing itself, and the lead (or the peer it concerns) is told."""
+        team = teams.load().get(join.team)
+        if team is None:
+            self.notify(f"There is no team {join.team} any more.", severity="warning", timeout=6)
+            return
+        asked = [m.name for m in teams.parse_members(join.members)]
+        new, note = teams.add_members(team, join.members)
+        if note:
+            self.notify(note[0].upper() + note[1:] + ".", severity="warning", timeout=8)
+        message = join.message
+        if new:  # the goal grows only for members who joined; the lead hears who did not, after all
+            teams.add_to_goal(team.name, join.goal)
+            team = teams.load().get(team.name, team)
+            self.open_team(team, teams.joining(team, new, adds=join.goal))
+            if left := [name for name in asked if name not in {m.name for m in new}]:
+                message += f" (Not joining after all: {', '.join(left)}.)"
+        else:  # nobody could join: the lead gets the goal, not word of members who never come
+            message = f"A request from the user for the team: {join.goal}"
+        self.tell_team(team.name, join.to, message)
+        self.poll_teams()
+        self.push_screen(TeamScreen(team, self.accent()))
+
+    def tell_team(self, name: str, to: str, message: str) -> None:
+        """A message for a team's member (its lead, or the peer the goal concerns): typed into its tab
+        once it waits for you, as c types into one; a closed one opens with it."""
+        team = teams.load().get(name)
+        if team is None:
+            return
+        member = next((m for m in team.members if team.session_name(m).casefold() == to.casefold()), None)
+        member = member or team.lead or (team.members[0] if team.members else None)
+        if member is None:
+            return
+        who = team.session_name(member)
+        state = self.team_states.get(name)
+        found = state.sessions.get(member.name) if state is not None else None
+        session = self.sessions.get(found.session_id, found) if found is not None else None
+        if session is None or session.exit is not Exit.RUNNING:
+            if who in teams.opening():  # opened a moment ago (s, team start): open_team would leave it be
+                copy_text(self, message)
+                self.notify(f"{who} is opening already: the message is on the clipboard, to paste into its tab "
+                            "once it is up (Ctrl+V, Enter).", timeout=14)
+                return
+            # On the tab's command line: a goal of a few pages would not fit there, so its start, and all of
+            # it on the clipboard.
+            prompt = teams.cut(message, teams.MESSAGE_IN_PROMPT, " (the rest follows: the user pastes it)")
+            self.open_team(team, [teams.launch(team, member, resume=session if session is not None and session.path
+                                               else None, prompt=prompt)])
+            if prompt != " ".join(message.split()):
+                copy_text(self, message)
+                self.notify(f"{who} was not open: it opens with the start of the message, all of which is on the "
+                            "clipboard to paste in after it.", timeout=14)
+            else:
+                self.notify(f"{who} was not open: it opens with the message.", timeout=8)
+            return
+        if session.status is Status.BACKGROUND:  # no tab to type into
+            copy_text(self, message)
+            self.notify(f"{who} runs in the background: the message is on the clipboard. Enter on its row "
+                        "attaches to it.", timeout=14)
+            return
+        self.notes[session.session_id] = (who, message)
+        if session.live_state not in handover.IDLE:
+            self.notify(f"{who} is at work: the message goes into its tab once it waits for you.", timeout=8)
+        self.deliver_notes()
+
+    def deliver_notes(self) -> None:
+        """The messages waiting for team members: typed in once one waits for you, never while it works
+        or asks you something (Enter would answer a question on its screen)."""
+        for sid, (who, message) in list(self.notes.items()):
+            session = self.sessions.get(sid)
+            if session is None or session.exit is not Exit.RUNNING:
+                del self.notes[sid]
+                copy_text(self, message)
+                self.notify(f"{who} closed before its message went in: the message is on the clipboard.",
+                            severity="warning", timeout=12)
+            elif session.live_state in handover.IDLE:
+                del self.notes[sid]
+                self.type_note(session, who, message)
+
+    @work(thread=True, group="notes")
+    def type_note(self, session: Session, who: str, message: str) -> None:
+        if typein.type_into(session.session_id, message):
+            self.call_from_thread(self.notify, f"Sent to {who}.", timeout=5)
+        else:
+            self.call_from_thread(self.note_by_hand, session, who, message)
+
+    def note_by_hand(self, session: Session, who: str, message: str) -> None:
+        """Nothing could type into its tab (not Windows, or its console would not take the keys): the
+        message on the clipboard and you in its tab."""
+        copy_text(self, message)
+        self.go_to_tab(session)
+        self.notify(f"Could not type into {who}'s tab: the message is on the clipboard (Ctrl+V, Enter).",
+                    severity="warning", timeout=14)
 
     def accent(self) -> str:
         return THEMES.get(self.theme, THEMES[DEFAULT_THEME])[1]
@@ -2287,7 +2402,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.mascot.say(f"Signed in as {self.signed_as}", self.accent(), seconds=6)
 
     def action_accounts(self) -> None:
-        """A: the Claude accounts you use, to sign in with another (Claude Code's own sign-in, in a tab)."""
+        """A: the Claude accounts you use, to sign in with another (Claude Code's own sign-in, in a tab),
+        its page opening where you picked for that account (browsers)."""
         from .accountsview import AccountsDialog
 
         current = accounts.claude()
@@ -2295,24 +2411,28 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if current is not None and not any(a.email == current.email for a, _ in seen):
             seen.insert(0, (current, ""))
         stopped = sum(1 for s in self.sessions.values() if at_limit(s))
+        places = browsers.places()
 
-        def chosen(email: str | None) -> None:
-            if email is None:
+        def chosen(picked: tuple[str, str] | None) -> None:
+            if picked is None:
                 return
+            email, place = picked
             login = Launch(title=f"Sign in{f': {email}' if email else ''}", cwd=str(Path.home()), mode=Mode.NEW,
-                           session_id="", options=("auth", "login", *(("--email", email) if email else ())))
+                           session_id="", options=("auth", "login", *(("--email", email) if email else ())),
+                           env=browsers.login_environment(place))
             try:
                 left = open_tabs([login])
             except OSError as error:
                 self.notify(f"Could not open the tab: {error}", severity="error", timeout=15)
                 return
+            where = next((p.words for p in places if p.id == place and login.env), "your browser")
             if left:
                 self.notify(f"No terminal to open it in. Run it yourself: {left[0]}", timeout=15)
             else:
-                self.notify(f"Signing in{f' as {email}' if email else ''} in a new tab: finish it in your browser. "
+                self.notify(f"Signing in{f' as {email}' if email else ''} in a new tab: finish it in {where}. "
                             "The top bar says when it is done.", timeout=8)
 
-        self.push_screen(AccountsDialog(current, seen, stopped), chosen)
+        self.push_screen(AccountsDialog(current, seen, stopped, places, accounts.opens_in()), chosen)
 
     @work(thread=True, exclusive=True, group="updates")
     def check_updates(self) -> None:
@@ -2969,6 +3089,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.selected -= (now_open & self.preselected) | {
             sid for sid, s in updates.items() if s.status is Status.RUNNING}
         self.preselected -= now_open
+        if self.notes:
+            self.deliver_notes()  # a member that waits for you now gets its message
         if changed:
             self.sync_rows(changed)
             self.update_dashboard()

@@ -138,14 +138,17 @@ the agents already keep (`~/.claude`, `~/.codex`, `~/.gemini`) and asks the `cla
 which sessions are open and how full your plan limits are (`/usage`, a local command). It
 reads which account you are signed in with (its email and plan) from `~/.claude.json` and
 Codex's `auth.json`, to show it in the top bar, and remembers the emails of the Claude accounts it
-has seen, in its own folder, to offer them when you switch (`A`), and the ids of the sessions it
+has seen, in its own folder, to offer them when you switch (`A`), with the browser profile each
+one's sign-in page opens in: for that it reads your browsers' list of profiles (each one's name
+and the Google account it syncs with), never their cookies or passwords; and the ids of the sessions it
 opened again, to count them on your week's card (`W`). Once a day it asks PyPI which version of
 tabmancer is the latest, to tell you of a newer one (`tabmancer updates off` stops it). A model
 is called only when you ask for one, through your own CLI
 and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats), a team's line-up
 (`Ctrl+R` in the new-team form, which sends the goal, the project's file names and its README's
-start). It types into
-an open session only when you have it continue the ones stopped at a usage limit (`c`).
+start, and the goal and members' parts of a team at work in that project). It types into
+an open session only when you have it continue the ones stopped at a usage limit (`c`), or send
+a team at work's lead the message `Ctrl+R` wrote for it (`Ctrl+S`).
 Sharing your week's card (`p` on it) opens the platform's own page for a new post in your
 browser, with the words written in: you post it, or not.
 Nothing is sent anywhere else, and there is no telemetry.

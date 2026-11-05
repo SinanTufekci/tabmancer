@@ -193,13 +193,18 @@ def tidy(goal: str) -> str:
 GOAL_IN_PROMPT = 300  # a first message names the goal on one line, this long at most
 
 
+def cut(text: str, most: int, more: str = "") -> str:
+    """Text on one line, at most `most` characters: a longer one ends at a word, with "…" and `more`."""
+    line = " ".join(text.split())
+    if len(line) <= most:
+        return line
+    return line[:most].rsplit(" ", 1)[0].rstrip(" ,;:.") + "…" + more
+
+
 def goal_line(team: Team) -> str:
     """The goal as a first message names it: on one line, and a long one cut short, as the whole of it
     is in the member's role. Whole, a goal of a few pages went into every tab's command line."""
-    line = " ".join(team.goal.split())
-    if len(line) <= GOAL_IN_PROMPT:
-        return line
-    return line[:GOAL_IN_PROMPT].rsplit(" ", 1)[0].rstrip(" ,;:.") + "… (the whole goal is in your role)"
+    return cut(team.goal, GOAL_IN_PROMPT, " (the whole goal is in your role)")
 
 
 def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int = 0,
@@ -283,24 +288,27 @@ def goal_note(team: Team) -> str:
     return f"Team change: the team goal is now: {team.goal} Plan again with the members where their work changes."
 
 
-def joining(team: Team, members: list[Member]) -> list[Launch]:
+def joining(team: Team, members: list[Member], adds: str = "") -> list[Launch]:
     """Tabs for members who join a team already at work: each introduces itself to the lead, or in a
-    team of peers to the others."""
+    team of peers to the others. adds: what the goal grew by, that they join for."""
+    why = f" for what its goal now adds: {cut(adds, GOAL_IN_PROMPT)}" if adds else ""
     if team.lead is None:
         def hello(member: Member) -> str:
-            return (f"You just joined the team {team.name}. Introduce yourself to the others ("
+            return (f"You just joined the team {team.name}{why}. Introduce yourself to the others ("
                     f"{', '.join(team.session_name(m) for m in team.members if m is not member) or 'nobody yet'}) "
                     "with SendMessage, then start on your part.")
         return [launch(team, m, prompt=hello(m)) for m in members]
-    return [launch(team, m, prompt=(f"You just joined the team {team.name}. Introduce yourself to "
+    return [launch(team, m, prompt=(f"You just joined the team {team.name}{why}. Introduce yourself to "
                                     f"{team.session_name(team.lead)} with SendMessage and ask for work."))
             for m in members]
 
 
 def from_tabmancer(team: Team, text: str) -> bool:
     """Whether a prompt is one tabmancer started a member with (joining(), launch(), in_background()),
-    not yours."""
-    return text.startswith((f"You just joined the team {team.name}.", f"Goal: {goal_line(team)} ",
+    not yours. A goal grown since (add_to_goal) still starts with the one its first members were given."""
+    first = replace(team, goal=team.goal.split(ADDED)[0])
+    return text.startswith((f"You just joined the team {team.name}.", f"You just joined the team {team.name} for ",
+                            f"Goal: {goal_line(team)} ", f"Goal: {goal_line(first)} ",
                             f"You are on the team {team.name}, in the background."))
 
 
@@ -480,7 +488,7 @@ def role(team: Team, member: Member) -> str:
 
 # --- a line-up suggested for a goal -------------------------------------------------------------
 
-SUGGEST_MOST = 5
+SUGGEST_MOST = 8  # members besides a lead: the size is Claude's to suggest, as few as the work needs
 SUGGEST_EFFORT = "medium"  # one answer, a short one: your default model at a medium effort
 
 
@@ -508,9 +516,27 @@ def project_files(folder: Path, most_folders: int = 40, per_folder: int = 12) ->
     return "\n".join(lines)
 
 
-def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST) -> str:
+def at_work(team: Team, open_names: set[str]) -> str:
+    """A team at work in the project, as a suggestion is told of it: who leads, its goal, each member's
+    part, its files, and whether it is open."""
+    who = f"led by {team.session_name(team.lead)}" if team.lead is not None else "peers: nobody leads"
+    goal = cut(team.goal, AT_WORK_GOAL)
+    members = "\n".join(
+        f"- {team.session_name(m)}: {'plans the work, hands it out and checks it' if m.lead else m.focus or m.name}"
+        f"{f' [{m.owns}]' if m.owns else ''} ({'open' if m.name in open_names else 'closed'})" for m in team.members)
+    return f"Team {team.name} ({who}). Its goal: {goal}\nIts members:\n{members}"
+
+
+AT_WORK_GOAL = 800  # characters of a team at work's goal a suggestion is told
+
+
+def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST,
+                      working: list[tuple[Team, set[str]]] | None = None) -> str:
     """What Claude is asked for a line-up: the goal, the project's files (from git, or its top level)
-    and its README's start. The answer is the members box's lines (parse_members reads them)."""
+    and its README's start. The answer is the team's size and why (suggested_size), then the members
+    box's lines (parse_members reads them). With teams at work in the project (each with its open
+    members' names), it decides first how the goal stands to them (read_suggestion): a team of its
+    own, members for one of them, or that one has it already, and then what that team is told."""
     path = Path(folder)
     try:
         entries = sorted((p for p in path.iterdir() if not p.name.startswith(".")),
@@ -526,15 +552,39 @@ def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST) -> str:
         start = readme.read_text(encoding="utf-8", errors="replace")[:1500] if readme else ""
     except OSError:
         start = ""
+    working = working or []
+    weigh = ""
+    if working:
+        weigh = (
+            "\nAlready at work in this project now:\n" + "\n\n".join(at_work(t, names) for t, names in working)
+            + "\n\nFirst decide how the goal stands to the team at work, and say it on the first line, as one of:\n"
+            "Decision: new team\nDecision: add to <team>\nDecision: <team> has it\n\n"
+            "- new team: the goal is other work. Answer then as for any team (below), giving its members parts and "
+            "files apart from the team at work's.\n"
+            "- add to <team>: the goal adds to that team's work and needs people it does not have. Then the size "
+            "line (N: the members to add), the lines of the members to add only, no lead line, and last a line\n"
+            "To <session name>: a message for that team's lead (in a team of peers, the member the goal concerns "
+            "most) saying what the goal adds and who joins for it.\n"
+            "- <team> has it: that team is on the goal already, or its members can do it as they are. Then no "
+            "line-up, only a line\nTo <session name>: the goal as a prompt for its lead (in a team of peers, the "
+            "member it concerns most): what is wanted, in the user's words where they are clear.\n"
+            "Write the message on that one line. Add to a team, or leave the goal to it, only when the goal is its "
+            "own work; otherwise a new team.\n\nFor a new team, or the members to add: ")
     return (
         "You set up a team of Claude Code sessions for one goal in one project. Each member is a session of "
         "its own, working in the same folder at the same time, and they message each other.\n\n"
         f"Goal: {goal}\nProject folder: {path.name}\n{'Its files, by folder' if files else 'At its top level'}: "
         f"{listing}\n"
         + (f"Its README begins:\n{start}\n" if start else "")
-        + "\nAnswer with the line-up only, one member a line, nothing before or after it, each line in this "
-        "form:\nname: what it works on [the folders or files that are its own] @model @effort\n\n"
-        f"- 2 to {most} members, fewer when the work is small. Names: one short lowercase word.\n"
+        + (weigh or "\n")
+        + ("answer with" if working else "Answer with") + " the team's size and why on a "
+        + ("line after the decision" if working else "first line")
+        + ", then the line-up, one member a line" + ("" if working else ", nothing else")
+        + ":\nTeam size: N, because <one short sentence>\n"
+        "name: what it works on [the folders or files that are its own] @model @effort\n\n"
+        f"- N is the number of members besides a lead: 2 to {most}, as few as the work needs. Each member is a "
+        "session of its own, using the user's plan, so a part gets a member of its own only when it can go on "
+        "at the same time as the others; small work takes 2. Names: one short lowercase word.\n"
         "- Inside a line, use commas, not semicolons: a semicolon starts another member.\n"
         "- Give each a part that can go on at the same time as the others, and the folders or files that are "
         "its own, so that no two edit the same file.\n"
@@ -552,9 +602,105 @@ MEMBER_LINE = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*[^\W\d_][\w-]*\s*:\s*\S") 
 
 def suggested_lines(answer: str) -> str:
     """The members box's text from Claude's answer: each member it named (a one-word name, a colon
-    and its part), as a clean line; anything said around them is left out."""
-    named = "\n".join(line for line in answer.splitlines() if MEMBER_LINE.match(line))
+    and its part), as a clean line; anything said around them is left out (its size line too: two
+    words before the colon are no member's name)."""
+    named = "\n".join(line for line in answer.splitlines() if MEMBER_LINE.match(line) and not DECISION_LINE.match(line))
     return "\n".join(member.line() for member in parse_members(named, lead_ok=True))
+
+
+OWN_TEAM, ADD_TO, HAS_IT = "new", "add", "has"  # what a suggestion says of a goal, with a team at work in the project
+DECISION_LINE = re.compile(r"^[\s*_#>-]*decision[\s*_]*:[\s*_]*(.*?)[\s*_.]*$", re.IGNORECASE)
+TO_LINE = re.compile(r"^[\s*_#>-]*to\s+[`'\"*_]*([\w.-]+)[`'\"*_]*\s*:[\s*_]*(.*)$", re.IGNORECASE)
+
+
+@dataclass
+class Suggestion:
+    """What Ctrl+R came back with. OWN_TEAM: a line-up for a team of its own (lines). ADD_TO: members for a team
+    at work (lines, no lead), whose `to` (its lead, or among peers the member the goal concerns most)
+    is told `message`. HAS_IT: that team is on the goal already: `to` gets the goal as `message`."""
+    lines: str = ""
+    count: int = 0      # members in lines besides a lead
+    lead: bool = False  # a lead line among them
+    why: str = ""       # why that many, in Claude's words
+    kind: str = OWN_TEAM
+    team: str = ""      # the team at work it is about (ADD_TO, HAS_IT)
+    to: str = ""        # the session name told
+    message: str = ""
+
+
+def read_suggestion(answer: str, working: list[Team] | None = None, goal: str = "") -> Suggestion:
+    """Claude's answer to suggestion_prompt as a Suggestion. A decision for a team that is not at work
+    in the project, or one to add members with none named, is taken for what can be done: a new team,
+    or the goal left to that team. A message missing, or for no member of it, goes to its lead (or
+    first member) and says the goal."""
+    rows = [row for row in answer.splitlines() if not row.strip().startswith("```")]
+    at = {t.name: t for t in working or []}
+    kind, team = OWN_TEAM, None
+    decided = next((m.group(1).strip(" `'\"*_") for m in map(DECISION_LINE.match, rows) if m), "")
+    said = decided.casefold()
+    if said.startswith("add to "):
+        team, kind = at.get(clean(decided[len("add to "):].strip(" `'\"*_"))), ADD_TO
+    elif said.endswith(" has it"):
+        team, kind = at.get(clean(decided[:-len(" has it")].strip(" `'\"*_"))), HAS_IT
+    told = next((i for i, row in enumerate(rows) if TO_LINE.match(row)), None)
+    # The message: its line, and the lines after it up to one that is the answer's own again (a member,
+    # the size, the decision), wherever in the answer it was written.
+    end = told
+    if told is not None:
+        end = told + 1
+        while end < len(rows) and not any(p.match(rows[end]) for p in (MEMBER_LINE, SIZE_LINE, DECISION_LINE, TO_LINE)):
+            end += 1
+    lines = suggested_lines("\n".join(rows if told is None else rows[:told] + rows[end:]))
+    count, lead, why = suggested_size(answer, lines)
+    if team is None:
+        return Suggestion(lines, count, lead, why)
+    if kind == ADD_TO:
+        lines = "\n".join(m.line() for m in parse_members(lines))  # the members to add: no lead line
+        count, lead = len(parse_members(lines)), False
+        if not lines:
+            kind = HAS_IT
+    to, message = "", ""
+    if told is not None:
+        matched = TO_LINE.match(rows[told])
+        to = matched.group(1)
+        message = " ".join([matched.group(2), *(row.strip() for row in rows[told + 1:end])]).strip()
+    member = next((m for m in team.members if to.casefold() in (team.session_name(m).casefold(), m.name.casefold())),
+                  None) or team.lead or (team.members[0] if team.members else None)
+    to = team.session_name(member) if member is not None else ""
+    if not message:
+        added = ", ".join(m.name for m in parse_members(lines))
+        message = (f"The user's goal now adds this to the team's work: {goal}. Joining for it: {added}."
+                   if kind == ADD_TO else f"A request from the user for the team: {goal}")
+    return Suggestion(lines if kind == ADD_TO else "", count if kind == ADD_TO else 0, False, why, kind, team.name,
+                      to, message)
+
+
+def add_to_goal(name: str, more: str) -> Team | None:
+    """A team at work's goal, with what a new goal adds kept under it, dated: members who start from now
+    on read both in their role. None: no such team."""
+    saved = load()
+    team = saved.get(name)
+    if team is None:
+        return None
+    team.goal = tidy(f"{team.goal}{ADDED}{datetime.now():%d %b}: {tidy(more)}")
+    save(saved)
+    return team
+
+
+ADDED = "\n\nAdded "  # what add_to_goal puts between a goal and what it grew by
+MESSAGE_IN_PROMPT = 6000  # a message a closed member opens with (on the tab's command line), at most
+
+
+# "Team size: 3, because ...", in Markdown's bold or not
+SIZE_LINE = re.compile(r"^[\s*_#>-]*team\s+size[\s*_]*:[\s*_]*(\d+)[\s*_]*[,.;:–—-]?\s*(.*?)[\s*_]*$", re.IGNORECASE)
+
+
+def suggested_size(answer: str, lines: str) -> tuple[int, bool, str]:
+    """The suggestion's size: how many members besides a lead its lines name (what is written counts,
+    whatever number the answer said), whether one of them leads, and why that many, in its words."""
+    members = parse_members(lines, lead_ok=True)
+    why = next((m.group(2) for m in map(SIZE_LINE.match, answer.splitlines()) if m), "")
+    return sum(1 for m in members if not m.lead), any(m.lead for m in members), why
 
 
 ROLES = "roles"  # in tabmancer's folder: each member's role, <session name>.md

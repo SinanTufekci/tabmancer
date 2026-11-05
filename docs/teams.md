@@ -6,8 +6,9 @@
 
 A team is several sessions on one project, each with a focus of its own (the API, the
 screens, the tests), and one of them the orchestrator that splits the goal into tasks and
-hands them out; or, with no orchestrator, [peers](#peers-no-lead) on related topics side by side. Press `T` and give the team a name, a project folder (it completes the
-folders you have worked in), a goal and its members, one a line as `name: what they work
+hands them out; or, with no orchestrator, [peers](#peers-no-lead) on related topics side by side. Press `T` and give the team a name, a project (while its box has the
+cursor, the projects you have worked in are listed beside it as `n` lists them: type to find
+one, `↑`/`↓` and Enter to pick it, or write a folder path), a goal and its members, one a line as `name: what they work
 on`. The line-ups ready to use (feature team, bug hunt, write and review) are shown by
 name, and `Ctrl+T` goes from one to the next. The lead's line is there too: leave it, or
 change what it does. `@sonnet` (or any model Claude Code takes) at the end of a line runs
@@ -45,10 +46,27 @@ Claude Code 2.1.317 in `-p` runs: the lock stayed after the session ended).
   docs ask rather than guess; research changes no files and reports with its sources.
 - **Suggest (`Ctrl+R`).** With the goal and the folder written, Claude reads the goal, the
   project's files (from git, folder by folder; else its top level) and the start of its README,
-  and writes a line-up into the box: each member with its part, its own files, a model and an
-  effort, and a lead line only when the parts depend on each other so much that someone must
-  hand out the work (else they are peers). One `claude -p` call on your plan, with your default
-  model at a medium effort, and no tools; the box is yours to change after.
+  and suggests how many members the work needs and why (2 to 8 besides a lead, as few as can
+  work at the same time: each one is a session on your plan), shown in a note. It writes the
+  line-up into the box: each member with its part, its own files, a model and an effort, and a
+  lead line only when the parts depend on each other so much that someone must hand out the work
+  (else they are peers). Where the lead decides, the size goes into *At most* instead and the
+  lead still picks the members. One `claude -p` call on your plan, with your default model at a
+  medium effort, and no tools; it is yours to change after.
+- **A team at work in the project.** The form says so (`▲ shop (3 open) at work in this
+  project`), and `Ctrl+R` tells Claude of that team too (who leads it, its goal, each member's
+  part and files), which first decides how the goal stands to it:
+  - **Other work:** a team of its own, its members' parts and files apart from the team at work's.
+  - **It adds to that team's work:** the box holds only the members to add. `Ctrl+S` adds them
+    to that team, whose goal grows by yours (dated, under the old one): each opens in its tab
+    and introduces itself to the lead, who is told what the goal adds and who joins for it.
+  - **That team has it already:** a warning, and the box holds the goal as a prompt for its
+    lead (or, among peers, the member it concerns most), yours to change. `Ctrl+S` sends it.
+
+  Either way `Ctrl+N` (or `Ctrl+T`) makes a team of its own after all. The message to the lead is
+  typed into its tab once it waits for you, as `c` types into one: never while it works or asks
+  you something, where an Enter would answer. One in the background gets it on the clipboard; a
+  closed one opens with it.
 - **What a member is told (`Ctrl+G`).** On a member's line, shows its role word for word as it
   will start with it, and its first message.
 

@@ -180,3 +180,78 @@ async def test_a_signs_in_with_another_account_through_claude_codes_own_sign_in(
             if opened:
                 break
         assert opened[0].argv == ["claude", "auth", "login", "--email", "b@example.com"]  # its own sign-in
+        assert opened[0].env == ()  # no browsers found (as in every test): the page opens as it always did
+
+
+async def test_a_opens_each_accounts_sign_in_page_where_you_picked_for_it(fake_home, monkeypatch):
+    from textual.widgets import OptionList
+
+    from tabmancer import app as app_module
+    from tabmancer import browsers
+    from tabmancer.accountsview import AccountsDialog
+    from tabmancer.browsers import Place
+
+    claude_signed_in(fake_home, "a@example.com")
+    accounts.remember(Account("claude", "c@example.com", "Max 5x"), "2026-11-01T09:00:00")
+    accounts.remember(Account("claude", "b@example.com", "Team"), "2026-11-01T10:00:00")
+    places = [Place(browsers.DEFAULT, "default browser"),
+              Place("chrome:Default", "Chrome · Personal", ("chrome", "--profile-directory=Default"), "C@example.com"),
+              Place("chrome:Profile 3", "Chrome · Work", ("chrome", "--profile-directory=Profile 3")),
+              Place("chrome:private", "Chrome · private window", ("chrome", "--incognito"))]
+    monkeypatch.setattr(browsers, "places", lambda: list(places))
+    opened = []
+    monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
+
+    async def open_dialog(pilot):
+        await pilot.press("A")
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if isinstance(app.screen, AccountsDialog):
+                break
+        options = app.screen.query_one(OptionList)
+        return options, {options.get_option_at_index(i).id: str(options.get_option_at_index(i).prompt)
+                         for i in range(options.option_count)}
+
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await pilot.pause(0.3)
+        options, said = await open_dialog(pilot)
+        assert "opens in" not in said["a@example.com"]  # signed in now: nothing to open
+        assert said["b@example.com"].endswith("opens in default browser")  # no profile says it is b's
+        assert said["c@example.com"].endswith("opens in Chrome · Personal")  # its Google account: a guess
+        assert said["+"].endswith("opens in default browser")
+        assert "←/→  where it opens" in str(app.screen.query(".hint").first().render())
+        assert options.highlighted == 1  # b
+        await pilot.press("right", "right")  # Chrome · Personal, then Chrome · Work
+        await pilot.pause(0.1)
+        assert str(options.get_option_at_index(1).prompt).endswith("opens in Chrome · Work")
+        assert accounts.opens_in() == {"b@example.com": "chrome:Profile 3"}  # kept at once, Esc or not
+        await pilot.press("enter")
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if opened:
+                break
+        login = opened[0]
+        assert login.argv == ["claude", "auth", "login", "--email", "b@example.com"]  # still its own sign-in
+        env = dict(login.env)
+        assert env["TABMANCER_OPEN_IN"] == "chrome:Profile 3" and env["BROWSER"].endswith(("open-in.cmd", "open-in.sh"))
+        await pilot.pause(0.1)
+        _, said = await open_dialog(pilot)  # the next time: as picked
+        assert said["b@example.com"].endswith("opens in Chrome · Work")
+        await pilot.press("left", "left")
+        await pilot.pause(0.1)
+        await pilot.press("enter")
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if len(opened) == 2:
+                break
+        assert opened[1].env == ()  # back to the browser as links open: nothing set
+        assert accounts.opens_in() == {"b@example.com": browsers.DEFAULT}
+
+
+def test_where_each_account_opens_outlives_the_list_of_accounts_being_written_again():
+    accounts.keep_opens_in("a@example.com", "edge:private")
+    accounts.keep_opens_in(accounts.ANY_OTHER, "chrome:private")
+    accounts.remember(Account("claude", "a@example.com", "Pro"), "2026-11-05T10:00:00")
+    accounts.keep_limited({"s1": "a@example.com"})
+    assert accounts.opens_in() == {"a@example.com": "edge:private", "*": "chrome:private"}

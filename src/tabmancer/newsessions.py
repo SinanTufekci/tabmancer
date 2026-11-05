@@ -305,15 +305,7 @@ class NewSessions(ModalScreen[Request | None]):
     # --- the list -------------------------------------------------------------------
 
     def candidates(self) -> list[Project]:
-        needle = self.filter_box.value.strip()
-        everything = self.extra + self.found
-        if not needle:
-            return everything
-        typed = Path(os.path.expanduser(needle))
-        hits = [p for p in everything if matches(needle, p)]
-        if typed.is_dir() and folder_key(str(typed)) not in {folder_key(p.cwd) for p in hits}:
-            hits.insert(0, Project(str(typed.resolve())))
-        return hits
+        return find(self.filter_box.value, self.extra + self.found)
 
     def show_folders(self) -> None:
         folders = self.folders
@@ -357,14 +349,9 @@ class NewSessions(ModalScreen[Request | None]):
         the filter found is lit."""
         ticked = key in self.ticked
         name_width, tag = self.columns()
-        name = Text(_fit(project.name, name_width).ljust(name_width), style=f"bold {CYAN if ticked else TEXT}")
-        for term in self.filter_box.value.split():
-            name.highlight_regex(_term_pattern(term), style=f"bold underline {AMBER}")
-        count = f"{project.sessions}" if project.sessions else "none"
         used = ", ".join(sorted(project.used - {"claude"}))
-        row = Text.assemble(("✓ " if ticked else "· ", f"bold {CYAN}" if ticked else MUTED), name,
-                            (count.rjust(10), TEXT if project.sessions else MUTED),
-                            ((_ago(project.last) if project.last else "").rjust(10), MUTED),
+        row = Text.assemble(("✓ " if ticked else "· ", f"bold {CYAN}" if ticked else MUTED),
+                            project_columns(project, name_width, self.filter_box.value.split(), CYAN if ticked else TEXT),
                             (f"  {used}".ljust(tag) if tag else "", CYAN))
         row.no_wrap, row.overflow = True, "ellipsis"  # one line, however narrow the window
         return row
@@ -377,10 +364,10 @@ class NewSessions(ModalScreen[Request | None]):
         if project is None:
             where.update("")
             return
-        path = Text("▸ " + _clip(_home_as_tilde(project.cwd), max(8, (where.content_size.width or 48) - 2)),
+        path = Text("▸ " + clip(home_as_tilde(project.cwd), max(8, (where.content_size.width or 48) - 2)),
                     style=MUTED)
         for term in self.filter_box.value.split():
-            path.highlight_regex(_term_pattern(term), style=f"bold underline {AMBER}")
+            path.highlight_regex(term_pattern(term), style=f"bold underline {AMBER}")
         where.update(path)
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
@@ -529,6 +516,37 @@ def _seps(text: str) -> str:
     return text.replace("\\", "/")
 
 
+def find(typed: str, projects: list[Project]) -> list[Project]:
+    """The projects a filter's words find (n's list, and the new-team form's): every one for no words;
+    else those with every word in their name or folder (/ and \\ alike), the ones with them in the
+    name first ("app" is in every folder under AppData); and a folder written out in full first of
+    all, the project it is when it is listed (else a newer one that matches too went first, and
+    Enter took it)."""
+    needle = os.path.expanduser(typed.strip())
+    if not needle:
+        return list(projects)
+    words = [_seps(w).casefold() for w in needle.split()]
+    hits = [p for p in projects if matches(needle, p)]
+    hits.sort(key=lambda p: not all(w in _seps(p.name).casefold() for w in words))  # stable: newest first still
+    path = Path(needle)
+    if path.is_dir():
+        key = folder_key(str(path))
+        same = next((p for p in projects if folder_key(p.cwd) == key), None) or Project(str(path.resolve()))
+        hits = [same, *(p for p in hits if folder_key(p.cwd) != key)]
+    return hits
+
+
+def project_columns(project: Project, width: int, terms: list[str], colour: str = TEXT) -> Text:
+    """A project as a row shows it: its name (the filter's words lit) in width cells, its sessions,
+    when it was last worked in."""
+    name = Text(fit(project.name, width).ljust(width), style=f"bold {colour}")
+    for term in terms:
+        name.highlight_regex(term_pattern(term), style=f"bold underline {AMBER}")
+    count = f"{project.sessions}" if project.sessions else "none"
+    return Text.assemble(name, (count.rjust(10), TEXT if project.sessions else MUTED),
+                         ((ago(project.last) if project.last else "").rjust(10), MUTED))
+
+
 def matches(needle: str, project: Project) -> bool:
     """Whether a project is what the filter asks for: every word of it in its name or its folder,
     whatever the case and whichever way a / or a \\ is written ("desktop/shop" finds C:\\...\\Desktop\\shop)."""
@@ -536,26 +554,26 @@ def matches(needle: str, project: Project) -> bool:
     return all(_seps(term).casefold() in where for term in needle.split())
 
 
-def _term_pattern(term: str) -> str:
+def term_pattern(term: str) -> str:
     """A filter word as a pattern that finds it in a row, its / and \\ either way, in any case."""
     return "(?i)" + "".join(r"[\\/]" if char in "/\\" else re.escape(char) for char in term)
 
 
-def _home_as_tilde(path: str) -> str:
+def home_as_tilde(path: str) -> str:
     home = str(Path.home())
     inside = folder_key(path).startswith(folder_key(home)) and path[len(home):][:1] in ("", "\\", "/")
     return "~" + path[len(home):] if inside else path
 
 
-def _fit(text: str, limit: int) -> str:
+def fit(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
-def _clip(text: str, limit: int) -> str:
+def clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else "…" + text[-(limit - 1):]
 
 
-def _ago(moment: datetime) -> str:
+def ago(moment: datetime) -> str:
     seconds = max(0.0, (datetime.now() - moment).total_seconds())
     for size, unit in ((86400, "d"), (3600, "h"), (60, "m")):
         if seconds >= size:

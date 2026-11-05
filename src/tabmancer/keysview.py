@@ -80,8 +80,9 @@ KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("Settings and the rest", [
         (",", "settings", "which CLIs to list: Claude Code, Codex, Antigravity"),
         ("t", "cycle_theme", "the next colour theme (remembered)"),
-        ("A", "accounts", ("the Claude accounts you use: sign in with another one, in Claude Code's own sign-in "
-                           "(a click on the account in the top bar too)")),
+        ("A", "accounts", ("the Claude accounts you use: sign in with another one, in Claude Code's own sign-in, "
+                           "its page in the browser profile you pick for it (a click on the account in the top "
+                           "bar too)")),
         ("b", "toggle_mascot", "Bit in pixels, calm, in blocks, or away"),
         ("?", "keys", "this list"),
         ("Esc", "back", "clear the filter (a card's too); with no filter, quit"),

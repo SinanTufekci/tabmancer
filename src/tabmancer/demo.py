@@ -256,7 +256,8 @@ SUMMARY_ANSWER = ("Made up for the demo. For real, Claude Code reads the session
 HANDOVER_ANSWER = ("A made-up handover. For real it holds the goal, the decisions and why, what is done, "
                    "what is open or broken, and the next steps.")
 SUGGEST_START = "You set up a team of Claude Code sessions"  # teams.suggestion_prompt's first words
-DEMO_LINEUP = ("api: the endpoints and the data behind them [src/api] @opus @high\n"
+DEMO_LINEUP = ("Team size: 3, because the endpoints, the pages and the tests can each go on at once.\n"
+               "api: the endpoints and the data behind them [src/api] @opus @high\n"
                "web: the pages that use them [src/web] @sonnet @high\n"
                "tests: tests for both, end to end [tests] @sonnet @medium")
 GIT = {  # project -> (changed, to push): what the sidebar's ± and ↑ show
@@ -287,6 +288,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
     from . import (
         agy,
         background,
+        browsers,
         focus,
         gitstate,
         handover,
@@ -330,6 +332,11 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         changed, ahead = GIT.get(Path(folder).name, (0, 0))
         return gitstate.GitState(branch="main", changed=changed, ahead=ahead, upstream=True)
 
+    # Made-up browser profiles for A: never the viewer's own (their names and Google accounts).
+    places = [browsers.Place(browsers.DEFAULT, "default browser"),
+              browsers.Place("chrome:Default", "Chrome · Personal", ("chrome",), "you@example.com"),
+              browsers.Place("chrome:Profile 1", "Chrome · Work", ("chrome",), "you@work.example.com"),
+              browsers.Place("chrome:private", "Chrome · private window", ("chrome", "--incognito"))]
     now = datetime.now()
     limits = [usage.Limit("session", 34, now + timedelta(hours=2, minutes=10), ""),
               usage.Limit("week", 61, now + timedelta(days=2, hours=5), "")]
@@ -351,6 +358,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         (usage, "read_codex", lambda now=None: []),
         (updates, "news", lambda now=None, ask=None: None),  # PyPI is not asked for a newer tabmancer
         (agy, "home", lambda: home / "gemini"),
+        (browsers, "places", lambda: list(places)),
         (gitstate, "read", git),
         (report, "save", lambda entry, folder=None: save_report(entry, home)),
         (stats, "write_files", lambda numbers, listed, folder=None: save_stats(numbers, listed, home)),

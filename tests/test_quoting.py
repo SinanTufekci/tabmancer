@@ -125,7 +125,95 @@ def test_a_prompt_reaches_claude_whole_through_windows_terminal(shell, prompt, e
     assert heard(result.stdout)["argv"] == expected
 
 
+ENV_ECHO = ("import json, os, sys\nnames = ('BROWSER', 'TABMANCER_OPEN_IN', 'TABMANCER_PYTHON')\n"
+            "sys.stdout.write(json.dumps({'argv': sys.argv[1:], 'env': {n: os.environ.get(n) for n in names}}))\n")
+# A sign-in tab's environment (browsers.login_environment), with paths as odd as a profile's can be,
+# and a bare word: `$env:X=edge:Default` once ran edge:Default as a command and set nothing.
+SIGN_IN_ENV = (("BROWSER", "C:\\Users\\Ünal Öz\\it's 100% $(x)\\tabmancer\\open-in.cmd"),
+               ("TABMANCER_OPEN_IN", "edge:Default"),
+               ("TABMANCER_PYTHON", "C:\\Users\\Ünal Öz\\AppData\\Roaming\\uv\\tools\\tabmancer\\Scripts\\python.exe"))
+
+
+def sign_in_tab(folder: str) -> Launch:
+    return Launch(title="Sign in", cwd=folder, mode=Mode.NEW, session_id="",
+                  options=("auth", "login", "--email", "me+x@example.com"), env=SIGN_IN_ENV)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Terminal and PowerShell")
+@pytest.mark.parametrize("shell", [s for s in ("pwsh", "powershell") if shutil.which(s)])
+def test_a_sign_in_tabs_environment_reaches_claude_whole_through_windows_terminal(shell, tmp_path, monkeypatch):
+    if shell == "powershell":
+        which = shutil.which
+        monkeypatch.setattr(L.shutil, "which", lambda name: None if name == "pwsh" else which(name))
+    echo = tmp_path / "env_echo.py"
+    echo.write_text(ENV_ECHO, encoding="utf-8")
+    launch = sign_in_tab(str(tmp_path))
+    command = L.windows_terminal_command([launch], window="0")[-1]
+    assert "%" not in command and not re.search(r"(?<!\\);", command)  # what Windows Terminal would touch
+    command = command.replace("\\;", ";").replace("claude ", f"& {L._ps_quote(sys.executable)} {L._ps_quote(str(echo))} ", 1)
+    line = f'"{shutil.which(shell)}" -NoLogo -NoProfile -NonInteractive -Command "{command}"'
+    result = subprocess.run(line, capture_output=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    got = heard(result.stdout)
+    assert got == {"argv": launch.argv[1:], "env": dict(SIGN_IN_ENV)}
+
+
+def test_every_value_is_a_quoted_string_after_env_and_put_back_after_the_command():
+    before, after = L._ps_env((("A", "edge:Default"), ("B", ""), ("C", "it's")))
+    assert before == ("$tabmancer_0=$env:A; $env:A='edge:Default'; $tabmancer_1=$env:B; $env:B=''; "
+                      "$tabmancer_2=$env:C; $env:C='it''s'; ")
+    assert after == "; $env:A=$tabmancer_0; $env:B=$tabmancer_1; $env:C=$tabmancer_2"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Terminal and PowerShell")
+def test_after_the_sign_in_the_tab_has_its_own_variables_back(tmp_path):
+    """The tab stays open as a shell: a claude run there later must not open its pages with the
+    sign-in's launcher, and a BROWSER of your own comes back."""
+    echo = tmp_path / "env_echo.py"
+    echo.write_text(ENV_ECHO, encoding="utf-8")
+    command = L.windows_terminal_command([sign_in_tab(str(tmp_path))], window="0")[-1].replace("\\;", ";")
+    command = command.replace("claude ", f"& {L._ps_quote(sys.executable)} {L._ps_quote(str(echo))} ", 1)
+    line = (f'"{shutil.which("pwsh") or shutil.which("powershell")}" -NoLogo -NoProfile -NonInteractive -Command '
+            f'"$env:BROWSER=\'mine\'; Remove-Item Env:TABMANCER_OPEN_IN -ErrorAction Ignore; {command}; '
+            "[Console]::Out.Write('|' + $env:BROWSER + '|' + [string]($null -eq $env:TABMANCER_OPEN_IN))\"")
+    result = subprocess.run(line, capture_output=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    during, back, unset = result.stdout.decode("ascii").rsplit("|", 2)
+    assert json.loads(during)["env"] == dict(SIGN_IN_ENV)  # set for the sign-in...
+    assert (back, unset) == ("mine", "True")  # ...and as they were once it is over
+
+
+def test_where_no_tab_opens_on_windows_the_line_to_run_is_powershell(monkeypatch, tmp_path):
+    monkeypatch.setattr(L.sys, "platform", "win32")
+    line = L.shell_line(sign_in_tab(str(tmp_path)))
+    assert line.startswith(f"Set-Location -LiteralPath {L._ps_string(str(tmp_path))}; $tabmancer_0=$env:BROWSER;")
+    assert "claude auth login --email 'me+x@example.com'" in line and " env " not in f" {line}"
+    monkeypatch.setattr(L.sys, "platform", "linux")
+    posix = L.shell_line(sign_in_tab(str(tmp_path)))
+    assert posix.startswith(f"cd {L.shlex.quote(str(tmp_path))} && env ") and "BROWSER=" in posix
+
+
+def test_a_variable_name_that_is_not_one_is_refused():
+    launch = Launch(title="t", cwd=".", mode=Mode.NEW, session_id="", env=(("BROWSER; rm -rf ~", "x"),))
+    with pytest.raises(ValueError):
+        L.windows_terminal_command([launch], window="0")
+
+
 # --- POSIX terminals → sh -------------------------------------------------------------------------
+
+@pytest.mark.skipif(sys.platform == "win32", reason="sh")
+def test_a_sign_in_tabs_environment_reaches_claude_whole_through_sh(tmp_path):
+    echo = tmp_path / "env_echo.py"
+    echo.write_text(ENV_ECHO, encoding="utf-8")
+    launch = sign_in_tab(str(tmp_path))
+    env = dict(os.environ, SHELL="true")
+    (tmux,) = L.tmux_commands([launch])
+    (wezterm,) = L.wezterm_commands([launch])
+    for how, line in {"tmux": tmux[-1], "keep open": wezterm[-1], "by hand": L.shell_line(launch)}.items():
+        line = line.replace("claude ", shlex.join([sys.executable, str(echo)]) + " ", 1)
+        result = subprocess.run(["sh", "-c", line], capture_output=True, timeout=30, check=False, env=env)
+        assert result.returncode == 0, (how, result.stderr.decode(errors="replace"))
+        assert heard(result.stdout) == {"argv": launch.argv[1:], "env": dict(SIGN_IN_ENV)}, how
 
 @pytest.mark.skipif(sys.platform == "win32", reason="sh")
 @pytest.mark.parametrize("prompt", PROMPTS)

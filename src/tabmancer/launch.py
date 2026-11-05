@@ -74,6 +74,12 @@ class Launch:
     model: str = ""   # --model for Claude Code; empty: your default (see picks)
     effort: str = ""  # --effort for Claude Code; empty: your default
     new_id: str = ""  # a fresh session's id, given by tabmancer (--session-id) so its pick is kept
+    env: tuple[tuple[str, str], ...] = ()  # set in the tab for this command, e.g. a sign-in's BROWSER
+
+    @property
+    def posix_argv(self) -> list[str]:
+        """argv for a POSIX shell, with env's variables before it."""
+        return ["env", *(f"{name}={value}" for name, value in self.env), *self.argv] if self.env else self.argv
 
     @property
     def argv(self) -> list[str]:
@@ -196,6 +202,35 @@ def _for_windows_powershell(arg: str) -> str:
     return re.sub(r"(\\+)$", r"\1\1", arg) if re.search(r"\s", arg) else arg
 
 
+ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _ps_string(value: str) -> str:
+    """A value as a PowerShell string, always quoted: after `$env:NAME=` a bare word is taken for a
+    command (`$env:X=edge:Default` ran "edge:Default" and set nothing), where _ps_quote leaves one
+    bare as an argument."""
+    quoted = _ps_quote(value)
+    return quoted if quoted != value else f"'{value}'"
+
+
+def _ps_env(env: tuple[tuple[str, str], ...]) -> tuple[str, str]:
+    """PowerShell lines setting env's variables before the command, and putting back what they were
+    after it: the tab stays open as a shell, and a claude run there later would still open its pages
+    with the sign-in's BROWSER (what `env NAME=value command` does for one command on POSIX)."""
+    for name, _ in env:
+        if not ENV_NAME.fullmatch(name):
+            raise ValueError(f"not a variable name: {name!r}")
+    before = "".join(f"$tabmancer_{i}=$env:{name}; $env:{name}={_ps_string(value)}; "
+                     for i, (name, value) in enumerate(env))
+    after = "".join(f"; $env:{name}=$tabmancer_{i}" for i, (name, _) in enumerate(env))  # $null: unset again
+    return before, after
+
+
+def _ps_command(argv: list[str], env: tuple[tuple[str, str], ...]) -> str:
+    before, after = _ps_env(env)
+    return before + " ".join(_ps_quote(arg) for arg in argv) + after
+
+
 def windows_terminal_command(launches: list[Launch], window: str) -> list[str]:
     pwsh = shutil.which("pwsh")
     shell = "pwsh.exe" if pwsh else "powershell.exe"
@@ -204,13 +239,14 @@ def windows_terminal_command(launches: list[Launch], window: str) -> list[str]:
         if len(args) > 3:
             args.append(";")
         argv = launch.argv if pwsh else [_for_windows_powershell(arg) for arg in launch.argv]
+        command = _ps_command(argv, launch.env)
         args += [
             "new-tab",
             "--title", _wt_escape(launch.title),
             "-d", _wt_escape(launch.directory),
             # -NoExit keeps the tab as a shell in that folder after Claude exits.
             shell, "-NoLogo", "-NoExit", "-Command",
-            _wt_escape(_escape_quotes(" ".join(_ps_quote(arg) for arg in argv))),
+            _wt_escape(_escape_quotes(command)),
         ]
     return args
 
@@ -235,17 +271,21 @@ def windows_terminal_commands(launches: list[Launch], window: str) -> list[list[
 
 
 def shell_line(launch: Launch) -> str:
-    return f"cd {shlex.quote(launch.directory)} && {shlex.join(launch.argv)}"
+    """A line to run by hand where no tab could open: for PowerShell on Windows when it sets variables
+    (`env NAME=value` is no command there), for a POSIX shell otherwise."""
+    if sys.platform == "win32" and launch.env:
+        return f"Set-Location -LiteralPath {_ps_string(launch.directory)}; {_ps_command(launch.argv, launch.env)}"
+    return f"cd {shlex.quote(launch.directory)} && {shlex.join(launch.posix_argv)}"
 
 
 def _keep_open(launch: Launch) -> list[str]:
     """POSIX: run Claude, then the user's shell, so the tab stays open in that folder."""
-    return ["sh", "-c", f'{shlex.join(launch.argv)}; exec "${{SHELL:-sh}}"']
+    return ["sh", "-c", f'{shlex.join(launch.posix_argv)}; exec "${{SHELL:-sh}}"']
 
 
 def tmux_commands(launches: list[Launch]) -> list[list[str]]:
     return [["tmux", "new-window", "-c", launch.directory, "-n", launch.title[:30],
-             shlex.join(launch.argv)] for launch in launches]
+             shlex.join(launch.posix_argv)] for launch in launches]
 
 
 def wezterm_commands(launches: list[Launch]) -> list[list[str]]:

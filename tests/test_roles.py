@@ -43,9 +43,25 @@ def test_the_suggestion_is_asked_with_the_goal_and_the_projects_top_level(tmp_pa
     (tmp_path / ".git").mkdir()
     prompt = teams.suggestion_prompt("Add a checkout", str(tmp_path), 4)
     assert "Goal: Add a checkout" in prompt and "At its top level: src/, README.md" in prompt
-    assert "A small web shop." in prompt and ".git" not in prompt and "2 to 4 members" in prompt
-    answer = "Here you go:\n```\nlead: plans @opus @xhigh\n- api: endpoints [src/api] @sonnet\n```"
-    assert teams.suggested_lines(answer) == "lead: plans @opus @xhigh\napi: endpoints [src/api] @sonnet"
+    assert "A small web shop." in prompt and ".git" not in prompt and "besides a lead: 2 to 4," in prompt
+    assert "Team size: N, because" in prompt  # the size and why, asked for first
+    answer = ("Here you go:\n```\nTeam size: 1, because one part.\nlead: plans @opus @xhigh\n"
+              "- api: endpoints [src/api] @sonnet\n```")
+    lines = teams.suggested_lines(answer)
+    assert lines == "lead: plans @opus @xhigh\napi: endpoints [src/api] @sonnet"  # the size line is no member
+    assert teams.suggested_size(answer, lines) == (1, True, "because one part.")
+
+
+def test_the_size_is_what_the_lines_name_and_the_why_is_claudes():
+    for said, why in [("**Team size:** 3, because the parts are separate", "because the parts are separate"),
+                      ("**Team size**: 3, because the parts are separate", "because the parts are separate"),
+                      ("Team size: 3 — three separate parts.", "three separate parts."),
+                      ("- team size: 3", ""), ("Nothing about the size.", "")]:
+        lines = "web: pages\napi: endpoints\ntests: e2e"
+        assert teams.suggested_size(f"{said}\n{lines}", lines) == (3, False, why), said
+    lines = "web: pages\napi: endpoints"  # it said 5 and named 2: what is written counts
+    assert teams.suggested_size(f"Team size: 5, because\n{lines}", lines)[0] == 2
+    assert teams.SUGGEST_MOST == 8 and "2 to 8," in teams.suggestion_prompt("g", ".")
 
 
 def test_in_a_git_repository_the_suggestion_sees_its_files_folder_by_folder(tmp_path):
@@ -92,10 +108,14 @@ async def test_ctrl_r_writes_a_suggested_line_up_and_ctrl_g_shows_a_role(tmp_pat
 
     def answer(prompt, model, timeout=180, effort=""):
         asked.append((model, effort))
-        return "web: the pages [src/web] @sonnet @high\nsearch: the index [src/search] @sonnet @medium"
+        return ("Team size: 2, because the pages and the index are separate parts.\n"
+                "web: the pages [src/web] @sonnet @high\nsearch: the index [src/search] @sonnet @medium")
 
     monkeypatch.setattr(summarize, "ask", answer)
     dialog = NewTeamDialog(str(tmp_path), set())
+    notes = []
+    real_notify = dialog.notify
+    monkeypatch.setattr(dialog, "notify", lambda message, **kw: notes.append(message) or real_notify(message, **kw))
     async with Host(dialog).run_test(size=(120, 30)) as pilot:
         await pilot.pause(0.2)
         await pilot.press("ctrl+r")  # no goal yet: nothing is asked
@@ -106,6 +126,9 @@ async def test_ctrl_r_writes_a_suggested_line_up_and_ctrl_g_shows_a_role(tmp_pat
         await pilot.press("ctrl+r")
         await until(pilot, lambda: "web: the pages" in dialog.query_one("#team-members", TextArea).text)
         assert asked == [("", "medium")]  # your default model, a medium effort
+        assert "Team size" not in dialog.query_one("#team-members", TextArea).text
+        assert notes[-1].startswith("Claude suggests 2 members, as peers — because the pages and the index are "
+                                    "separate parts. Change what you like")  # the size, and why
         assert dialog.peers() and "Nobody leads" in str(dialog.query_one("#team-preview", Static).render())
         box = dialog.query_one("#team-members", TextArea)
         box.focus()
@@ -118,6 +141,30 @@ async def test_ctrl_r_writes_a_suggested_line_up_and_ctrl_g_shows_a_role(tmp_pat
         assert "one of the peers" in role and "Yours to edit: src/search" in role
         await pilot.press("escape")
         await until(pilot, lambda: dialog.app.screen is dialog)
+
+
+async def test_where_the_lead_decides_ctrl_r_suggests_how_many_it_may_pick(tmp_path, monkeypatch):
+    monkeypatch.setattr(summarize, "ask", lambda prompt, model, timeout=180, effort="": (
+        "Team size: 3, because the endpoints, the pages and the tests can go on at once.\n"
+        "lead: plans @opus @xhigh\napi: endpoints\nweb: pages\ntests: e2e"))
+    notes = []
+    dialog = NewTeamDialog(str(tmp_path), set())
+    monkeypatch.setattr(dialog, "notify", lambda message, **kw: notes.append(message))
+    async with Host(dialog).run_test(size=(120, 30)) as pilot:
+        await pilot.pause(0.2)
+        dialog.query_one("#team-name", Input).value = "shop"
+        dialog.query_one("#team-goal", TextArea).text = "Add a checkout"
+        dialog.template = dialog.lineups.index(teams.DECIDE) - 1
+        dialog.action_template()  # to lead decides: the lead line alone
+        assert dialog.deciding()
+        box = dialog.query_one("#team-members", TextArea).text
+        dialog.query_one("#team-most", Input).value = "7"
+        await pilot.press("ctrl+r")
+        await until(pilot, lambda: not dialog.asking and notes)
+        assert dialog.query_one("#team-most", Input).value == "3"  # the size, as its limit
+        assert dialog.query_one("#team-members", TextArea).text == box and dialog.deciding()  # still the lead's pick
+        assert notes[-1].startswith("Claude suggests at most 3 members — because the endpoints, the pages and the "
+                                    "tests can go on at once. The lead picks them")
 
 
 async def test_a_failed_suggestion_leaves_the_box_and_says_why(tmp_path, monkeypatch):

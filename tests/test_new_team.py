@@ -86,6 +86,103 @@ async def test_the_dialog_says_what_is_missing_and_then_what_will_open(tmp_path)
         assert [(m.name, m.model) for m in host.result.members] == [("lead", "opus"), ("api", ""), ("tests", "sonnet")]
 
 
+def made_projects(tmp_path):
+    from datetime import datetime, timedelta
+
+    from tabmancer.newsessions import Project
+
+    now = datetime.now()
+    found = []
+    for name, sessions, hours in [("shop", 12, 1), ("blog", 3, 30), ("pcb-router", 7, 5)]:
+        (tmp_path / name).mkdir()
+        found.append(Project(str(tmp_path / name), sessions, now - timedelta(hours=hours)))
+    return found
+
+
+async def test_the_project_is_picked_from_the_ones_you_worked_in_as_in_n(tmp_path):
+    from tabmancer.teamview import ProjectList
+
+    found = made_projects(tmp_path)
+    dialog = NewTeamDialog(found[0].cwd, set(), [p.cwd for p in found], found)
+    async with Host(dialog).run_test(size=(120, 30)) as pilot:
+        await pilot.pause(0.2)
+        side, listing = dialog.query_one("#team-side"), dialog.query_one(ProjectList)
+        assert not side.has_class("-picking")  # the name has the focus: the team drawn
+        await pilot.press("enter")  # on to the Project box: the projects in the drawing's place
+        await pilot.pause(0.2)
+        assert dialog.focused.id == "team-folder" and side.has_class("-picking")
+        rows = [str(listing.get_option_at_index(i).prompt) for i in range(listing.option_count)]
+        assert [row.split()[0] for row in rows] == ["shop", "blog", "pcb-router"]  # newest first
+        assert rows[0].split()[1] == "12" and listing.highlighted == 0  # the box's own, lit
+        assert str(dialog.query_one("#projects-card").border_subtitle) == "3 projects"
+        assert "shop" in str(dialog.query_one("#team-project-where", Static).render())
+        await pilot.press("r", "o")  # typed over the box's words (all selected): they filter
+        await pilot.pause(0.1)
+        found_rows = [str(listing.get_option_at_index(i).prompt).split()[0] for i in range(listing.option_count)]
+        assert found_rows == ["pcb-router", "shop", "blog"][:len(found_rows)] and found_rows[0] == "pcb-router"
+        await pilot.press("backspace", "backspace", "b", "l")
+        await pilot.pause(0.1)
+        assert "blog" in str(listing.get_option_at_index(0).prompt) and listing.highlighted == 0
+        await pilot.press("enter")  # picks it, and on to the goal
+        await pilot.pause(0.1)
+        assert dialog.query_one("#team-folder", Input).value.endswith("blog")
+        assert dialog.focused.id == "team-goal" and not side.has_class("-picking")
+        await pilot.press("shift+tab")  # back: every project again, blog lit
+        await pilot.pause(0.1)
+        assert listing.option_count == 3 and listing.highlighted == 1
+        await pilot.press("down", "enter")  # ↓ moves through them from the box
+        await pilot.pause(0.1)
+        assert dialog.query_one("#team-folder", Input).value.endswith("pcb-router")
+        await pilot.press("shift+tab")
+        await pilot.pause(0.1)
+        await pilot.click(ProjectList, offset=(3, 0))  # a click picks one too
+        await pilot.pause(0.2)
+        assert dialog.query_one("#team-folder", Input).value.endswith("shop") and dialog.focused.id == "team-goal"
+
+
+def test_a_folder_written_out_comes_first_even_when_a_newer_one_matches_it_too(tmp_path):
+    from datetime import datetime, timedelta
+
+    from tabmancer.newsessions import Project, find
+
+    now = datetime.now()
+    (tmp_path / "api-v2").mkdir()
+    (tmp_path / "api").mkdir()
+    (tmp_path / "web-app").mkdir()
+    newer, older = Project(str(tmp_path / "api-v2"), 5, now), Project(str(tmp_path / "api"), 2, now - timedelta(days=3))
+    app = Project(str(tmp_path / "web-app"), 1, now - timedelta(days=9))
+    assert find(str(tmp_path / "api"), [newer, older, app])[0] is older  # what was typed, not the newer api-v2
+    assert find("", [newer, older, app]) == [newer, older, app]
+    # Name matches first: every folder here is under one temp folder, which any word of its path finds.
+    assert find("app", [newer, older, app])[0].name == "web-app"
+
+
+async def test_a_folder_written_out_is_offered_first_and_tab_never_stops_in_the_list(tmp_path):
+    from tabmancer.teamview import ProjectList
+
+    found = made_projects(tmp_path)
+    elsewhere = tmp_path / "far" / "away"
+    elsewhere.mkdir(parents=True)
+    dialog = NewTeamDialog(found[0].cwd, set(), None, found)
+    async with Host(dialog).run_test(size=(120, 30)) as pilot:
+        await pilot.pause(0.2)
+        await pilot.press("tab")
+        assert dialog.focused.id == "team-folder"
+        box, listing = dialog.query_one("#team-folder", Input), dialog.query_one(ProjectList)
+        box.value = str(elsewhere)  # a folder not among them, written out
+        await pilot.pause(0.1)
+        offered = listing.get_option_at_index(0)
+        assert listing.option_count == 1 and not offered.disabled and str(offered.prompt).startswith("away ")
+        box.value = str(tmp_path / "nothing-here")
+        await pilot.pause(0.1)
+        assert listing.get_option_at_index(0).disabled  # says nothing matches, and Enter keeps what is typed
+        await pilot.press("enter")
+        assert box.value == str(tmp_path / "nothing-here") and dialog.focused.id == "team-goal"
+        assert "a project folder that exists" in team_preview(dialog)
+        await pilot.press("shift+tab", "tab")  # Tab from the box goes to the goal, never into the list
+        assert dialog.focused.id == "team-goal" and dialog.folders == [p.cwd for p in found]
+
+
 async def test_line_ups_are_shown_by_name_and_keep_the_lead_line(tmp_path):
     dialog = NewTeamDialog(str(tmp_path), set())
     async with Host(dialog).run_test(size=(120, 40)) as pilot:

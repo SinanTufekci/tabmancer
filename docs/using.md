@@ -34,11 +34,25 @@ and asks what to do with the ticked ones (all to begin with; `Tab` to the list, 
 
 `A` (or a click on the account in the top bar) lists the Claude accounts you have used, with
 their plans: Enter on one opens Claude Code's own sign-in in a new tab (`claude auth login
---email`), and your browser opens with that account filled in. tabmancer never touches a
-sign-in itself; it keeps only the emails it has seen Claude Code signed in with. Once the
-switch lands, every session goes on with the new account, and the sessions a usage limit
-stopped on the other one say `◐ signed in again`: `c` continues them now, and those waiting
-for their limit go on at once.
+--email`). Its page signs in whichever claude.ai account the browser is signed in to (the
+email is only filled in), so under each account `A` says where its page opens, and `←`/`→`
+picks another place:
+
+- **A browser profile** (Chrome, Edge, Brave, Chromium) that is signed in to that account:
+  one click on Authorize finishes it. An account opens in the profile that syncs with the
+  same Google account until you pick another.
+- **A private window**, where you sign in afresh: always the account you meant, nothing to
+  set up.
+- **Your default browser**, as links open (and as before).
+
+The pick is kept for each account (and for "Another account"). Claude Code opens its page
+with the program in `BROWSER`, so the sign-in tab gets a small launcher of tabmancer's that
+opens it there. tabmancer reads only your browsers' list of profiles, each one's name and
+the Google account it syncs with, and never touches a sign-in itself: it keeps the emails it
+has seen Claude Code signed in with and where each one's page opens. Once the switch lands,
+every session goes on with the new account, and the sessions a usage limit stopped on the
+other one say `◐ signed in again`: `c` continues them now, and those waiting for their limit
+go on at once.
 
 Sign in with another account in a session stopped at a limit (`/login` in it) and it says
 `◐ signed in again`: `c` continues it now, and if it was waiting for its limit to lift it goes

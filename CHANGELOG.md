@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+- **Each account signs in where it is signed in.** Claude Code's sign-in page took whichever
+  claude.ai account the browser was signed in to, whatever account `A` asked for. Now `A` says
+  where each account's page opens and `←`/`→` picks it: the browser profile signed in to that
+  account (Chrome, Edge, Brave, Chromium; one click), a private window (you sign in afresh), or
+  the default browser. An account opens in the profile that syncs with the same Google account
+  until you pick another, and the pick is kept. tabmancer reads only the browsers' list of
+  profiles, never their cookies or passwords; the sign-in stays Claude Code's.
+- **`Ctrl+R` suggests the team's size, and why.** The suggestion says how many members the goal
+  needs (2 to 8 besides a lead, up from 5, as few as can work at the same time) and why, in a note
+  beside the line-up it writes. Where the lead decides, the size goes into *At most*, and the
+  lead still picks the members (the suggestion used to replace that line-up with its own).
+- **A goal weighed against the team at work.** With a team at work in the project, the new-team
+  form says so, and `Ctrl+R` tells Claude of that team and decides first: a team of its own (its
+  parts apart from that team's), members to add to that team (`Ctrl+S` adds them, its goal grows
+  by yours and its lead is told who joins and why), or that the team has the goal already (a
+  warning, and `Ctrl+S` sends the goal to its lead as a prompt you can change first). The lead's
+  message is typed into its tab once it waits for you; `Ctrl+N` makes a team of its own after all.
+- **The team's project, picked as in `n`.** While the new-team form's Project box has the
+  cursor, the projects you have worked in are listed beside it, with their sessions and when
+  you last worked in them: type to find one (those with the words in their name first), `↑`/`↓`
+  and Enter (or a click) to pick it. A folder path written out still works. `n` finds them the
+  same way now: the projects with the words in their name first, a folder typed out in full first
+  of all.
+
 ## 0.1.4
 
 - **`tabmancer team start`.** A team's closed members come back from the command line, as `s` brings
