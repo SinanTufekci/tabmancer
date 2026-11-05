@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5
 
 - **Each account signs in where it is signed in.** Claude Code's sign-in page took whichever
   claude.ai account the browser was signed in to, whatever account `A` asked for. Now `A` says
