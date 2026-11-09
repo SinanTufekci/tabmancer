@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.6
 
 - **The router.** `n` suggests the model, the effort and the context cap for the first message:
   once you stop typing, one quick call to Haiku reads it and says what will do the work at the
