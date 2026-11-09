@@ -36,7 +36,7 @@ Result = tuple[str, str]  # (level, message); level is ok, warn or fail
 SHUTDOWN_RECORDS = {"win32": "the System event log", "darwin": "`last shutdown`",
                     "linux": "the systemd journal or wtmp (`last -x`)"}
 # The Claude Code tabmancer was last checked with: see CONTRIBUTING.md, "Releasing".
-TESTED_WITH = "2.1.318"
+TESTED_WITH = "2.1.319"
 # What tabmancer runs claude with, by subcommand ("" for claude itself), and what each is for.
 USES = {
     "": {
@@ -45,6 +45,8 @@ USES = {
         "--model": "summaries, handovers, teams, new sessions", "--effort": "teams, new sessions",
         "--session-id": "new sessions with a model or effort", "--tools": "summaries and plan limits",
         "--no-session-persistence": "summaries and plan limits", "--name": "teams",
+        "--autocompact": "the context cap of new sessions and teams",
+        "--strict-mcp-config": "summaries, the router and suggestions (no MCP servers started)",
         "--append-system-prompt": "teams", "--settings": "teams", "--allowedTools": "a lead that picks its team",
         "agents": "which sessions are open", "attach": "background sessions", "stop": "background sessions",
         "rm": "background sessions",

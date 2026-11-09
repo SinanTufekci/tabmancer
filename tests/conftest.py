@@ -59,6 +59,10 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(handover, "write_itself", no_resume)
     monkeypatch.setattr(rename, "rename", no_rename)
     monkeypatch.setattr(usage, "read_usage", list)
+    # No context cap and no router unless a test asks for them: the tests of everything else see
+    # the command lines and the n dialog as they were before them (test_router, test_picks: caps).
+    monkeypatch.setenv("TABMANCER_CONTEXT_CAP", "auto")
+    monkeypatch.setenv("TABMANCER_ROUTER", "0")
     monkeypatch.setattr(usage, "read_codex", lambda now=None: [])  # never the real ~/.codex
     monkeypatch.setattr(focus, "focus_tab", lambda title: False)  # never switch the real tabs
     monkeypatch.setattr(focus, "close_tab", lambda title: False)  # nor close them

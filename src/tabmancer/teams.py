@@ -29,7 +29,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import picks
+from . import picks, router
 from .config import config_dir, read_json, write_json
 from .launch import Launch, Mode
 from .sessions import (
@@ -99,6 +99,7 @@ class Team:
     decide: int = 0  # the lead picks the members itself, at most this many; 0: the line-up given
     background: bool = False  # the members run as background sessions (claude --bg), the lead in a tab
     worktrees: bool = False  # each member (not the lead) in a git worktree of its own (claude --worktree)
+    cap: str = ""  # its members' context cap (--autocompact, see picks); empty: none, as in teams made before caps
 
     def has_worktree(self, member: Member) -> bool:
         """Whether this member works in a worktree of its own: every member but the lead, when the
@@ -208,18 +209,20 @@ def goal_line(team: Team) -> str:
 
 
 def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int = 0,
-             background: bool = False, peers: bool = False, worktrees: bool = False) -> Team:
+             background: bool = False, peers: bool = False, worktrees: bool = False, cap: str = "") -> Team:
     """The lead first: the one among members, or one with the usual focus. With decide, the lead
     picks the rest itself, at most that many; with background, the members run without tabs. With
     peers, nobody leads: the members as given, each in its tab (never in the background, as you talk
-    to each of them). With worktrees, each member but the lead works in a git worktree of its own."""
+    to each of them). With worktrees, each member but the lead works in a git worktree of its own.
+    Its members start with the context cap given, else the one new sessions start with."""
+    cap = cap or picks.default_cap()
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")  # with its offset: a zone change cannot move it
     if peers:
         return Team(clean(name), cwd, tidy(goal), [replace(m, lead=False) for m in members], stamp,
-                    worktrees=worktrees)
+                    worktrees=worktrees, cap=cap)
     lead = next((m for m in members if m.lead), Member(LEAD, LEAD_FOCUS, lead=True))
     return Team(clean(name), cwd, tidy(goal), [lead, *(m for m in members if not m.lead)],
-                stamp, decide, background, worktrees)
+                stamp, decide, background, worktrees, cap)
 
 
 def add_members(team: Team, text: str) -> tuple[list[Member], str]:
@@ -338,10 +341,16 @@ def load() -> dict[str, Team]:
                        for m in item["members"]]
             teams[item["name"]] = Team(item["name"], item["cwd"], item.get("goal", ""), members,
                                        item.get("created", ""), int(item.get("decide") or 0),
-                                       bool(item.get("background")), bool(item.get("worktrees")))
+                                       bool(item.get("background")), bool(item.get("worktrees")),
+                                       _cap(item.get("cap")))
         except (KeyError, TypeError):
             continue
     return teams
+
+
+def _cap(saved: object) -> str:
+    word = str(saved or "")
+    return word if word == picks.NO_CAP or picks.cap_tokens(word) else ""
 
 
 def save(teams: dict[str, Team]) -> None:
@@ -591,8 +600,7 @@ def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST,
         "- Put a first line 'lead: plans the work, hands it out and checks it @opus @xhigh' only when the parts "
         "depend on each other so much that someone must hand out and check the work. Leave it out when they "
         "are separate topics that only need to tell each other what touches the other: they then work as peers.\n"
-        "- Models: opus for hard design or tricky code, sonnet for routine code, tests and docs, haiku for quick "
-        "look-ups. Efforts: high for most work, xhigh for the hardest, medium for routine work, low for look-ups.\n"
+        f"- {router.GUIDE}\n"
         "- Name a member who reviews review, one who writes tests tests, one who writes documentation docs, one "
         "who finds things out research.")
 
@@ -731,7 +739,8 @@ def options(team: Team, member: Member) -> tuple[str, ...]:
     path = role_file(team, member)
     told = (("--append-system-prompt-file", str(path)) if path is not None else
             ("--append-system-prompt", " ".join(role(team, member).split())))
-    return ("--name", team.session_name(member), *member.pick.flags(), "--settings", str(settings_file()),
+    return ("--name", team.session_name(member), *member.pick.flags(), *picks.cap_flags(team.cap),
+            "--settings", str(settings_file()),
             f"--allowedTools={tools}", *told)
 
 
@@ -1021,6 +1030,14 @@ def conversation(team: Team, sessions: dict[str, Session | None], live: dict[str
         if original is not None:
             message.summary, message.at = original.summary, original.at
     return sorted(received + pending, key=lambda m: m.at)
+
+
+def cap_of(session_id: str, team: Team | None = None) -> int:
+    """The context cap a session runs under, as far as tabmancer knows, in tokens: its team's for a
+    member of a team with one, else the one tabmancer last opened it with (picks); 0 for none."""
+    if team is not None and (tokens := picks.cap_tokens(team.cap)):
+        return tokens
+    return picks.cap_of(session_id)
 
 
 @dataclass

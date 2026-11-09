@@ -25,7 +25,7 @@ from . import __version__
 from .config import read_json, write_json
 
 CACHE_FILE = "index.json"
-CACHE_FORMAT = 6  # bump when Session or the parser changes shape (6: a member told only by its lead is read)
+CACHE_FORMAT = 7  # bump when Session or the parser changes shape (7: the effort of the last reply)
 HEAD_BYTES = 512 * 1024
 TAIL_BYTES = 2 * 1024 * 1024
 MAX_HEAD_BYTES = 8 * 1024 * 1024
@@ -91,6 +91,7 @@ class Session:
     cli: str = "claude"  # which CLI it belongs to, see clis.CLIS
     context: int = 0  # tokens the last reply was sent with: how full the context window is
     model: str = ""   # the model of the last reply
+    effort: str = ""  # ...and its effort, which Claude Code writes on each reply (2.1.319); empty before that
     resets: datetime | None = None  # stopped at a usage limit (open or not): when the limit lifts
     signed_in_again: bool = False  # ...and /login in it since: another account, so it can go on now
 
@@ -129,7 +130,7 @@ def _glob(folder: Path, pattern: str) -> list[Path]:
 # The fields tabmancer reads from a record, by the type they must have. A field of another type, a
 # shape some later Claude Code may write, is dropped, so the record reads as if it were not there.
 TEXT_FIELDS = ("type", "cwd", "gitBranch", "timestamp", "entrypoint", "aiTitle", "customTitle", "lastPrompt",
-               "sessionId", "error", "requestId")
+               "sessionId", "error", "requestId", "effort")
 DICT_FIELDS = ("origin", "attachment")
 BLOCK_TEXT_FIELDS = ("type", "text", "name", "id")
 # Transcripts that could not be read at all, by what went wrong: the list goes on without them,
@@ -443,6 +444,7 @@ def _read_tail(f, size: int, session: Session) -> None:
                     if sent:
                         session.context = sent
                         session.model = str(record["message"].get("model") or session.model)
+                        session.effort = str(record.get("effort") or session.effort)
                 reply = _text(content).replace("**", "").replace("`", "").strip()
                 if reply:
                     session.last_reply = _shorten(reply, 500)

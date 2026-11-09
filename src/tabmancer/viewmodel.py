@@ -16,7 +16,7 @@ import posixpath
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 
-from . import context
+from . import context, picks, teams
 from .sessions import INTERRUPTED, Exit, Session, Status, folder_key
 from .teams import TeamState, counts
 from .tokens import duration
@@ -322,15 +322,17 @@ class View:
 
 def session_view(session: Session, *, hidden: bool, pinned: bool, member: tuple[str, str] | None,
                  lead: bool, git: dict | None, tokens: int | None, armed: datetime | None,
-                 queued: str | None) -> SessionView:
+                 queued: str | None, cap: int = 0, default_cap: int = 0) -> SessionView:
+    """One row. cap: the session's context cap in tokens (0: none); default_cap: the one new sessions
+    get, past which a session without a cap is crowded."""
     label, tone = label_of(session)
-    share = context.share(session) if session.context and session.cli == "claude" else None
+    share = context.share(session, cap) if session.context and session.cli == "claude" else None
     return SessionView(
         id=session.session_id, project=session.project, folder=folder_key(session.cwd), title=session.title,
         cli=session.cli, open=session.exit is Exit.RUNNING,
         kind="background" if session.status is Status.BACKGROUND else "terminal", state=state_id(session),
         label=label, tone=tone, rank=state_of(session)[2] if session.exit is Exit.RUNNING else 9,
-        resets_at=session.resets, context=share, crowded=bool(share is not None and context.crowded(session)),
+        resets_at=session.resets, context=share, crowded=bool(share is not None and context.crowded(session, cap, default_cap)),
         last_active=session.last_active, started=session.started, hidden=hidden, pinned=pinned,
         team=member[0] if member else None, member=member[1] if member else None, lead=lead, git=git,
         tokens=tokens, armed=armed, queued=queued)
@@ -369,10 +371,18 @@ def build(sessions: dict[str, Session], *, hidden: set[str], pinned: set[str], g
         state = git.get(folder_key(folder))
         return {"changed": bool(state.changed), "ahead": bool(state.ahead)} if state is not None else None
 
+    default_cap = picks.cap_tokens(picks.default_cap())
+
+    def cap_of(session: Session) -> int:
+        member = grouped.members.get(session.session_id)
+        state = team_states.get(member[0]) if member else None
+        return teams.cap_of(session.session_id, state.team if state is not None else None)
+
     views = [session_view(s, hidden=s.session_id in hidden, pinned=s.session_id in pinned,
                           member=grouped.members.get(s.session_id), lead=s.session_id in leads,
                           git=git_of(s.cwd), tokens=(use.total if (use := tokens.get(s.session_id)) else None),
-                          armed=armed.get(s.session_id), queued=queued.get(s.session_id))
+                          armed=armed.get(s.session_id), queued=queued.get(s.session_id),
+                          cap=cap_of(s), default_cap=default_cap)
              for s in sessions.values()]
     groups = [{"name": name, "teams": grouped.placed.get(name, []),
                "sessions": [s.session_id for s in items if s.session_id not in grouped.members]}

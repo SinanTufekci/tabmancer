@@ -51,7 +51,7 @@ def test_a_fresh_session_gets_its_id_from_tabmancer_and_its_effort_back_on_resum
     argv = launch.argv
     assert argv[:3] == ["claude", "--session-id", launch.new_id]
     assert argv[3:] == ["--model", "sonnet", "--effort", "low", "go"]
-    assert picks.recall(launch.new_id) == Pick("sonnet", "low")
+    assert picks.recall(launch.new_id) == Pick("sonnet", "low", picks.NO_CAP)
     # Claude Code resumes on the same model by itself, but at your default effort: the effort is given back.
     for mode in (Mode.RESUME, Mode.AUTO, Mode.FORK):
         again = picks.resumed(Launch(title="api", cwd="C:/api", mode=mode, session_id=launch.new_id, prompt="on"))
@@ -103,7 +103,7 @@ def test_a_handover_starts_on_the_model_and_effort_the_old_session_was_opened_wi
     old = Session(session_id="old", path=None, cwd="C:/api", last_active=datetime.now())
     launch = handover.fresh(old, "## Goal\nShip it.")
     assert launch.model == "sonnet" and launch.effort == "high" and launch.new_id
-    assert picks.recall(launch.new_id) == Pick("sonnet", "high")
+    assert picks.recall(launch.new_id) == Pick("sonnet", "high", picks.NO_CAP)
 
 
 def test_new_command_takes_a_model_and_an_effort(tmp_path, monkeypatch):
@@ -168,4 +168,4 @@ async def test_the_n_dialog_picks_a_model_and_an_effort(fake_home, tmp_path, mon
         await until(pilot, lambda: len(opened) == 1)
     launch = opened[0]
     assert (launch.model, launch.effort) == ("sonnet", "high") and launch.argv[1] == "--session-id"
-    assert picks.recall(launch.new_id) == Pick("sonnet", "high")
+    assert picks.recall(launch.new_id) == Pick("sonnet", "high", picks.NO_CAP)

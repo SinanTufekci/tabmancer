@@ -23,10 +23,11 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import clis, picks, teams, workspaces
+from . import clis, picks, router, teams, workspaces
 from .dialogs import Choice, cards, frame, light_rows, pill, title
 from .launch import Launch, Mode
 from .sessions import Session, folder_key
+from .summarize import SummaryError
 from .theme import AMBER, CYAN, GREEN, MUTED, TEXT, keys
 
 
@@ -103,7 +104,7 @@ def linked_team(folder: str, message: str, pick: picks.Pick, taken: set[str]) ->
     base = teams.clean(teams.clean(Path(folder).name)[:18]) or "team"
     name = next(n for n in (teams.clean(base if k == 1 else f"{base}-{k}") for k in range(1, 100)) if n not in taken)
     goal = "; ".join(m.focus for m in members)
-    return teams.new_team(name, folder, goal, members, peers=True)
+    return teams.new_team(name, folder, goal, members, peers=True, cap=pick.cap)
 
 
 @dataclass
@@ -162,6 +163,7 @@ class NewSessions(ModalScreen[Request | None]):
     NewSessions .row > .name { width: 7; color: $text-muted; }
     NewSessions .row.-lit > .name { color: $text; text-style: bold; }
     NewSessions #new-pick-words { color: $text-muted; height: auto; }
+    NewSessions #new-route { height: auto; }
     NewSessions #opens-card { height: 1fr; min-height: 4; }
     NewSessions #new-opens { height: auto; }
     NewSessions #new-note { color: $text-muted; height: auto; dock: bottom; }
@@ -173,7 +175,9 @@ class NewSessions(ModalScreen[Request | None]):
         Binding("ctrl+s", "start(True)", "Start", priority=True),
         Binding("ctrl+o", "next_cli", "CLI", priority=True),
         Binding("ctrl+l", "link", "Linked", priority=True),
+        Binding("ctrl+r", "route", "Router's pick", priority=True),
     ]
+    ROUTE_AFTER = 2.0  # seconds of no typing before the router is asked about the first message
 
     def __init__(self, found: list[Project], ticked: set[str] | None = None) -> None:
         super().__init__()
@@ -183,6 +187,12 @@ class NewSessions(ModalScreen[Request | None]):
         self.shown: dict[str, Project] = {}
         self.cli = default_cli()
         self.linked = False  # Ctrl+L: the lines as a team of peers in the one folder ticked
+        # The router (Ctrl+R): its answers by the message they were for, the messages it is being
+        # asked about, whether Ctrl+R waits to take an answer, and the timer that asks once typing stops.
+        self.routes: dict[str, router.Route | str] = {}  # a string: why there was no answer
+        self.routing: set[str] = set()
+        self.take_route = False
+        self.route_timer = None
 
     def compose(self) -> ComposeResult:
         # Ids of their own: the dashboard's stylesheet hides its own #filter box.
@@ -207,19 +217,23 @@ class NewSessions(ModalScreen[Request | None]):
                         # The card's title names the rows: the model above, the effort under it.
                         yield Choice([picks.DEFAULT, *picks.MODELS], id="new-model", labels=SHORT)
                         yield Choice([picks.DEFAULT, *picks.EFFORTS], id="new-effort", labels=SHORT)
+                        yield Choice([*picks.CAPS, picks.NO_CAP], value=picks.default_cap(), id="new-cap",
+                                     labels=CAP_SHORT)
                         yield Label("", id="new-pick-words")
+                        yield Label("", id="new-route")
                     with Vertical(id="opens-card", classes="card"):
                         yield Static("", id="new-opens")
                         yield Label("These start clean: h in the list carries a session on.", id="new-note")
             yield Label("", id="new-help")
             yield Label(keys(("Space", "tick"), ("Enter/Ctrl+S", "start them"), ("Tab", "next box"),
-                             ("Ctrl+L", "linked"), ("Ctrl+O", "the CLI"), ("Esc", "cancel")), classes="hint")
+                             ("Ctrl+R", "router's pick"), ("Ctrl+L", "linked"), ("Ctrl+O", "the CLI"),
+                             ("Esc", "cancel")), classes="hint")
 
     def on_mount(self) -> None:
         self.query_one("#folders-card").border_title = "Folders"
         self.query_one("#message-card").border_title = "First message"
         self.query_one("#message-card").border_subtitle = "optional"
-        self.query_one("#pick-card").border_title = "Model · Effort"
+        self.query_one("#pick-card").border_title = "Model · Effort · Context"
         self.show_folders()
         self.show_cli()
         self.show_link()
@@ -271,8 +285,7 @@ class NewSessions(ModalScreen[Request | None]):
         count = len(chosen) * max(1, len(lines))
         card.border_title = Text(f"Opens {count} tab{'s' * (count != 1)}" + (", linked" if linked else ""),
                                  style=f"bold {GREEN}")
-        card.border_subtitle = Text.assemble(clis.label(self.cli), (f" · {self.pick().words()}"
-                                                                    if self.pick() else ""))
+        card.border_subtitle = Text.assemble(clis.label(self.cli), *(f" · {part}" for part in self.pick_parts()))
         room = max(1, (card.content_size.height or 4) - 2)  # under them, the note
         rows = [(Path(cwd).name or cwd, line) for cwd in chosen for line in (lines or [""])]
         out = Text()
@@ -289,6 +302,12 @@ class NewSessions(ModalScreen[Request | None]):
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         self.show_link()
+        self.show_route()
+        if self.route_timer is not None:
+            self.route_timer.stop()
+            self.route_timer = None
+        if router.enabled():  # asked once the typing stops, so the suggestion is there by the time you look
+            self.route_timer = self.set_timer(self.ROUTE_AFTER, self.ask_route)
 
     def action_link(self) -> None:
         self.linked = not self.linked
@@ -406,11 +425,16 @@ class NewSessions(ModalScreen[Request | None]):
     # --- model and effort -----------------------------------------------------------
 
     def pick(self) -> picks.Pick:
-        """What the Model and Effort rows say; nothing for other CLIs."""
+        """What the Model, Effort and Context rows say; nothing for other CLIs."""
         if self.cli != "claude":
             return picks.Pick()
-        model, effort = (self.query_one(f"#new-{row}", Choice).value for row in ("model", "effort"))
-        return picks.Pick("" if model == picks.DEFAULT else model, "" if effort == picks.DEFAULT else effort)
+        model, effort, cap = (self.query_one(f"#new-{row}", Choice).value for row in ("model", "effort", "cap"))
+        return picks.Pick("" if model == picks.DEFAULT else model, "" if effort == picks.DEFAULT else effort, cap)
+
+    def pick_parts(self) -> list[str]:
+        """The pick as the card of what opens says it: 'sonnet · high', '300k context'."""
+        pick = self.pick()
+        return [part for part in (pick.words(), f"{pick.cap} context" if picks.cap_tokens(pick.cap) else "") if part]
 
     def show_pick(self) -> None:
         """A line on the row in focus, or on what is picked: what it means for the sessions."""
@@ -419,8 +443,11 @@ class NewSessions(ModalScreen[Request | None]):
             words.update(f"Model and effort are for Claude Code sessions; {clis.label(self.cli)} uses its own settings.")
         else:
             model, effort = self.query_one("#new-model", Choice), self.query_one("#new-effort", Choice)
-            if self.focused is effort or (self.focused is not model and effort.value != picks.DEFAULT
-                                          and model.value == picks.DEFAULT):
+            cap = self.query_one("#new-cap", Choice)
+            if self.focused is cap:
+                words.update(f"{CAP_SHORT.get(cap.value, cap.value)}: {picks.CAP_WORDS[cap.value]}")
+            elif self.focused is effort or (self.focused is not model and effort.value != picks.DEFAULT
+                                            and model.value == picks.DEFAULT):
                 words.update(f"{effort.value}: {picks.EFFORT_WORDS[effort.value]}")
             elif self.focused is model or model.value != picks.DEFAULT:
                 words.update(f"{model.value}: {picks.MODEL_WORDS[model.value]}")
@@ -428,6 +455,7 @@ class NewSessions(ModalScreen[Request | None]):
                 words.update("default: your Claude Code settings pick them.")
         if self.is_mounted:
             self.show_opens()
+            self.show_route()
 
     def show_help(self) -> None:
         """One line under the cards: how to use the box in focus."""
@@ -435,7 +463,8 @@ class NewSessions(ModalScreen[Request | None]):
         if focused is self.message:
             about = "Enter adds a line: a session for each line, in every folder ticked. One folder: Ctrl+L links them."
         elif isinstance(focused, Choice):
-            about = "←/→ picks. Left at default, your Claude Code settings decide; other CLIs use their own."
+            about = ("←/→ picks; Ctrl+R takes the router's pick. Model and effort left at default: your Claude Code "
+                     "settings decide.")
         else:
             about = ("Space ticks a folder. Type to filter by name or path (a / or a \\ alike); a folder path "
                      "works too.")
@@ -452,6 +481,107 @@ class NewSessions(ModalScreen[Request | None]):
 
     def on_descendant_blur(self, event: events.DescendantBlur) -> None:
         light_rows(self)
+        if event.widget is self.message and router.enabled():  # done writing it: no need to wait
+            self.ask_route()
+
+    # --- the router -----------------------------------------------------------------
+
+    def route_key(self) -> str:
+        """The first message as the router is asked about it: its lines, each one tidied."""
+        return "\n".join(topics(self.message.text))
+
+    def chosen_names(self) -> list[str]:
+        known = {folder_key(p.cwd): p for p in self.extra + self.found} | self.shown
+        return [known[key].name for key in self.ticked if key in known]
+
+    def ask_route(self, take: bool = False) -> None:
+        """Ask the router about the first message as it is now, unless it was asked already: one
+        quick call to a small model, in a thread. With take, its pick goes into the rows when it comes."""
+        self.route_timer = None
+        key = self.route_key()
+        if self.cli != "claude" or not router.worth_routing(key):
+            self.show_route()
+            return
+        self.take_route = take or (self.take_route and key in self.routing)
+        found = self.routes.get(key)
+        if isinstance(found, router.Route):
+            if take:
+                self.take(found)
+            self.show_route()
+            return
+        if key not in self.routing:
+            self.routing.add(key)
+            self.routes.pop(key, None)  # asked again after it failed
+            folders = self.chosen_names()
+            self.run_worker(lambda: self.ask_router(key, folders), thread=True, group="route", exit_on_error=False)
+        self.show_route()
+
+    def ask_router(self, key: str, folders: list[str]) -> None:
+        """In a thread: the router's answer, or why there is none."""
+        try:
+            found: router.Route | str = router.suggest(key, folders)
+        except (SummaryError, OSError) as problem:
+            found = str(problem) or type(problem).__name__
+        self.app.call_from_thread(self.routed, key, found)
+
+    def routed(self, key: str, found: router.Route | str) -> None:
+        self.routing.discard(key)
+        self.routes[key] = found
+        if not self.is_mounted or key != self.route_key():
+            return  # the message has changed since: kept, should it come back
+        if isinstance(found, router.Route) and self.take_route:
+            self.take(found)
+        self.take_route = False
+        self.show_route()
+
+    def take(self, route: router.Route) -> None:
+        """The router's pick into the rows: what it named, the rest as it was."""
+        self.take_route = False
+        for row, value in (("model", route.pick.model), ("effort", route.pick.effort), ("cap", route.pick.cap)):
+            if value:
+                self.query_one(f"#new-{row}", Choice).pick(value)
+
+    def taken(self, route: router.Route) -> bool:
+        pick = self.pick()
+        return all(not want or have == want for want, have in
+                   ((route.pick.model, pick.model), (route.pick.effort, pick.effort), (route.pick.cap, pick.cap)))
+
+    def show_route(self) -> None:
+        """The router's line, under the rows: what it suggests and why, that it is asking, or why not."""
+        label = self.query_one("#new-route", Label)
+        key = self.route_key()
+        label.display = self.cli == "claude"
+        if self.cli != "claude":
+            return
+        found = self.routes.get(key)
+        if not router.worth_routing(key):
+            label.update(Text("Router: write the first message, and it suggests a pick for it.", style=MUTED))
+        elif key in self.routing:
+            label.update(Text.assemble(("Router: ", MUTED), (f"asking {router.MODEL} what this needs…", MUTED),
+                                       ("  it goes in when it comes" if self.take_route else "", MUTED)))
+        elif isinstance(found, router.Route):
+            why = f" — {found.why}" if found.why else ""
+            if self.taken(found):
+                label.update(Text.assemble(("✓ ", f"bold {GREEN}"), ("the router's pick", GREEN), (why, MUTED)))
+            else:
+                label.update(Text.assemble(("Router suggests ", MUTED), (found.words(), f"bold {CYAN}"), (why, MUTED),
+                                           ("  Ctrl+R", f"bold {AMBER}"), (" takes it", MUTED)))
+        elif isinstance(found, str):
+            label.update(Text.assemble(("Router: no suggestion (", MUTED), (found[:80], AMBER),
+                                       ("). Ctrl+R asks again.", MUTED)))
+        else:
+            label.update(Text.assemble(("Router: ", MUTED), ("Ctrl+R", f"bold {AMBER}"),
+                                       (" suggests a model, effort and context for this message.", MUTED)))
+
+    def action_route(self) -> None:
+        """Ctrl+R: the router's pick into the rows, asked for now if it is not there yet."""
+        if self.cli != "claude":
+            self.notify("The router picks for Claude Code sessions: Ctrl+O to Claude Code first.", severity="warning")
+            return
+        if not router.worth_routing(self.route_key()):
+            self.notify("Write the first message first: the router picks for it.", severity="warning", timeout=5)
+            return
+        self.ask_route(take=True)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input is self.filter_box:
@@ -509,6 +639,7 @@ class NewSessions(ModalScreen[Request | None]):
 
 TAIL = 20  # the sessions and the last time, right-aligned at a row's end
 SHORT = {picks.DEFAULT: "default"}  # "your default" as the Model and Effort rows show it
+CAP_SHORT = {picks.NO_CAP: "Claude's own"}  # no cap, as the Context row shows it
 
 
 def _seps(text: str) -> str:

@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from rich.console import Console
 
 from tabmancer import sessions
-from tabmancer.app import HEADING, LIVE_STATES, STATUS_LABEL, SessionPicker
+from tabmancer.app import COLUMNS, HEADING, LIVE_STATES, STATUS_LABEL, SessionPicker
 from tabmancer.sessions import Exit, Status
 from tabmancer.theme import AMBER, BLUE, RED, keys, keys_in
 from tabmancer.tokens import Event, Report, Tokens
@@ -117,8 +117,9 @@ async def test_the_context_column_says_what_it_shows_where(fake_home):
         await wait_for(pilot, lambda: app.sessions)
         labels = [str(column.label) for column in app.table.columns.values()]
         assert "Context" in labels and "Process" not in labels
-        assert app.heading_cells(f"{HEADING}rest")[4].plain.strip() == "process"
-        assert app.heading_cells(f"{HEADING}open")[4].plain.strip() == ""
+        context = COLUMNS.index("exit")  # the Context column, whose key is still "exit"
+        assert app.heading_cells(f"{HEADING}rest")[context].plain.strip() == "process"
+        assert app.heading_cells(f"{HEADING}open")[context].plain.strip() == ""
 
 
 def test_a_key_line_wraps_between_keys_never_inside_one():

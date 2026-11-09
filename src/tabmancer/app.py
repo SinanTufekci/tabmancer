@@ -87,12 +87,15 @@ from .teamview import (
     JoinTeam,
     LineDialog,
     NewTeamDialog,
+    TeamHandoverDialog,
     TeamScreen,
     TeamsDialog,
     TellTeam,
     close_tabs,
     closing_note,
+    handing_note,
     open_names,
+    team_handover_problem,
 )
 from .teamview import colours as team_colours
 from .theme import (
@@ -179,6 +182,9 @@ TITLE_MIN = 18      # ...and at its narrowest
 # Every column but the title at its widest (an 18-character project name), with the title's padding
 # and the scrollbar: the title gets the rest. tests/test_layout.py holds these to it.
 OTHER_COLUMNS = {"picker": 72, "live": 84}
+MODEL_COLUMN = 14  # the Model column ('sonnet·xhigh' and its padding); on a narrow screen it is left empty
+COLUMNS = ("sel", "project", "title", "status", "model", "exit", "active", "mode")
+EFFORT_SHORT = {"medium": "med"}  # as the Model column says an effort
 HEADING = "\x00"  # the keys of the rows that head the open sessions and the rest
 TEAM_ROW = "\x01"  # ...and of the row that heads a team in OPEN NOW, which the cursor does stop on
 CONTEXT_BAR = 4     # cells in the bar that shows how full a context is
@@ -583,6 +589,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.project_filter = ALL_PROJECTS
         self.expanded: set[str] = set()  # rows opened to show how they ended
         self.title_width = EXPAND_WIDTH
+        self.model_shown = True  # the Model column has room; on a narrow screen the title has it
         self.frame = 0  # spinner frame
         self.polls = 0
         self.background_live: dict[str, dict] = {}  # from the last full poll
@@ -614,8 +621,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.team_flights: dict[str, list[tuple[teams.Message, float]]] = {}  # messages in flight, since when
         self.unfolded: set[str] = set()  # teams shown with their members under their row (e); else one row
         self.closing_team: str | None = None  # x once on an open team's row: again closes its members' tabs
+        self.handing_team: str | None = None  # h once on a team (its row or view): again hands it over
         self.blocks: list[tuple[teamtree.TeamState, list[tuple[str, Session]]]] = []  # the teams in the list
         self.member_rows: dict[str, tuple[str, str]] = {}  # their members' session ids -> (team, member)
+        self.default_cap = picks.cap_tokens(picks.default_cap())  # the cap new sessions get, in tokens
+        # Teams whose lead wrote a handover not taken yet (Esc in its dialog): h shows it again, unwritten.
+        self.kept_handovers: dict[str, tuple[Session, str, str, bool]] = {}
         self.limits: list[usage.Limit] = []  # the plan limits as last read
         self.card_filter: str | None = None  # 1 2 3: the list shows only what that card counts
         self.bar_info = ""  # the top bar's counts, apart from its pills (watch_sub_title)
@@ -836,10 +847,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     # --- rows ---------------------------------------------------------------------
 
     def setup_columns(self) -> None:
-        labels = (["", "Project", "Title", "State", "Kind", "Last activity", "ctx"] if self.live_mode
-                  else ["", "Project", "Title", "Status", "Context", "Last", "Open as"])
+        model = "Model" if self.model_shown else ""
+        labels = (["", "Project", "Title", "State", model, "Kind", "Last activity", "ctx"] if self.live_mode
+                  else ["", "Project", "Title", "Status", model, "Context", "Last", "Open as"])
         self.table.clear(columns=True)
-        for key, label in zip(("sel", "project", "title", "status", "exit", "active", "mode"), labels):
+        for key, label in zip(COLUMNS, labels):
             self.table.add_column(label, key=key)
 
     def visible(self) -> list[Session]:
@@ -907,17 +919,20 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             Text(_clip(session.project, 18)),
             Text(_clip(session.title, self.title_width)),
             self.status_cell(session),
+            self.model_cell(session),
             Text("background" if session.status is Status.BACKGROUND else "terminal", style="dim"),
             last,
             self.context_cell(session),
         )
 
     def context_cell(self, session: Session) -> Text:
-        """'▰▰▰▱ 73%', amber from the point where a handover is worth it, red past 85%."""
+        """'▰▰▰▱ 73%' (of its cap, for a session opened with one), amber from the point where a handover
+        is worth it, red past 85%."""
         if not session.context or session.cli != "claude":
             return Text("")
-        share = context.share(session)
-        colour = MUTED if share < context.WARN_SHARE else AMBER if share < 0.85 else RED
+        cap = self.cap_of(session)
+        share = context.share(session, cap)
+        colour = RED if share >= 0.85 else AMBER if context.crowded(session, cap, self.default_cap) else MUTED
         filled = min(CONTEXT_BAR, round(share * CONTEXT_BAR))
         return Text.assemble(("▰" * filled, colour), ("▱" * (CONTEXT_BAR - filled), "#2a2a2a"),
                              (f" {share:.0%}", colour))
@@ -944,10 +959,24 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             place,
             title,
             self.status_cell(session),
+            self.model_cell(session),
             self.process_cell(session),
             Text(ago(session.last_active), style=MUTED),
             self.mode_cell(session),
         )
+
+    def model_cell(self, session: Session) -> Text:
+        """'opus·xhigh': the model of its last reply and the effort it ran at (as Claude Code wrote it, else
+        as tabmancer opened it); quiet, and left empty where the screen is too narrow for it."""
+        if not self.model_shown or not session.model or session.model.startswith("<"):
+            return Text("")
+        found = context.MODEL.search(session.model.lower())
+        model = found.group(1) if found else _clip(session.model.removeprefix("claude-"), 7)
+        effort = self.effort_of(session)
+        out = Text(model, style=TEXT if session.exit is Exit.RUNNING else MUTED)
+        if effort:
+            out.append(f"·{EFFORT_SHORT.get(effort, effort)}", style=MUTED)
+        return out
 
     def process_cell(self, session: Session) -> Text:
         """How the process ended; other CLIs leave no record of that, so it names the CLI."""
@@ -987,9 +1016,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if not hasattr(self, "table") or not self.table.size.width:
             return
         room = self.table.size.width - OTHER_COLUMNS["live" if self.live_mode else "picker"]
+        shown = room - MODEL_COLUMN >= TITLE_MIN  # the model goes before the title is cut below its least
+        room -= MODEL_COLUMN if shown else 2  # an empty column keeps its padding
         width = max(TITLE_MIN, min(EXPAND_WIDTH, room))
-        if width != self.title_width:
-            self.title_width = width
+        if width != self.title_width or shown != self.model_shown:
+            self.title_width, self.model_shown = width, shown
             self.setup_columns()  # a column keeps the width of its widest cell so far
             self.refresh_rows()
 
@@ -1226,7 +1257,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         # The Context column shows how a closed session's process ended: said where its sessions are.
         closed = group == "rest" or (bool(items) and all(s.exit is not Exit.RUNNING for s in items))
         caption = Text("\nprocess", style=MUTED) if closed else Text("")
-        return (Text(""), label, Text(""), Text(""), caption, Text(""), Text(""))
+        return (Text(""), label, Text(""), Text(""), Text(""), caption, Text(""), Text(""))
 
     def refresh_rows(self) -> None:
         table = self.table
@@ -1272,7 +1303,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         name = key.removeprefix(TEAM_ROW)
         state = self.team_states.get(name)
         if state is None:  # gone since the rows were made: the next refresh drops the row
-            return tuple(Text("") for _ in range(7))
+            return tuple(Text("") for _ in COLUMNS)
         accent = self.accent()
         members = self.team_members(name)
         opened = any(s.exit is Exit.RUNNING for _, s in members)
@@ -1308,7 +1339,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                       else Text("closed", style=MUTED))
             last = ago(max(s.last_active for _, s in members)) if members else ""
         spent = state.tokens(self.session_tokens)
-        return (mark, heading, title, status, Text(human(spent) if spent else "", style=MUTED),
+        return (mark, heading, title, status, Text(""), Text(human(spent) if spent else "", style=MUTED),
                 Text(last, style=MUTED), Text(""))
 
     def chip(self, session: Session | None) -> tuple[str, str, str, int]:
@@ -1347,8 +1378,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         for state, _ in self.blocks:
             key = f"{TEAM_ROW}{state.team.name}"
             if key in self.table.rows:
-                for column, value in zip(("sel", "project", "title", "status", "exit", "active", "mode"),
-                                         self.team_cells(key)):
+                for column, value in zip(COLUMNS, self.team_cells(key)):
                     self.table.update_cell(key, column, value)
 
     def member_cells(self, session: Session, style: str) -> tuple[Text, Text]:
@@ -1411,8 +1441,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         table = self.table
         if session.session_id not in table.rows:
             return
-        for key, value in zip(("sel", "project", "title", "status", "exit", "active", "mode"),
-                              self.cells(session)):
+        for key, value in zip(COLUMNS, self.cells(session)):
             table.update_cell(session.session_id, key, value)
 
     def current(self) -> Session | None:
@@ -1555,8 +1584,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if use is not None and use.total:
             grid.add_row("Tokens", Text.assemble((human(use.total), TEXT), (f"  ·  {human(use.output)} out", MUTED)))
         if session.context and session.cli == "claude":
-            grid.add_row("Context", fill(session, timed=False))
-            if context.crowded(session):  # the two ways on, in a line: the same work, or a new phase
+            cap = self.cap_of(session)
+            grid.add_row("Context", fill(session, timed=False, cap=cap))
+            if context.cold(session):  # the cache is gone: the next message pays for all of it again
+                grid.add_row("", Text(f"cache gone after an hour: the next message writes all {human(session.context)} "
+                                      "of it again", style=AMBER))
+            if context.crowded(session, cap, self.default_cap):  # the two ways on: the same work, or a new phase
                 grid.add_row("", Text.assemble(("/compact", f"bold {AMBER}"), (": go on · ", AMBER),
                                                ("h", f"bold {AMBER}"), (": new phase", AMBER)))
         if session.exit in (Exit.CLEAN, Exit.KILLED):
@@ -1575,9 +1608,18 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                                       style=MUTED))
         return grid
 
+    def cap_of(self, session: Session) -> int:
+        """The context cap a session runs under, as far as tabmancer knows (teams.cap_of); 0 for none."""
+        found = self.member_rows.get(session.session_id)
+        state = self.team_states.get(found[0]) if found else None
+        return teams.cap_of(session.session_id, state.team if state is not None else None)
+
     def effort_of(self, session: Session) -> str:
-        """The effort a session was started with, when tabmancer knows it: a team member's own, or
-        what it was opened with from here (picks). Others ran on Claude Code's own setting."""
+        """The effort a session runs at: as its last reply says (Claude Code writes it there since
+        2.1.319), else as tabmancer started it: a team member's own, or what it was opened with from
+        here (picks). Others ran on Claude Code's own setting."""
+        if session.effort in picks.EFFORTS:
+            return session.effort
         found = teams.member_of(session) if session.session_id in self.member_rows else None
         return found[1].effort if found else picks.recall(session.session_id).effort
 
@@ -1593,7 +1635,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         return picks.resumed(teams.as_member(session, Launch(
             title=_clip(f"{session.project}: {session.title}", 48), cwd=session.cwd, mode=mode,
             session_id=session.session_id, cli=session.cli,
-            prompt=continue_prompt(session.status) if mode is Mode.AUTO else None), saved))
+            prompt=continue_prompt(session.status) if mode is Mode.AUTO else None), saved),
+            context=session.context or 0)
 
     # --- events and actions -------------------------------------------------------
 
@@ -1649,7 +1692,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             how, prompt = answer
             launch = picks.resumed(teams.as_member(session, Launch(
                 title=_clip(f"{session.project}: {session.title}", 48), cwd=session.cwd, mode=Mode.RESUME,
-                session_id=session.session_id, prompt=prompt, cli=session.cli)))
+                session_id=session.session_id, prompt=prompt, cli=session.cli)), context=session.context or 0)
             if how == "background" and not clis.CLIS[session.cli].can_background:
                 self.notify(f"{clis.label(session.cli)} has no background sessions: opening a tab instead.",
                             severity="warning")
@@ -1707,7 +1750,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def warn_crowded(self, sessions) -> None:
         """Say so, once per session, when an open session's context passes the handover point.
         Nothing is handed over unless you ask."""
-        crowded = [s for s in sessions if s.exit is Exit.RUNNING and context.crowded(s)
+        crowded = [s for s in sessions if s.exit is Exit.RUNNING and context.crowded(s, self.cap_of(s), self.default_cap)
                    and s.session_id not in self.told_crowded]
         if not crowded:
             return
@@ -1716,10 +1759,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             session = crowded[0]
             going = f" has been going for {duration((datetime.now() - session.started).total_seconds())} and" \
                 if session.started else ""
-            self.notify(f"{session.project}{going} its context is {context.share(session):.0%} full. /compact in "
-                        "its tab goes on with the same work; h starts a new phase in a fresh session, and shows "
-                        "what is handed over.", title="Crowded session", timeout=12)
-            self.mascot.react("crowded", f"{session.project}: context {context.share(session):.0%} full", AMBER)
+            cap = self.cap_of(session)
+            size = human(session.context) + (f", {context.share(session, cap):.0%} of its cap" if cap else "")
+            self.notify(f"{session.project}{going} its context is {size}, and every reply reads all of it again. "
+                        "/compact in its tab goes on with the same work; h starts a new phase in a fresh session, "
+                        "and shows what is handed over.", title="Crowded session", timeout=12)
+            self.mascot.react("crowded", f"{session.project}: context {human(session.context)}", AMBER)
         else:
             names = ", ".join(s.project for s in crowded[:4])
             self.notify(f"{len(crowded)} open sessions have crowded contexts ({names}). /compact in a tab goes "
@@ -1727,7 +1772,35 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                         "handed over.", title="Crowded sessions", timeout=12)
 
     def action_handover(self) -> None:
+        team = self.team_at() if not self.selected else None
+        if team is not None:  # a team's row: the whole team, as h in its view
+            self.press_team_handover(team.team, {name: self.sessions.get(s.session_id, s) if s is not None else None
+                                                 for name, s in team.sessions.items()})
+            return
         self.open_handover(self.current())
+
+    def press_team_handover(self, team: teams.Team, members: dict[str, Session | None]) -> None:
+        """h on a team's row or in its view. Twice: the whole team handed over (hand_over_team). A
+        handover its lead wrote already, the team still closed, is shown again, not written again."""
+        if open_names(team, members):  # opened again since it was written: that handover is old now
+            self.kept_handovers.pop(team.name, None)
+        kept = self.kept_handovers.get(team.name)
+        if kept is not None:
+            self.team_handover_ready(team, *kept)
+            return
+        reason = team_handover_problem(team, members)
+        if reason:
+            self.notify(reason, severity="warning", timeout=8)
+            return
+        if self.handing_team != team.name:
+            self.handing_team = team.name
+            self.notify(handing_note(team, members), timeout=10)
+            self.set_timer(10, lambda: setattr(self, "handing_team", None))
+            return
+        self.handing_team = None
+        self.notify(f"{team.name}: its lead is writing the handover and the line-up for the rest. The new team is "
+                    "shown to you once it is done.", title="Handing the team over", timeout=10)
+        self.hand_over_team(team, members)
 
     def open_handover(self, session: Session | None, how: str | None = None) -> None:
         """The h dialog for a session: how its handover should be written. Given how ("self" or
@@ -1819,6 +1892,62 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         else:
             self.notify(f"Handed {session.project} over to a fresh session.", title="Handed over", timeout=8)
         self.mascot.react("handover", f"{session.project}: handed over", self.accent())
+
+    @work(thread=True, group="team-handover")
+    def hand_over_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
+        """A whole team handed over: its open members' tabs closed, its lead closed and resumed once to
+        write the handover and the line-up for the rest (handover.write_team); then the dialog."""
+        lead = members[team.lead.name] if team.lead is not None else None
+        if lead is None:
+            return
+        try:
+            others = [team.session_name(m) for m in team.members if not m.lead
+                      and (s := members.get(m.name)) is not None and s.exit is Exit.RUNNING]
+            if others:
+                said, severity = close_tabs(others)
+                if severity == "warning":
+                    raise handover.HandoverError(said.rstrip("."))
+            if lead.exit is Exit.RUNNING:
+                now, open_ones = self.call_from_thread(lambda: (self.sessions.get(lead.session_id, lead),
+                                                                self.open_ones()))
+                handover.close(now, open_ones, again="Close the lead's tab yourself (/exit), then h twice again")
+            written, lineup = handover.write_team(lead, team)
+        except (handover.HandoverError, summarize.SummaryError, OSError) as error:
+            self.call_from_thread(self.notify, f"{team.name} was not handed over: {str(error).rstrip('.')}. Members "
+                                               "closed on the way stay closed: s in the team's view starts them again.",
+                                  severity="error", timeout=15)
+            return
+        suggested = bool(lineup)
+        self.call_from_thread(self.team_handover_ready, team, lead, written,
+                              lineup or handover.current_lineup(team), suggested)
+
+    def team_handover_ready(self, team: teams.Team, lead: Session, written: str, lineup: str,
+                            suggested: bool) -> None:
+        """The lead's handover and line-up shown; Ctrl+S starts the team's new generation."""
+        self.kept_handovers[team.name] = (lead, written, lineup, suggested)
+
+        def start(answer: tuple[str, str] | None) -> None:
+            if answer is None:
+                self.notify(f"{team.name} is not started again: its members are closed. h in its view shows the "
+                            "handover again; s starts the team as it was.", timeout=10)
+                return
+            lines, cap = answer
+            fresh = handover.next_team(teams.load().get(team.name, team), lines, cap)
+            saved = teams.load()
+            saved[fresh.name] = fresh
+            teams.save(saved)
+            self.kept_handovers.pop(team.name, None)
+            for screen in self.screen_stack:
+                if isinstance(screen, TeamScreen) and screen.team.name == team.name:
+                    screen.adopt(fresh)
+            self.open_team(fresh, handover.team_launches(fresh, lead, written))
+            count = sum(not m.lead for m in fresh.members)
+            self.notify(f"{team.name} handed over: a fresh lead with the handover and {count} fresh "
+                        f"member{'s' if count != 1 else ''}. The old sessions stay, resumable.",
+                        title="Team handed over", timeout=10)
+            self.mascot.react("handover", f"{team.name}: handed over", self.accent())
+
+        self.push_screen(TeamHandoverDialog(team, written, lineup, suggested), start)
 
     # --- renaming ----------------------------------------------------------------------
 
@@ -2673,6 +2802,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             return {"team": "Close team", "team-closed": "Hide team"}.get(kind)
         if action == "toggle" and kind == "team-closed":
             return "Tick team"
+        if action == "handover" and kind in TEAM_ROWS:
+            return "Hand team over"
         return None
 
     @staticmethod
@@ -3286,6 +3417,5 @@ IDLE_ON = {
     "hide": {"open", "member-open"},  # open sessions always show
     "pin": TEAM_ROWS,
     "prompt": TEAM_ROWS,
-    "handover": TEAM_ROWS,
     "rename": {"member", "member-open", *TEAM_ROWS},  # members keep the names the team finds them by
 }

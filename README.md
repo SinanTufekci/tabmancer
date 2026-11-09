@@ -52,7 +52,8 @@ picker at login when sessions were left open.
 ![The dashboard: live counters, projects, recent sessions, how each one ended, and a preview with an AI summary](docs/picker.png)
 
 - **Shows what each one is doing.** Every open session, whichever terminal it is in: working,
-  waiting for you or needing you, and how full its context is; your plan limits in the top bar.
+  waiting for you or needing you, the model and effort it runs on, and how full its context is;
+  your plan limits in the top bar.
   `j` goes to the next one waiting for you, and `Enter` on an open one goes to its tab.
 - **Brings your sessions back.** Closed before they were done, by you, a reboot or a crash,
   they say how they ended (cut off, unanswered, at a usage limit, done) and wait under TO
@@ -65,7 +66,13 @@ picker at login when sessions were left open.
   topics side by side, talking through Claude Code's own messaging between sessions: one row in
   the list, and a view of who tells whom what. Each member can run on its own model and effort.
 - **Hands crowded sessions over.** `h` moves the work to a fresh session, with a full handover
-  as its first message.
+  as its first message. A whole team too: its lead writes the handover and the line-up for the
+  rest of the work, you change what you like, and the team starts again, fresh.
+- **Goes easy on your plan's limit.** Every reply reads the whole conversation again, so a long
+  session is where most of a limit goes. The sessions tabmancer starts keep to a context cap
+  (300k unless you pick another), and in `n` a quick router suggests the model, effort and cap
+  for your first message: the cheapest that will still do the work well, yours to take with
+  `Ctrl+R` or leave. [The context cap](docs/handover.md#the-context-cap).
 - **Counts.** Tokens, when you work, tools and files, plan limits with a forecast, and a
   written report of the week to share.
 - **Wraps your week up.** [Claude Code Wrapped](#claude-code-wrapped): your week as a card to
@@ -109,9 +116,9 @@ tabmancer wrapped --share x    # or bluesky, threads, instagram; --story saves t
 | `p` | write a prompt to a session (an open one: go to its tab) |
 | `j` | the next open session waiting for you |
 | `/` | find by project, title, or anything said in a session |
-| `n` | fresh sessions in several projects at once |
+| `n` | fresh sessions in several projects at once; `Ctrl+R` takes the router's model, effort and cap |
 | `T` | teams |
-| `h` | hand a session over to a fresh one |
+| `h` | hand a session over to a fresh one; on a team, the whole team (twice) |
 | `c` | continue the sessions stopped at a usage limit |
 | `u` | stats |
 | `W` | Claude Code Wrapped: your week as a card; `p` shares it, `f` makes it a story |
@@ -144,9 +151,13 @@ and the Google account it syncs with), never their cookies or passwords; and the
 opened again, to count them on your week's card (`W`). Once a day it asks PyPI which version of
 tabmancer is the latest, to tell you of a newer one (`tabmancer updates off` stops it). A model
 is called only when you ask for one, through your own CLI
-and plan: an AI summary (`s`), a handover (`h`), a report (`r` in the stats), a team's line-up
+and plan: an AI summary (`s`), a handover (`h`; a team's lead writes its team's, `h` in the team
+view), a report (`r` in the stats), a team's line-up
 (`Ctrl+R` in the new-team form, which sends the goal, the project's file names and its README's
-start, and the goal and members' parts of a team at work in that project). It types into
+start, and the goal and members' parts of a team at work in that project). One call is made
+without asking: in `n`, once you stop typing a first message, the router sends that message and
+the ticked folders' names to Haiku to suggest a model, effort and context cap (`"router": false`
+in its `config.json` stops it; `Ctrl+R` then asks). It types into
 an open session only when you have it continue the ones stopped at a usage limit (`c`), or send
 a team at work's lead the message `Ctrl+R` wrote for it (`Ctrl+S`).
 Sharing your week's card (`p` on it) opens the platform's own page for a new post in your

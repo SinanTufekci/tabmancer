@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- **The router.** `n` suggests the model, the effort and the context cap for the first message:
+  once you stop typing, one quick call to Haiku reads it and says what will do the work at the
+  least cost to your plan, and why. `Ctrl+R` takes the pick; nothing changes without it. Team
+  line-ups (`Ctrl+R` in the new-team form) and a team's handover weigh models and efforts the
+  same way.
+- **A context cap.** The sessions tabmancer starts, and a team's members, start with Claude
+  Code's `--autocompact 300k`: every reply reads the whole conversation again, and long ones are
+  where most of a plan's limit goes. Pick another in the new **Context** row (in `n`, in the
+  new-team form and in a team's handover), with `tabmancer new --autocompact`, or `context_cap` in
+  `config.json`. Claude Code forgets the cap on
+  resume, so tabmancer gives it again; a session from before caps gets it only while well under
+  it. A capped session's context counts against its cap; one without is crowded past the cap new
+  sessions get, and the preview says when a big one's cache has gone (an hour idle) and its next
+  message writes all of it again.
+- **A whole team handed over.** `h` twice in a team's view: its lead writes the handover and the
+  line-up for the rest of the work, you see both and change the line-up, and `Ctrl+S` starts the
+  team again as a new generation of itself: a fresh lead with the handover, fresh members. `H`
+  hands the picked member over alone, as `h` did.
+- **Model and effort in the list.** A **Model** column says each session's model and the effort
+  it ran at (`opus·xhigh`), as Claude Code now writes it on every reply; on a narrow screen it
+  leaves its room to the title.
+- The demo's team shows as a team again (it was made after its members' sessions began, so
+  they were not its members). `claude -p` calls (summaries, the router, suggestions) start no MCP
+  servers: half of a short call's time went on them.
+
 ## 0.1.5
 
 - **Each account signs in where it is signed in.** Claude Code's sign-in page took whichever

@@ -13,7 +13,7 @@ from datetime import timedelta
 from . import clis, shortcuts, workspaces
 from .config import read_json, write_json
 from .launch import Launch, continue_prompt, open_tabs
-from .picks import EFFORTS, Pick
+from .picks import EFFORTS, NO_CAP, Pick, cap_tokens
 from .sessions import find_sessions, nothing_found
 from .shutdowns import open_at_shutdown, recent_shutdowns
 
@@ -72,6 +72,9 @@ def main(argv: list[str] | None = None) -> None:
     fresh.add_argument("--model", help="Claude Code's model: opus, sonnet, haiku, fable or a full name "
                                        "(default: your own setting)")
     fresh.add_argument("--effort", choices=list(EFFORTS), help="Claude Code's effort (default: your own setting)")
+    fresh.add_argument("--autocompact", type=_cap, metavar="CAP",
+                       help="the context Claude Code keeps before it compacts: 100k to 1M, or auto for its own "
+                            "window (default: 300k, or context_cap in config.json)")
     using = sub.add_parser("clis", help="which coding CLIs' sessions to list: claude, codex, agy")
     using.add_argument("action", nargs="?", choices=["enable", "disable"])
     using.add_argument("names", nargs="*", metavar="name", help=", ".join(clis.CLIS))
@@ -130,7 +133,7 @@ def main(argv: list[str] | None = None) -> None:
         manage_clis(args.action, args.names)
     elif args.command == "new":
         start_fresh(args.folders, "\n".join(args.prompt or []), args.cli, args.days,
-                    Pick(args.model or "", args.effort or ""), args.linked)
+                    Pick(args.model or "", args.effort or "", args.autocompact or ""), args.linked)
     elif args.command == "open":
         open_workspace(args.name, args.days, args.all)
     elif args.command == "workspaces":
@@ -441,13 +444,21 @@ def print_sessions(days: float, include_all: bool, as_json: bool) -> None:
         print("\n* looked open at the last shutdown")
 
 
+def _cap(word: str) -> str:
+    """--autocompact as Claude Code takes it: 100k to 1M (300k, 300000, or 300 for short), or auto."""
+    word = word.strip().lower()
+    if word == NO_CAP or cap_tokens(word):
+        return word
+    raise argparse.ArgumentTypeError("100k to 1M (e.g. 300k), or auto")
+
+
 def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: float, pick: Pick | None = None,
                 linked: bool = False) -> None:
     from . import newsessions, teams
 
     cli = cli or newsessions.default_cli()
     if pick and cli != "claude":
-        sys.exit("--model and --effort are for Claude Code sessions.")
+        sys.exit("--model, --effort and --autocompact are for Claude Code sessions.")
     if linked and (cli != "claude" or len(names) != 1 or len(newsessions.topics(prompt)) < 2):
         sys.exit("--linked takes one folder, two --prompt or more, and Claude Code.")
     listed = find_sessions(days, quick=True)

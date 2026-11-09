@@ -20,8 +20,8 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import background, context, focus, newsessions, summarize, teams, teamtree, viewmodel
-from .dialogs import FolderSuggester, cards, frame, light_rows, pill, pills, tilde, title
+from . import background, context, focus, handover, newsessions, picks, summarize, teams, teamtree, viewmodel
+from .dialogs import Choice, FolderSuggester, cards, frame, light_rows, pill, pills, tilde, title
 from .safework import work
 from .sessions import Exit, Session, Status, folder_key
 from .statsview import copy_text
@@ -333,7 +333,7 @@ class TeamGraph(Widget):
         right = " · ".join(part for part in (member.pick.short(), tokens) if part)
         left = 0
         if session is not None and session.context:
-            share = context.share(session)
+            share = context.share(session, teams.cap_of(session.session_id, self.team))
             filled = round(share * METER)
             bar = GREEN if share < 0.6 else AMBER if share < 0.85 else RED
             canvas.put(x + 2, y + 2, "▰" * filled, bar)
@@ -432,6 +432,141 @@ def close_tabs(names: list[str]) -> tuple[str, str]:
     return f"The team's members: {' and '.join(said)}.", "information"
 
 
+def team_handover_problem(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:
+    """Why the team cannot be handed over now; None when it can."""
+    if team.lead is None:
+        return "A team of peers has no lead to write the handover: H hands the picked member over by itself."
+    lead = sessions.get(team.lead.name)
+    if lead is None or lead.path is None:
+        return "The lead has no session yet: there is nothing to hand over."
+    busy = [m.name for m in team.members if (s := sessions.get(m.name)) is not None and s.exit is Exit.RUNNING
+            and s.live_state not in handover.IDLE]
+    if busy:
+        return (f"{', '.join(busy)} {'is' if len(busy) == 1 else 'are'} working: hand the team over once "
+                f"{'it waits' if len(busy) == 1 else 'they wait'} for you.")
+    return None
+
+
+def handing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str:
+    """What h once says: what a second h does."""
+    names = open_names(team, sessions)
+    closing = f"closes {len(names)} open member{'s' if len(names) != 1 else ''}, " if names else ""
+    return (f"h again hands {team.name} over: it {closing}its lead writes the handover and the line-up the rest of "
+            "the work needs, and you see both before the new team opens.")
+
+
+class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
+    """The new generation of a team handed over: the lead's handover (to read), the line-up it
+    suggests and the context cap its members start under (yours to change). Ctrl+S starts it, and
+    dismisses with (the line-up, the cap); Esc leaves the team closed."""
+
+    DEFAULT_CSS = frame("TeamHandoverDialog", "large", height="90%") + cards("TeamHandoverDialog") + """
+    TeamHandoverDialog > Vertical { width: 95%; max-width: 150; max-height: 40; }
+    TeamHandoverDialog #handover-body { height: 1fr; margin-top: 1; }
+    TeamHandoverDialog #handover-text-card { width: 55%; height: 1fr; margin-right: 1; }
+    TeamHandoverDialog #handover-side { width: 1fr; height: 1fr; }
+    TeamHandoverDialog #handover-lineup-card { height: 1fr; }
+    TeamHandoverDialog #handover-members { height: 1fr; min-height: 4; }
+    TeamHandoverDialog #handover-cap-card { height: auto; }
+    TeamHandoverDialog #handover-cap-words { height: auto; color: $text-muted; }
+    TeamHandoverDialog #handover-preview { height: auto; color: $text-muted; }
+    TeamHandoverDialog #handover-about { color: $text-muted; height: auto; }
+    """
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "start", "Start the new team", priority=True),
+    ]
+
+    def __init__(self, team: teams.Team, written: str, lineup: str, suggested: bool) -> None:
+        super().__init__()
+        self.team, self.written, self.lineup, self.suggested = team, written, lineup, suggested
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(title("Hand the team over", self.team.name, "its new generation"))
+            yield Label("The lead wrote this for its successor. The team starts again under its name: a fresh lead "
+                        "with this handover, and the members on the right, fresh. The old sessions stay, resumable.",
+                        id="handover-about")
+            with Horizontal(id="handover-body"):
+                with VerticalScroll(id="handover-text-card", classes="card"):
+                    yield Static(self.written, id="handover-text")
+                with Vertical(id="handover-side"):
+                    with Vertical(id="handover-lineup-card", classes="card"):
+                        yield TextArea(self.lineup, id="handover-members", compact=True)
+                    with Vertical(id="handover-cap-card", classes="card"):
+                        yield Choice([*picks.CAPS, picks.NO_CAP], value=self.team.cap or picks.default_cap(),
+                                     id="handover-cap", labels=newsessions.CAP_SHORT)
+                        yield Label("", id="handover-cap-words")
+                    yield Static("", id="handover-preview")
+            yield Label(keys(("Ctrl+S", "start the new team"), ("Tab", "next box"), ("←/→", "the cap"),
+                             ("Esc", "not now: the team stays closed, h shows this again")), classes="hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#handover-text-card").border_title = "Handover"
+        card = self.query_one("#handover-lineup-card")
+        card.border_title = "Line-up"
+        card.border_subtitle = "the lead's suggestion" if self.suggested else "as it was: the lead suggested none"
+        self.query_one("#handover-cap-card").border_title = "Context"
+        self.show_preview()
+        self.query_one("#handover-members", TextArea).focus()
+
+    def members(self) -> list[teams.Member]:
+        lead = self.team.lead.name if self.team.lead is not None else teams.LEAD
+        return [m for m in teams.parse_members(self.query_one("#handover-members", TextArea).text) if m.name != lead]
+
+    def problems(self) -> list[str]:
+        members = self.members()
+        return [problem for problem, wrong in (
+            ("a member at least, one a line", not members and not self.team.decide),
+            # A fresh member would start in the old one's worktree, on its branch.
+            *((f"another name for {m.name}: its worktree from before is still in the project",
+               self.team.has_worktree(m) and Path(self.team.cwd, *teams.WORKTREES,
+                                                  self.team.session_name(m)).exists()) for m in members)) if wrong]
+
+    def cap(self) -> str:
+        return self.query_one("#handover-cap", Choice).value
+
+    def show_preview(self) -> None:
+        members = self.members()
+        chosen = self.cap()
+        self.query_one("#handover-cap-words", Label).update(
+            f"{newsessions.CAP_SHORT.get(chosen, chosen)}: {picks.CAP_WORDS[chosen]}")
+        cap = picks.cap_tokens(chosen)
+        out = Text.assemble(("Opens ", MUTED), (f"{len(members) + 1} tabs", f"bold {GREEN}"),
+                            (": the lead, with the handover", MUTED))
+        for member in members:
+            out.append("\n● ", style=GREEN)
+            out.append(member.name, style=f"bold {CYAN}")
+            out.append(f"  {member.pick.short() or 'your default model and effort'}", style=MUTED)
+        out.append(f"\nEach under a {human(cap)} context cap." if cap else
+                   "\nEach on Claude Code's own window, with no cap.", style=MUTED)
+        for problem in self.problems():
+            out.append(f"\n▲ needs {problem}", style=AMBER)
+        self.query_one("#handover-preview", Static).update(out)
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        self.show_preview()
+
+    def on_choice_changed(self, event: Choice.Changed) -> None:
+        self.show_preview()
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        light_rows(self)
+
+    def on_descendant_blur(self, event: events.DescendantBlur) -> None:
+        light_rows(self)
+
+    def action_start(self) -> None:
+        problems = self.problems()
+        if problems:
+            self.notify("The new team needs " + "; ".join(problems) + ".", severity="warning", timeout=8)
+            return
+        self.dismiss(("\n".join(m.line() for m in self.members()), self.cap()))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class TeamScreen(Screen):
     """The team at work. Arrows pick a member, Enter goes to its tab (or opens it)."""
 
@@ -453,7 +588,8 @@ class TeamScreen(Screen):
         Binding("a", "add_member", "Add a member"),
         Binding("d", "remove_member", "Take a member off"),
         Binding("g", "edit_goal", "The goal"),
-        Binding("h", "handover", "Hand over"),
+        Binding("h", "handover_team", "Hand the team over"),
+        Binding("H", "handover", "Hand a member over"),
         Binding("x", "close_team", "Close the team"),
     ]
 
@@ -475,7 +611,8 @@ class TeamScreen(Screen):
         with VerticalScroll():
             yield Static("", id="team-log")
         yield Label(keys(("← →", "member"), ("Enter", "its tab"), ("s", "start the rest"), ("a", "add"),
-                         ("d", "take off"), ("g", "goal"), ("h", "hand over"), ("x", "close"), ("Esc", "back")),
+                         ("d", "take off"), ("g", "goal"), ("h", "hand the team over"), ("H", "a member"),
+                         ("x", "close"), ("Esc", "back")),
                     classes="hint")
 
     def on_mount(self) -> None:
@@ -615,8 +752,16 @@ class TeamScreen(Screen):
         else:
             self.app.open_sessions(launches)
 
+    def action_handover_team(self) -> None:
+        """h, twice: the whole team handed over (the dashboard's press_team_handover): its open members
+        close, its lead writes the handover and the line-up for the rest of the work, you see both, and
+        the team starts again as a new generation of itself: a fresh lead with the handover, fresh members."""
+        pressed = getattr(self.app, "press_team_handover", None)
+        if pressed is not None:
+            pressed(self.team, dict(self.sessions))
+
     def action_handover(self) -> None:
-        """Hand the picked member over to a fresh session with the same name and role."""
+        """H: hand the picked member alone over to a fresh session with the same name and role."""
         member = self.graph.selected_member()
         session = self.sessions.get(member.name) if member is not None else None
         if session is None or session.path is None:
@@ -647,6 +792,7 @@ class TeamScreen(Screen):
         self.app.call_from_thread(self.notify, said, severity=severity, timeout=8 if severity == "warning" else 4)
 
     def action_start_team(self) -> None:
+        getattr(self.app, "kept_handovers", {}).pop(self.team.name, None)  # going on as it was, not handed over
         launches = teams.start(self.team, self.sessions)
         if not launches:
             self.notify("Every member is open already.", timeout=3)
@@ -990,6 +1136,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
     NewTeamDialog #team-preview { height: auto; margin-bottom: 1; }
     NewTeamDialog #team-graph-box { height: 1fr; scrollbar-size-vertical: 1; }
     NewTeamDialog #runs-card { height: auto; }
+    NewTeamDialog #team-cap-row { height: auto; }
     NewTeamDialog #team-help { height: 1; margin-top: 1; color: $text-muted; }
     """
     BINDINGS: ClassVar[list[Binding]] = [
@@ -1071,6 +1218,10 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
                             yield LineupGraph(teams.Team("", "", ""), self.accent(), id="team-graph")
                     with Vertical(id="runs-card", classes="card"):
                         yield Static("", id="team-where")  # tabs or the background: Ctrl+B; worktrees: Ctrl+O
+                        with Horizontal(classes="row", id="team-cap-row"):  # the members' context cap: ←/→
+                            yield Label("Context", classes="name")
+                            yield Choice([*picks.CAPS, picks.NO_CAP], value=picks.default_cap(), id="team-cap",
+                                         labels=newsessions.CAP_SHORT)
             yield Label("", id="team-help")
             # One line, even in a 120x30 window: a second one would be cut off there.
             yield Label(keys(("Ctrl+S", "create"), ("Tab", "next"), ("Ctrl+T", "line-up"), ("Ctrl+L", "keep"),
@@ -1218,9 +1369,21 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
             "team-members": (TOWARD_HELP[self.toward.kind] if self.toward is not None
                              else LEAD_HELP if self.deciding() else MEMBERS_HELP),
             "team-most": "At most this many: the lead picks them from the goal, fewer for small work. Ctrl+R suggests one.",
+            "team-cap": self.cap_help(),
         }.get(focused.id if focused is not None else "",
               "Every member is a session of its own; with no lead line, they work as peers.")
         self.query_one("#team-help", Label).update(about)
+
+    def cap_help(self) -> str:
+        """The Context row's help: ←/→, and what the cap picked means."""
+        if not self.is_mounted:
+            return ""
+        cap = self.query_one("#team-cap", Choice).value
+        return (f"←/→ the context cap every member starts under. "
+                f"{newsessions.CAP_SHORT.get(cap, cap)}: {picks.CAP_WORDS[cap]}.")
+
+    def on_choice_changed(self, event: Choice.Changed) -> None:
+        self.show_help()
 
     def lineup(self) -> Text:
         """The ready-made line-ups, the one in the box marked; "your own" once it has been edited."""
@@ -1633,7 +1796,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         self.dismiss(teams.new_team(name, str(Path(folder).resolve()), goal, members,
                                     decide=self.most() if self.deciding() else 0,
                                     background=self.background and not peers, peers=peers,
-                                    worktrees=self.worktrees))
+                                    worktrees=self.worktrees, cap=self.query_one("#team-cap", Choice).value))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

@@ -189,7 +189,7 @@ async def test_the_dashboard_warns_once_and_hands_over_both_ways(fake_home, monk
     async with app.run_test(size=(150, 44)) as pilot:
         await until(pilot, lambda: "big" in app.told_crowded)
         await pilot.pause(0.5)
-        crowded = [n for n in notes if "80% full" in n]
+        crowded = [n for n in notes if "its context is 800k" in n]
         assert len(crowded) == 1 and "has been going for" in crowded[0]  # once, however many polls
         assert "/compact" in crowded[0]  # the other way to go on: the same session, shrunk
         assert str(app.table.get_cell("big", "exit")) == "▰▰▰▱ 80%"

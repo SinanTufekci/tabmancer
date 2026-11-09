@@ -227,12 +227,21 @@ often the better move. Press `n`:
 - **Model** and **Effort** pick Claude Code's `--model` (opus, sonnet, haiku, fable) and
   `--effort` (low to max) for these sessions: `Tab` to the row, `←`/`→` to change it, and a line
   under them says what the pick is good for. Left at *your default*, nothing is passed and your
-  own Claude Code settings decide.
+  own Claude Code settings decide. **Context** is the context cap they start with, 300k unless you
+  pick another (see [the context cap](handover.md#the-context-cap)).
+- **The router** suggests the three for the first message. Once you stop typing, one quick call
+  to Haiku (at a low effort, with no tools) reads the message and the folders' names and answers
+  with a pick and why: `Router suggests sonnet · medium · 300k — well-defined tests  Ctrl+R takes
+  it`. Nothing changes until you press `Ctrl+R`; the pick stays yours to change after. It weighs
+  the cost to your plan: the cheapest model and effort that will still do the work well, and a
+  wider cap only where the work needs much of a codebase in view at once. Turn the automatic call
+  off with `"router": false` in `config.json` (or `TABMANCER_ROUTER=0`); `Ctrl+R` asks it then.
 
 Claude Code resumes a session on the model it ran on, but at your default effort. So a session
 opened here with an effort gets its id from tabmancer (`--session-id`), and whenever tabmancer
-resumes, forks or hands it over, it passes the same effort again. The preview's **Model** row
-shows the model a session last answered with, and the effort when tabmancer knows it.
+resumes, forks or hands it over, it passes the same effort again. The list's **Model** column
+and the preview's **Model** row show the model a session last answered with and the effort it ran
+at, as Claude Code writes it on each reply (since 2.1.319), else as tabmancer started it.
 
 These start clean. To carry a session's work on in a fresh one, hand it over with `h`
 instead (see [Crowded sessions and handing over](handover.md#crowded-sessions-and-handing-over)).
@@ -243,6 +252,7 @@ From a shell or a script:
 tabmancer new web-app api-server --prompt "Run the tests and fix what fails"
 tabmancer new C:\dev\new-idea --cli codex
 tabmancer new docs-site --model sonnet --effort medium
+tabmancer new docs-site --autocompact 400k
 tabmancer new shop --prompt "api: the refund endpoint" --prompt "web: the refund page" --linked
 ```
 

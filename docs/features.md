@@ -47,6 +47,13 @@
   lately: tick a few, add a first message if you like, pick a model and an effort if your
   default is not what the work needs, and each opens a clean session in its own tab. A line
   for each topic opens a session for each, and `Ctrl+L` links them as a team of peers.
+- **A router for the first message.** Once you stop typing it, a quick call to Haiku suggests
+  the model, the effort and the context cap the work needs, at the least cost to your plan, and
+  why; `Ctrl+R` takes the pick, and nothing changes without it.
+- **A context cap.** Every reply reads the whole conversation again, so long sessions are where a
+  plan's limit goes. The sessions tabmancer starts keep to 300k (Claude Code compacts the rest
+  into a summary), or the cap you pick in `n`, the new-team form or a team's handover; it is given
+  back on every resume, which Claude Code forgets. The list's context bars count against the cap.
 - **Teams.** Several sessions on one project, each with its own focus, one of them the
   orchestrator, or none: peers on related topics, each in its tab. They message each other, and you watch it happen: the team is one row of
   the list, each member a name with a sign of what it is doing, its preview shows who talks
@@ -58,7 +65,12 @@
   with a team at work in the project, whether the goal is that team's (members added to it, or
   the goal sent to its lead) or a team's of its own.
 - **Crowded sessions, handed over.** How full every context is, a word when one passes
-  60%, and `h` to move the work to a fresh session with a full handover, when you say so.
+  the point where a handover pays, a word when a big one's cache has gone (an hour idle) and its
+  next message writes all of it again, and `h` to move the work to a fresh session with a full
+  handover, when you say so. A whole team too: `h` twice on it, its lead writes the handover and
+  the line-up for the rest, and the team starts again as a new generation of itself.
+- **The model and effort of each session.** A column in the list, as Claude Code writes them on
+  each reply.
 - **All at once.** Every chosen session opens in its own tab in one go, in the same
   window. The dashboard stays open in its own tab, so you can come back and open more.
 - **Workspaces.** Save a set of project folders ("PCB work") and open them together

@@ -110,14 +110,16 @@ def session_digest(session: Session) -> str:
 
 def ask(prompt: str, model: str, timeout: float = 180, effort: str = "") -> str:
     """One answer from `claude -p`: no tools, no transcript left behind, run from a neutral
-    folder so no project CLAUDE.md is loaded into the request. An empty model is your default."""
+    folder so no project CLAUDE.md is loaded into the request. An empty model is your default.
+    No MCP server is started either (--strict-mcp-config with none given): with no tools they
+    are of no use, and starting them took half of a short call's time (4.9 s against 2.6 s)."""
     claude = shutil.which("claude")
     if not claude:
         raise SummaryError("The claude CLI is not on PATH.")
     chosen = [*(["--model", model] if model else []), *(["--effort", effort] if effort else [])]
     try:
         result = subprocess.run(
-            [claude, "-p", *chosen, "--tools", "", "--no-session-persistence"],
+            [claude, "-p", *chosen, "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
             input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout, check=False, cwd=tempfile.gettempdir(),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

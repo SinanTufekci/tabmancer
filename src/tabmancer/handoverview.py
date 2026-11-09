@@ -21,15 +21,15 @@ from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, keys
 from .tokens import duration, human
 
 
-def fill(session: Session, timed: bool = True) -> Text:
-    """'917K of 1M (92%) · going for 6h 12m', coloured by how full it is (without the time, where it
-    has a line of its own)."""
+def fill(session: Session, timed: bool = True, cap: int = 0) -> Text:
+    """'917K of 1M (92%) · going for 6h 12m', or '240K of a 300K cap (80%)' for a session opened with a
+    context cap, coloured by how full it is (without the time, where it has a line of its own)."""
     if not session.context:
         return Text("context size not known yet", style=MUTED)
-    share = context.share(session)
+    share = context.share(session, cap)
     colour = GREEN if share < context.WARN_SHARE else AMBER if share < 0.85 else RED
-    out = Text.assemble((f"{human(session.context)} of {human(context.window(session.model, session.context))} ",
-                         TEXT), (f"({share:.0%})", f"bold {colour}"))
+    whole = f"a {human(cap)} cap" if cap else human(context.window(session.model, session.context))
+    out = Text.assemble((f"{human(session.context)} of {whole} ", TEXT), (f"({share:.0%})", f"bold {colour}"))
     if not timed:
         return out
     if session.started and session.exit is Exit.RUNNING:

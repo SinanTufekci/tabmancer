@@ -72,6 +72,8 @@ Options:
   --session-id <uuid>             Use a specific session ID for the conversation
   --tools <tools...>              Specify the list of available tools
   --no-session-persistence        Disable session persistence
+  --autocompact <auto|tokens>     Auto-compact window size (auto, or 100k–1M tokens)
+  --strict-mcp-config             Only use MCP servers from --mcp-config
   -n, --name <name>               Set a display name for this session
   --append-system-prompt <prompt> Append a system prompt
   --settings <file-or-json>       Path to a settings JSON file or a JSON string

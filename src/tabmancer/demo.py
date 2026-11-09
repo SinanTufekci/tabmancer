@@ -55,6 +55,7 @@ def cost(added, removed):
 
 
 MODELS = {"nightly": "claude-haiku-5-5", "ml": "claude-sonnet-5-5"}  # the rest: Opus
+EFFORTS = {"nightly": "low", "ml": "high", "docs-site": "medium"}  # as Claude Code writes on each reply; the rest: xhigh
 
 
 TOOLS = ["Bash"] * 6 + ["Read"] * 4 + ["Edit"] * 3 + ["Grep"] * 2 + ["Write", "WebSearch", "Glob"]
@@ -77,6 +78,7 @@ def turns(sid: str, project: str, ended: float) -> list[dict]:
                 content = [{"type": "tool_use", "id": "t", "name": tool,
                             "input": {"file_path": f"ROOT/{project}/{rng.choice(FILES)}"}}]
             out.append({"type": "assistant", "timestamp": stamp.isoformat().replace("+00:00", "Z"),
+                        "effort": EFFORTS.get(sid, "xhigh"),
                         "message": {"id": f"msg_{sid}_{back}_{turn}", "model": MODELS.get(sid, "claude-opus-5-5"),
                                     "content": content, "usage": {
                                         "input_tokens": 2, "cache_creation_input_tokens": rng.randint(500, 6_000),
@@ -193,9 +195,9 @@ def made_up_limits() -> None:
 
 TEAM = [  # (member, focus, live state, context tokens)
     ("lead", "plans the work, hands it out and checks it", "busy", 182_000),
-    ("api", "Stripe endpoints and webhooks", "busy", 341_000),
+    ("api", "Stripe endpoints and webhooks", "busy", 154_000),
     ("ui", "the checkout screens", "idle", 96_000),
-    ("tests", "end-to-end tests of the flow", "blocked", 702_000),
+    ("tests", "end-to-end tests of the flow", "blocked", 238_000),  # near its 300k cap: amber
 ]
 TALK = [  # (minutes ago, sender, receiver, summary)
     (14, "lead", "api", "Add POST /checkout and the Stripe webhook; tell me the payload shape"),
@@ -215,6 +217,9 @@ def build_team(home: Path):
     folder = f"{ROOT}{os.sep}shop"  # only named: nothing is read from it
     team = teams.new_team("shop", folder, "Add Stripe checkout with an end-to-end test",
                           [teams.Member(m, f) for m, f, _, _ in TEAM[1:]])
+    # Made before its members' sessions began (20 minutes ago): a session older than its team is
+    # not its member (teams.since_made), and the demo showed no team at all.
+    team.created = (datetime.now().astimezone() - timedelta(minutes=30)).isoformat(timespec="seconds")
     teams.save({"shop": team})
     project = home / "projects" / "shop"
     project.mkdir(parents=True, exist_ok=True)
@@ -224,10 +229,11 @@ def build_team(home: Path):
         records = [{"type": "user", "cwd": folder, "entrypoint": "cli", "timestamp": _ago(20),
                     "message": {"content": "Add Stripe checkout" if name == "lead" else f"work on {name}"}},
                    {"type": "custom-title", "customTitle": f"shop-{name}"},
-                   {"type": "assistant", "cwd": folder, "timestamp": _ago(1), "message": {
-                       "model": "claude-opus-5-5", "content": [{"type": "text", "text": "On it."}],
-                       "usage": {"input_tokens": 2, "cache_creation_input_tokens": 1000,
-                                 "cache_read_input_tokens": used - 1002, "output_tokens": 300}}}]
+                   {"type": "assistant", "cwd": folder, "timestamp": _ago(1), "effort": "xhigh" if name == "lead" else "high",
+                    "message": {"model": "claude-opus-5-5" if name == "lead" else "claude-sonnet-5-5",
+                                "content": [{"type": "text", "text": "On it."}],
+                                "usage": {"input_tokens": 2, "cache_creation_input_tokens": 1000,
+                                          "cache_read_input_tokens": used - 1002, "output_tokens": 300}}}]
         for minutes, sender, receiver, summary in TALK:
             if sender == name:
                 records.append({"type": "assistant", "cwd": folder, "timestamp": _ago(minutes), "message": {
@@ -260,6 +266,7 @@ DEMO_LINEUP = ("Team size: 3, because the endpoints, the pages and the tests can
                "api: the endpoints and the data behind them [src/api] @opus @high\n"
                "web: the pages that use them [src/web] @sonnet @high\n"
                "tests: tests for both, end to end [tests] @sonnet @medium")
+DEMO_ROUTE = "Pick: sonnet medium 300k\nWhy: a routine change, well defined"  # the router's answer
 GIT = {  # project -> (changed, to push): what the sidebar's ± and ↑ show
     "pcb-router": (3, 0), "web-app": (0, 2), "docs-site": (1, 0),
 }
@@ -294,6 +301,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         handover,
         rename,
         report,
+        router,
         sessions,
         share,
         stats,
@@ -326,6 +334,8 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
             return DEMO_REPORT
         if prompt.startswith(SUGGEST_START):  # the new-team dialog's Ctrl+R
             return DEMO_LINEUP
+        if prompt.startswith(router.PROMPT_START):  # the new-session dialog's router
+            return DEMO_ROUTE
         return HANDOVER_ANSWER if prompt.startswith(handover.INSTRUCTIONS) else SUMMARY_ANSWER
 
     def git(folder: str):

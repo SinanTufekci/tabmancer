@@ -175,6 +175,10 @@ closed), `s` starts every member that is not open, and `a` adds members, who int
 themselves to the orchestrator. `d` twice takes the picked member off the team (never the
 lead); its sessions stay, as ordinary ones. `g` changes the team's goal; members started
 from then on get it in their role. An open lead started with the old line-up or goal, so
-either way a note for it goes to the clipboard and you to its tab, to paste it. `x` twice
+either way a note for it goes to the clipboard and you to its tab, to paste it. `h` twice
+hands the whole team over to a new generation of itself (its lead writes the handover and the
+line-up for the rest; see [a whole team](handover.md#a-whole-team)), and `H` the picked member
+alone. A team's members start under the context cap: the new-team form's **Context** row, in its
+**Runs** card (300k unless you change it). `x` twice
 closes the whole team: every open member's tab, Claude exiting as on `/exit`, so `s` starts
 them again later. Under the goal, the tokens the team has used, and each member's.

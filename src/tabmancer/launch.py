@@ -73,6 +73,7 @@ class Launch:
     options: tuple[str, ...] = ()  # more Claude Code flags, e.g. a team member's name and role
     model: str = ""   # --model for Claude Code; empty: your default (see picks)
     effort: str = ""  # --effort for Claude Code; empty: your default
+    cap: str = ""     # --autocompact for Claude Code, such as 300k; empty or "auto": Claude Code's own
     new_id: str = ""  # a fresh session's id, given by tabmancer (--session-id) so its pick is kept
     env: tuple[tuple[str, str], ...] = ()  # set in the tab for this command, e.g. a sign-in's BROWSER
 
@@ -87,8 +88,9 @@ class Launch:
             return self._codex_argv()
         if self.cli == "agy":
             return self._agy_argv()
+        capped = self.cap and self.cap != "auto" and "--autocompact" not in self.options
         more = [*(["--model", self.model] if self.model else []), *(["--effort", self.effort] if self.effort else []),
-                *self.options]
+                *(["--autocompact", self.cap] if capped else []), *self.options]
         if self.mode is Mode.NEW and self.new_id:
             more = ["--session-id", self.new_id, *more]
         if self.mode is Mode.RESUME:
@@ -155,6 +157,7 @@ def run_in_background(launch: Launch) -> str:
     claude = shutil.which("claude")
     if not claude:
         raise OSError("The claude CLI is not on PATH.")
+    _note([launch])
     rest = launch.argv[1:]
     if Path(claude).suffix.lower() in (".cmd", ".bat"):
         rest = [_for_cmd(arg) for arg in rest]
@@ -360,6 +363,16 @@ COMMAND_BUILDERS = {
 SCRIPT_BUILDERS = {"iterm": iterm_script, "apple-terminal": apple_terminal_script}
 
 
+def _note(launches: list[Launch]) -> None:
+    """The caps of resumed sessions kept, so their next resume has the same (picks.note_opened)."""
+    from .picks import note_opened  # picks builds on this module
+
+    try:
+        note_opened(launches)
+    except OSError:
+        pass  # a pick not saved costs the next resume its cap, never this launch
+
+
 def open_tabs(launches: list[Launch]) -> list[str]:
     """Open each launch in its own tab. Returns the commands left for the user to run.
 
@@ -367,6 +380,7 @@ def open_tabs(launches: list[Launch]) -> list[str]:
     Anything that could not be opened comes back as a shell line to run by hand. Raises OSError
     when Windows Terminal would not start.
     """
+    _note(launches)
     kind = terminal_kind()
     if kind == "windows-terminal":
         window = "0" if os.environ.get("WT_SESSION") else "new"
