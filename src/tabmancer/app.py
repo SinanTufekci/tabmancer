@@ -697,10 +697,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         # On Windows Textual sleeps out every timer in a thread of asyncio's default pool, which
         # has as many threads as cores + 4. The dashboard runs a dozen timers, some sleeping for
         # minutes: on a 4-core machine they took every thread, the rest (the screen's own updates
-        # among them) waited their turn, and the dashboard froze for seconds at a time.
-        if sys.platform == "win32":
-            asyncio.get_running_loop().set_default_executor(
-                ThreadPoolExecutor(max_workers=TIMER_THREADS, thread_name_prefix="timers"))
+        # among them) waited their turn, and the dashboard froze for seconds at a time. Set on every
+        # system: the threads start only when needed, and Textual picks its sleep when imported, so a
+        # test that says it runs elsewhere still sleeps in threads (8 on a 4-core CI runner were full).
+        asyncio.get_running_loop().set_default_executor(
+            ThreadPoolExecutor(max_workers=TIMER_THREADS, thread_name_prefix="timers"))
 
     def on_mount(self) -> None:
         # Keep references: App.query_one searches the active screen, which is a
