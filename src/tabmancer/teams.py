@@ -438,7 +438,14 @@ def _role(team: Team, member: Member) -> str:
     common = (f"Team: {team.name}, working in {team.cwd}. {goal}"
               + (f"The other members, by the name to use with SendMessage: {others}. " if others else
                  "There are no other members yet. ")
-              + "Messages from them arrive as new turns, so you never need to poll. Keep messages short "
+              + "Messages from them arrive as new turns, so you never need to poll. A command you run in "
+              "the background tells you when it finishes, so never wait for one with sleep or a loop that "
+              "checks its output: each check reads the whole conversation again. The one sleep worth "
+              "running: the cache forgets this conversation an hour after your last reply, and the next "
+              "message then writes all of it again, some 20 times what this costs; so when you wait "
+              "with nothing to do (for your next task, or for members still at work), run sleep 3300 in the "
+              "background, and when it says it finished and you still wait, run it again, three times in a "
+              "row at most, then let it go. Once new work has come, ignore it. Keep messages short "
               "and concrete: what you did, which files you changed, what you need. Coordinate before you "
               "touch another member's area.")
     if member.lead and team.decide:

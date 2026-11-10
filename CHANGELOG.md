@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **A team spends less on waiting.** Measured on six teams' transcripts (31 sessions, some 20k
+  replies): files read by more than one member cost 1.3% of what the teams used, and a message
+  answered with nothing done about 1%, but sessions left for more than an hour cost 7.2% (Claude's
+  cache keeps a conversation for an hour, then the next message writes all of it again, 220k on
+  average) and waiting for a background command with `sleep` 4.1%. The roles now ask each
+  session that waits with nothing to do to keep its cache with a background `sleep 3300` (three
+  times in a row at most, a twentieth of writing it again), and never to wait for a command with
+  `sleep` or a polling loop (Claude Code says when one finishes). Starting a closed team whose
+  members' cache has gone, with 150k or more in them, now says first how much going on writes again
+  and how much less a handover (`h` twice) would; `s` again starts it as it was.
+- The dashboard's larger thread pool is set on every system (a test that called itself Linux on
+  Windows ran short of threads on a 4-core CI runner).
+
 ## 0.1.7
 
 - **No more freezes while you type.** Every few seconds the dashboard stood still for a quarter

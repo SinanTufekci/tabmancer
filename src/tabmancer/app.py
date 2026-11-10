@@ -97,6 +97,7 @@ from .teamview import (
     TellTeam,
     close_tabs,
     closing_note,
+    cold_note,
     handing_note,
     open_names,
     team_handover_problem,
@@ -178,6 +179,7 @@ OPENING_SECONDS = 30  # a session just opened is not opened again while it start
 CAME_UP_SECONDS = 45  # by then a session opened from here has shown up open, or it is said that it did not
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
 QUIET_SECONDS = 5 * 60
+COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon starts it (cold_note)
 KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
 SETTLE_AFTER = (5, 45)  # seconds after the list is shown: memory set aside from the collector (settle_memory)
 PICKER_ONLY = {"toggle", "cycle_mode", "toggle_all", "save_workspace", "open", "hide", "toggle_hidden"}
@@ -642,6 +644,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.unfolded: set[str] = set()  # teams shown with their members under their row (e); else one row
         self.closing_team: str | None = None  # x once on an open team's row: again closes its members' tabs
         self.handing_team: str | None = None  # h once on a team (its row or view): again hands it over
+        self.cold_team: str | None = None  # a team started once while its cache was gone: again starts it
         self.blocks: list[tuple[teamtree.TeamState, list[tuple[str, Session]]]] = []  # the teams in the list
         self.member_rows: dict[str, tuple[str, str]] = {}  # their members' session ids -> (team, member)
         self.default_cap = picks.cap_tokens(picks.default_cap())  # the cap new sessions get, in tokens
@@ -2376,7 +2379,22 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if not launches:
             self.notify(f"Every member of {state.team.name} is open already, or opening.", timeout=3)
             return
+        if not self.cold_start_ok(state.team, sessions):
+            return
         self.open_team(state.team, launches)
+
+    def cold_start_ok(self, team: teams.Team, members: dict[str, Session | None]) -> bool:
+        """Whether a closed team starts now: at once, unless its members' cache is gone; then the
+        first press says what going on costs and what a handover saves (cold_note), and a second
+        one within COLD_AGAIN_SECONDS starts it."""
+        note = cold_note(team, members)
+        if note is None or self.cold_team == team.name:
+            self.cold_team = None
+            return True
+        self.cold_team = team.name
+        self.notify(note, timeout=COLD_AGAIN_SECONDS)
+        self.set_timer(COLD_AGAIN_SECONDS, lambda: setattr(self, "cold_team", None))
+        return False
 
     def add_to_team(self, state: teamtree.TeamState) -> None:
         """New members for a team: at work, each opens and introduces itself to the lead; closed, they

@@ -143,13 +143,23 @@ workspace) also comes back with its name, its role and the setting that lets the
 messages in; a plain `claude --resume` would leave all three out. Members added to a closed
 team wait to start with it.
 
+Claude's cache keeps a conversation for an hour after its last reply; after that, the next
+message writes all of it again. So when a team's members have been closed for longer (the next
+morning, say) and their conversations are big (150k or more), the first `s` says how much going
+on writes again, and how much less a handover (`h` twice) would: the lead writes the handover
+and the members start fresh. `s` again starts the team as it was. While a team is at work, its
+roles ask each session that waits with nothing to do to keep its cache: a background
+`sleep 3300` that wakes it after 55 minutes, three times in a row at most, which costs a
+twentieth of writing the conversation again. They also ask it never to wait for a background
+command with `sleep` or a loop that checks its output: Claude Code says when one finishes.
+
 Every member is an ordinary Claude Code session in its own tab, so it can be closed,
 resumed and handed over like any other. Each starts with:
 
 - a name (`--name shop-api`), which is how the others address it;
 - its model and effort (`--model sonnet --effort medium`), if the line-up gave it them;
 - its role, added to the system prompt (`--append-system-prompt`): its focus, the other
-  members and who the orchestrator is;
+  members, who the orchestrator is and how to wait without spending;
 - a setting that lets messages from the other sessions in (`--settings`, a small file of
   tabmancer's own: your settings are not touched).
 

@@ -467,6 +467,25 @@ def handing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str:
             "the work needs, and you see both before the new team opens.")
 
 
+def cold_note(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:
+    """What starting a closed team says first when its members' cache is gone (an hour after their
+    last reply): going on writes their whole conversations again as each gets its first message,
+    where a handover starts them fresh. None when no member's context is big enough to matter (the
+    lead's alone is written again by a handover too)."""
+    cold = [(member, session) for member in team.members
+            if (session := sessions.get(member.name)) is not None and session.exit is not Exit.RUNNING
+            and session.path is not None and context.cold(session)]
+    members = [session for member, session in cold if not member.lead]
+    if not members:
+        return None
+    total = sum(session.context or 0 for _, session in cold)
+    spared = sum(session.context or 0 for session in members)
+    last = max(session.last_active for _, session in cold if session.last_active is not None)
+    return (f"{team.name} was last at work {viewmodel.ago(last)} ago and its cache is gone: going on writes "
+            f"{human(total)} of conversation again ({len(cold)} sessions). Again goes on; h twice hands it over "
+            f"instead: the lead writes a handover and the members start fresh, {human(spared)} less.")
+
+
 class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
     """The new generation of a team handed over: the lead's handover (to read), the line-up it
     suggests and the context cap its members start under (yours to change). Ctrl+S starts it, and
@@ -809,6 +828,9 @@ class TeamScreen(Screen):
         if not launches:
             self.notify("Every member is open already.", timeout=3)
             return
+        ok = getattr(self.app, "cold_start_ok", None)
+        if ok is not None and not ok(self.team, dict(self.sessions)):
+            return  # its cache is gone: said what going on costs, s again starts it
         self.open_team(launches)
 
     def action_add_member(self) -> None:
