@@ -38,7 +38,8 @@ class Demo(SessionPicker):
         self.started = time.monotonic()
         self.scene = 0
         self.steps = [self.first, self.card, self.card_off_team_row, self.unfold, self.team_view, self.back_live,
-                      self.live_off_stats, self.stats_work, self.stats_limits, self.stats_report, self.stats_off_keys]
+                      self.live_off_stats, self.stats_tokens, self.stats_work, self.stats_limits, self.stats_report,
+                      self.stats_off_keys]
         self.set_timer(4.0, self.next_scene)  # the cards count up, the list fades in
         self.set_interval(0.2, self.check)
 
@@ -53,6 +54,9 @@ class Demo(SessionPicker):
         """No notifications in the pictures: they would cover what the scene is about."""
 
     def ready(self) -> None:
+        if getattr(self.screen, "counting", False):  # the stats count in the background: shown once counted
+            self.set_timer(0.3, self.ready)
+            return
         (SIGNALS / f"{self.scene}.ready").write_text(self.steps[self.scene].__name__, encoding="utf-8")
 
     def check(self) -> None:
@@ -93,10 +97,13 @@ class Demo(SessionPicker):
     def live_off_stats(self) -> None:
         self.action_toggle_live()
         self.table.move_cursor(row=self.table.get_row_index("pcb-router"))
-        self.action_tokens()
+        self.action_tokens()  # the overview first
+
+    def stats_tokens(self) -> None:
+        self.screen.action_tab(1)  # as the right arrow does
 
     def stats_work(self) -> None:
-        self.screen.action_tab(1)  # as the right arrow does
+        self.screen.action_tab(1)
 
     def stats_limits(self) -> None:
         self.screen.action_tab(1)

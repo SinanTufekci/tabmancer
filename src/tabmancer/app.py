@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import math
+import shutil
 import subprocess
 import sys
 import textwrap
 import time
 from collections import Counter
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -34,6 +37,7 @@ from . import (
     accounts,
     background,
     browsers,
+    claudeupdate,
     clis,
     context,
     focus,
@@ -174,6 +178,8 @@ OPENING_SECONDS = 30  # a session just opened is not opened again while it start
 CAME_UP_SECONDS = 45  # by then a session opened from here has shown up open, or it is said that it did not
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
 QUIET_SECONDS = 5 * 60
+KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
+SETTLE_AFTER = (5, 45)  # seconds after the list is shown: memory set aside from the collector (settle_memory)
 PICKER_ONLY = {"toggle", "cycle_mode", "toggle_all", "save_workspace", "open", "hide", "toggle_hidden"}
 SHIMMER = "#e8f3ff"  # the bright band that sweeps across "working"
 STAR = "·✢✶✻✽✻✶✢"   # Claude Code's turning star; none of these are drawn as emoji
@@ -490,6 +496,16 @@ def resumes(launch: Launch) -> bool:
     return launch.cli == "claude" and launch.mode in (Mode.RESUME, Mode.AUTO) and bool(launch.session_id)
 
 
+def settle_memory() -> None:
+    """What the dashboard has loaded is set aside from Python's garbage collector (gc.freeze): with
+    some 460k objects of sessions, token counts and the search index in memory, every full collection
+    walked them all, 150 to 260 ms in which nothing was drawn and no key was taken, every few seconds
+    (typing in the first message froze). Collected first, so no garbage is kept for good; what comes
+    after is collected as before, in 35 to 50 ms."""
+    gc.collect()
+    gc.freeze()
+
+
 class SessionPicker(sixel.SixelHost, App[list[str]]):
     """The dashboard. It stays open while sessions open in tabs beside it; it exits with
     shell commands only when no supported terminal can open the tabs itself."""
@@ -594,13 +610,17 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.polls = 0
         self.background_live: dict[str, dict] = {}  # from the last full poll
         self.token_report: tokens.Report | None = None
+        self.kept_back = False  # the days a 45-day count keeps in the history: counted once (refresh_tokens)
         self.told_idle = False  # Bit points out idle background sessions once
         self.told_crowded: set[str] = set()  # sessions already said to be crowded
         self.last_row = 0  # where the cursor was, so it steps over a heading the same way
         self.waiting_turn = 0  # j goes round the sessions waiting for you
+        self.waiting_group = ""  # j: "needs" while some session needs you, else "waiting"
         self.armed: dict[str, datetime] = {}  # c: session id -> when it continues (its limit lifts)
         self.told_limit: set[str] = set()  # sessions Bit has said are stopped at a limit
         self.told_update: str | None = None  # the newer tabmancer already told of
+        self.updating_claude = False  # claude update running: sessions asked for wait for it
+        self.after_claude_update: list[Callable[[], None]] = []
         self.signed_as: str | None = None  # the Claude account Claude Code is signed in with, as last read
         self.limited: set[str] = set()  # the sessions at a limit when the footer last heard of it
         self.search = search.Index.load()  # what was said in each session, for the filter
@@ -715,6 +735,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.set_interval(ACCOUNTS_SECONDS, self.show_accounts)
         self.check_updates()
         self.set_interval(UPDATES_SECONDS, self.check_updates)
+        if claudeupdate.due():  # today's claude update, before any session opens
+            self.updating_claude = True
+            self.update_claude()
         armed = saved.get("continue_at_reset") if isinstance(saved, dict) else None
         for sid, moment in (armed.items() if isinstance(armed, dict) else ()):
             try:
@@ -833,6 +856,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.check_limits()
         self.set_timer(WRAPPED_AFTER, self.tell_wrapped)  # after Bit's hello: Friday's word on the week
         self.set_interval(WRAPPED_SECONDS, self.tell_wrapped)
+        for after in SETTLE_AFTER:  # once what loads at the start (tokens, the search index) is in
+            self.set_timer(after, settle_memory)
 
     def faded_in(self) -> None:
         """The fade-in over: every widget takes its colours afresh (faded says so to the tests)."""
@@ -1168,6 +1193,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def refresh_tokens(self) -> None:
         report = tokens.collect(max(self.days, CHART_DAYS))
         self.call_from_thread(self.show_tokens, report)
+        if not self.kept_back:  # once: the days whose files Claude Code deletes next go into the history
+            self.kept_back = True
+            tokens.collect(KEEP_BACK_DAYS)
         others = [name for name in clis.enabled() if name != "claude"]
         if others:  # Codex and agy have no live feed: their sessions are re-read every minute
             fresh = [s for s in other_sessions(self.days, others)
@@ -1688,6 +1716,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
         def send(answer: tuple[str, str] | None) -> None:
             if not answer:
+                return
+            if self.after_update("it opens with your prompt", lambda: send(answer)):
                 return
             how, prompt = answer
             launch = picks.resumed(teams.as_member(session, Launch(
@@ -2374,6 +2404,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         as background sessions first and then the lead's tab, once they are up. A member opened a
         moment ago, here or by `tabmancer team start`, is not opened again: s twice, while the first
         claude --bg calls were still running, started every member twice."""
+        if self.after_update(f"{team.name} starts", lambda: self.open_team(team, launches)):
+            return
         coming = teams.opening()
         launches = [launch for launch in launches if teams.session_name_of(team, launch) not in coming]
         if not launches:
@@ -2545,6 +2577,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         def chosen(picked: tuple[str, str] | None) -> None:
             if picked is None:
                 return
+            if self.after_update("the sign-in opens", lambda: chosen(picked)):
+                return
             email, place = picked
             login = Launch(title=f"Sign in{f': {email}' if email else ''}", cwd=str(Path.home()), mode=Mode.NEW,
                            session_id="", options=("auth", "login", *(("--email", email) if email else ())),
@@ -2569,6 +2603,39 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         found = updates.news()
         if found and found[0] != self.told_update:
             self.call_from_thread(self.tell_update, *found)
+
+    @work(thread=True, exclusive=True, group="claude-update")
+    def update_claude(self) -> None:
+        """claude update (claudeupdate.py), and with a new version, whether it still takes every flag
+        tabmancer runs it with (doctor's check)."""
+        outcome = claudeupdate.run()
+        missing = None
+        if outcome.changed and (claude := shutil.which("claude")):
+            from .doctor import missing_from_cli
+
+            missing = missing_from_cli(claude)
+        self.call_from_thread(self.claude_updated, outcome, missing)
+
+    def claude_updated(self, outcome: claudeupdate.Outcome, missing: list[str] | None) -> None:
+        self.updating_claude = False
+        waiting, self.after_claude_update = self.after_claude_update, []
+        if outcome.changed or not outcome.ok or waiting:
+            self.notify(outcome.words(), severity="information" if outcome.ok else "warning",
+                        timeout=10 if outcome.ok else 20)
+        if missing:
+            self.notify(f"Claude Code {outcome.after} no longer lists what tabmancer runs it with: "
+                        f"{'; '.join(missing)}. tabmancer doctor says more.", severity="error", timeout=30)
+        for then in waiting:
+            then()
+
+    def after_update(self, what: str, then: Callable[[], None]) -> bool:
+        """While claude update runs: then, once it is done, and a word that it waits. False (and
+        nothing kept) when no update is running."""
+        if not self.updating_claude:
+            return False
+        self.after_claude_update.append(then)
+        self.notify(f"Claude Code is updating: {what} once it is done.", timeout=8)
+        return True
 
     def tell_update(self, version: str, command: str) -> None:
         """A newer tabmancer: beside the name in the top bar while the dashboard is open, and once in
@@ -2866,13 +2933,17 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.poll_teams()
 
     def action_next_waiting(self) -> None:
-        """Go to the next open session waiting for you, one after another."""
-        waiting = sorted((s for s in self.sessions.values()
-                          if s.exit is Exit.RUNNING and state_of(s)[2] < 2),
-                         key=lambda s: (s.project.casefold(), s.session_id))
+        """Go to the next open session that needs you (a question, a permission), one after another;
+        when none does, the next one waiting for you (its turn over)."""
+        open_ones = [s for s in self.sessions.values() if s.exit is Exit.RUNNING and state_of(s)[2] < 2]
+        needs = [s for s in open_ones if state_of(s)[2] == 0]
+        waiting = sorted(needs or open_ones, key=lambda s: (s.project.casefold(), s.session_id))
         if not waiting:
             self.notify("No session is waiting for you.", timeout=3)
             return
+        group = "needs" if needs else "waiting"
+        if group != self.waiting_group:  # from the top of the ones that need you, once there are some
+            self.waiting_group, self.waiting_turn = group, 0
         session = waiting[self.waiting_turn % len(waiting)]
         self.waiting_turn += 1
         team = self.member_rows.get(session.session_id, ("", ""))[0]
@@ -3162,7 +3233,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if old is not None and old.size == size and sid in live:
                 fresh = replace(old)  # transcript unchanged: only the live state can differ
             else:
-                fresh = read_session(path)  # new activity, a new session, or one that closed
+                fresh = read_session(path, follow=True)  # new activity (read on from the last read), a new session, or one that closed
             if fresh is None:
                 continue
             mark_live(fresh, live.get(sid))
@@ -3331,7 +3402,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def open_sessions(self, launches: list[Launch]) -> None:
         """Open sessions in new tabs beside the dashboard, which stays open. One that a Claude
-        process has open right now, in another tab or in the background, is not opened again."""
+        process has open right now, in another tab or in the background, is not opened again.
+        While claude update runs (claudeupdate.py), they open once it is done."""
+        if self.after_update("the session opens" if len(launches) == 1 else f"the {len(launches)} sessions open",
+                             lambda: self.open_sessions(launches)):
+            return
         taken = self.open_elsewhere(launches)
         if taken:
             again = [launch for launch in launches if resumes(launch) and launch.session_id in taken]

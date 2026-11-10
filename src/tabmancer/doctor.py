@@ -13,7 +13,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-from . import __version__, accounts, clis, sixel, summarize, tokens, updates, workspaces
+from . import __version__, accounts, claudeupdate, clis, sixel, summarize, tokens, updates, workspaces
 from .config import config_dir, read_json
 from .launch import clean_env, terminal_kind
 from .mascot import way_of
@@ -36,7 +36,7 @@ Result = tuple[str, str]  # (level, message); level is ok, warn or fail
 SHUTDOWN_RECORDS = {"win32": "the System event log", "darwin": "`last shutdown`",
                     "linux": "the systemd journal or wtmp (`last -x`)"}
 # The Claude Code tabmancer was last checked with: see CONTRIBUTING.md, "Releasing".
-TESTED_WITH = "2.1.319"
+TESTED_WITH = "2.1.322"
 # What tabmancer runs claude with, by subcommand ("" for claude itself), and what each is for.
 USES = {
     "": {
@@ -111,6 +111,7 @@ def checks() -> list[Result]:
     claude = shutil.which("claude")
     if claude:
         found.append(version_check(_claude_version(claude) or claude))
+        found.append(claude_update_check())
         account = accounts.claude()
         found.append(("ok", f"Signed in as {account.email}" + (f" ({account.plan})" if account.plan else "")
                       if account else f"No account in {accounts.claude_file()}: an API key, or not signed in."))
@@ -181,6 +182,15 @@ def update_check() -> Result:
     if found and updates.newer(found):
         return "warn", f"tabmancer {__version__}; {found} is out. To upgrade: {command}"
     return "ok", f"tabmancer {__version__}" + (", the latest." if found else " (PyPI did not answer).")
+
+
+def claude_update_check() -> Result:
+    """Whether tabmancer runs claude update before sessions open (claudeupdate.py), and its last run."""
+    done = claudeupdate.last()
+    when = f" Last run {done['at'].replace('T', ' ')}: {done.get('after', '?')}." if done.get("at") else ""
+    if claudeupdate.enabled():
+        return "ok", f"claude update runs once a day before sessions open.{when}"
+    return "ok", f"tabmancer does not run claude update (tabmancer claude-updates on).{when}"
 
 
 def bit_check() -> Result:

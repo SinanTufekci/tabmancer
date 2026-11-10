@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.1.7
+
+- **No more freezes while you type.** Every few seconds the dashboard stood still for a quarter
+  to half a second, in a dialog's boxes too (the first message in `n`). Two causes, both measured
+  on a real day of 22 open sessions: Python's garbage collector walked the 460k objects the
+  dashboard keeps (sessions, token counts, the search index) on every full collection, 150 to
+  260 ms each, and the poll every 2 seconds read each session at work again from 2 MB back (a
+  team member a lead started, from 8 MB, looking for a prompt of yours it never had). What is
+  loaded at the start is now set aside from the collector (`gc.freeze`), and a session at work is
+  read on from where the last read ended. Typing for 50 seconds in `n`: 0.07 s of stalls, from 5
+  to 12 s.
+- **The router waits for `Ctrl+R`.** It is no longer asked by itself once you stop typing, so
+  nothing is sent while you are still writing; `Ctrl+R` asks it and puts its pick in. The dialog
+  says that it needs the first message. `"router": false` and `TABMANCER_ROUTER` are gone with
+  the automatic call.
+- **`Ctrl+E` improves a prompt.** In `n` the first message, and in the new-team form the goal, is
+  rewritten by Claude so a session can act on it: clearer, nothing made up, in your language, one
+  line for each line in `n` (each line is a session). `Ctrl+Z` in the box puts yours back.
+- **Stats: an overview, all time and one project.** A first tab sums the period up: tokens, time
+  at work, sessions and projects, each against the period before it, as long; every day of it;
+  the top projects, the models, where the tokens went and the records (busiest day, longest day,
+  days in a row, longest session, busiest hour, top tool). The other tabs are framed in cards.
+  `5` looks over all the time kept, `p` and `P` show one project. The tabs are counted in the
+  background, so the screen opens at once.
+- **Days kept past their transcripts.** Claude Code deletes a transcript some weeks after its
+  last use, and its counts went with it. tabmancer now keeps each finished day as a summary
+  (`history.json`, a few kilobytes a day) and takes the days before from Claude Code's own
+  `stats-cache.json` (tokens and sessions only; the stats say where they stand in). `tabmancer
+  stats --all-time`.
+- **Wrapped: slides, a month, all time, and moving.** `W` shows slides now, `←` `→` between
+  them, each in a sky of its own colour: who you were (Bit in a pose of the name's own), the
+  tokens, the time, the sessions, tools and models, and the card that sums it up. `1` `2` `3`
+  take the week, the month or all time. Every slide saves (`s`), copies (`c`) and shares (`p`) as
+  shown, and `g` saves it as a GIF with its numbers counting up. `n` puts the top project's name on the tools slide; it is off by
+  default. `tabmancer wrapped --period month|all --slide ... --gif --names`.
+- **Claude Code up to date before your sessions open.** `tabmancer claude-updates on` runs
+  `claude update` once a day before tabmancer opens a session: the dashboard as it opens, the
+  sessions you ask for meanwhile waiting for it (Enter, `n`, a team, a prompt), and `tabmancer new`,
+  `open` and `team` first. Claude Code's own update takes effect only the next time it starts, so
+  the morning's sessions started on yesterday's version. A new version is checked at once for
+  every flag tabmancer runs it with. Off by default; `tabmancer claude-updates now` runs it.
+- **Fable 5.2's price, as the router and the model picker say it:** twice Opus's, the same for
+  reading the conversation back (it said 2.5 times).
+- **An advisor for a session or a team's lead.** `n` has an **Advisor** row (none, opus, fable),
+  and the new-team form's Runs card one for the lead alone: Claude Code's `--advisor`, a stronger
+  model the session asks at the turns that matter. Given as a flag it holds for that session only
+  (`/advisor` would save it for every session), and tabmancer gives it again on resume. Only a model
+  as strong or stronger can advise (a Fable session takes only Fable). `tabmancer new --advisor`.
+- **`j` goes to a session that needs you first** (a question, a permission), round those while
+  there are any, then round the ones waiting for you.
+- **Fixed:** the stats could hang for good when a period or a project was picked while a tab was
+  still being drawn; and counting the projects took a second and a half on a long period (it
+  measured the time at work once for each project; now once for all).
+
 ## 0.1.6
 
 - **The router.** `n` suggests the model, the effort and the context cap for the first message:

@@ -15,17 +15,20 @@ the first run only what was appended since is read.
 
 from __future__ import annotations
 
+import atexit
 import json
 import math
+import os
 import re
 import threading
+import time as clock
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from functools import cached_property
 from pathlib import Path
 
-from .config import read_json, write_json
+from .config import config_dir, read_json, write_json
 from .sessions import EDIT_TOOLS, _glob, claude_dir
 
 CACHE_FILE = "tokens.json"
@@ -35,6 +38,11 @@ IDLE_SECONDS = 5 * 60  # a longer gap between two replies is a break, not work
 ALONE_SECONDS = 60     # what a reply after a break counts for
 PATCHED = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$", re.MULTILINE)
 _lock = threading.Lock()  # one scan at a time: they share the cache file
+SAVE_EVERY = 300  # seconds: the cache is kept in memory between counts and written this seldom
+# The cache as the last count left it, with the file's size and time when it was read or written: a
+# count reads tokens.json again only when something else wrote it. Reading and writing its many
+# megabytes every minute held up the dashboard's screen for a second each time.
+_memory: dict = {"stamp": None, "entries": None, "saved": 0.0}
 
 
 @dataclass
@@ -43,16 +51,18 @@ class Tokens:
     cache_write: int = 0  # written to the cache
     cache_read: int = 0   # read back from the cache: the conversation so far, every turn
     output: int = 0       # what the model wrote, thinking included
+    unsplit: int = 0      # of the four, which ones not known: days from Claude Code's own record (history)
 
     @property
     def total(self) -> int:
-        return self.input + self.cache_write + self.cache_read + self.output
+        return self.input + self.cache_write + self.cache_read + self.output + self.unsplit
 
     def add(self, other: Tokens) -> None:
         self.input += other.input
         self.cache_write += other.cache_write
         self.cache_read += other.cache_read
         self.output += other.output
+        self.unsplit += other.unsplit
 
 
 def human(count: float) -> str:
@@ -98,6 +108,24 @@ class Activity:
     slot_seconds: list[list[float]]          # [weekday 0=Monday][hour], wall time
     session_seconds: dict[str, float]        # per session, inside the window
     sessions_per_day: list[int]              # sessions with any activity that day
+    day_hours: list[list[float]] = field(default_factory=list)  # [day of the window][hour], wall time
+
+
+@dataclass
+class Day:
+    """A day of work as the history keeps it (history.py), once its sessions' files may be gone:
+    the tokens, by model and by project folder, the time at work and in which hours, the sessions
+    and the tool calls. A day from Claude Code's own record has the tokens by model only, and
+    those unsplit."""
+    use: Tokens = field(default_factory=Tokens)
+    models: dict[str, Tokens] = field(default_factory=dict)
+    projects: dict[str, tuple[Tokens, int, float]] = field(default_factory=dict)  # folder -> use, sessions, seconds
+    seconds: float = 0.0
+    hours: list[float] = field(default_factory=lambda: [0.0] * 24)
+    sessions: int = 0
+    tools: dict[str, int] = field(default_factory=dict)
+    calls: int = 0  # tool calls, where only their number is known
+    source: str = "tabmancer"  # or "claude": from ~/.claude/stats-cache.json
 
 
 @dataclass
@@ -111,6 +139,10 @@ class Report:
     folders: dict[str, str] = field(default_factory=dict)  # session id -> the folder it was last in
     clis: dict[str, str] = field(default_factory=dict)  # session id -> claude or codex
     events: list[Event] = field(default_factory=list)  # every event, oldest first, whole life
+    # Days of the window told by the history instead (history.attach): their sessions' files are gone,
+    # wholly or in part. Their cells and events are left out, so nothing is counted twice.
+    archive: dict[int, Day] = field(default_factory=dict)  # day ordinal -> Day
+    whole: bool = False  # from the first day anything was kept: all time (history.collect(None))
 
     @property
     def start(self) -> float:
@@ -132,6 +164,10 @@ class Report:
         for (sid, day), use in self.cells.items():
             if day >= start and (sessions is None or sid in sessions):
                 out.add(use)
+        if sessions is None:
+            for day, kept in self.archive.items():
+                if day >= start:
+                    out.add(kept.use)
         return out
 
     def between(self, first: date, last: date) -> Tokens:
@@ -139,6 +175,9 @@ class Report:
         for (_, day), use in self.cells.items():
             if first.toordinal() <= day <= last.toordinal():
                 out.add(use)
+        for day, kept in self.archive.items():
+            if first.toordinal() <= day <= last.toordinal():
+                out.add(kept.use)
         return out
 
     def daily(self, sessions: set[str] | None = None) -> list[Tokens]:
@@ -148,6 +187,10 @@ class Report:
         for (sid, day), use in self.cells.items():
             if 0 <= day - start < self.days and (sessions is None or sid in sessions):
                 out[day - start].add(use)
+        if sessions is None:
+            for day, kept in self.archive.items():
+                if 0 <= day - start < self.days:
+                    out[day - start].add(kept.use)
         return out
 
     def hourly(self) -> list[int]:
@@ -182,7 +225,14 @@ class Report:
         return [e for e in self.events if e.at >= start]
 
     def tools(self) -> Counter[str]:
-        return Counter(name for e in self.window_events() for name in e.tools)
+        out = Counter(name for e in self.window_events() for name in e.tools)
+        for kept in self.archive.values():
+            out.update(kept.tools)
+        return out
+
+    def calls(self) -> int:
+        """Tool calls in the window, the history's days whose tools are not named among them."""
+        return sum(self.tools().values()) + sum(kept.calls for kept in self.archive.values())
 
     def edited(self) -> Counter[tuple[str, str]]:
         """(session, file path) -> edits, inside the window."""
@@ -190,18 +240,19 @@ class Report:
 
     def wall_seconds(self, sessions: set[str]) -> float:
         """Time at work in the window for these sessions together, side by side ones counted once."""
+        return self.wall_seconds_by({"": sessions})[""]
+
+    def wall_seconds_by(self, groups: dict[str, set[str]]) -> dict[str, float]:
+        """wall_seconds for each group of sessions (a project's), the events gone through once."""
         start = self.start
-        stamps: dict[str, list[int]] = {}
+        group_of = {sid: key for key, ids in groups.items() for sid in ids}
+        stamps: dict[str, dict[str, list[int]]] = {}
         for event in self.events:
-            if event.at >= start and event.session in sessions:
-                stamps.setdefault(event.session, []).append(event.at)
-        total, reach = 0.0, float("-inf")
-        for begin, end in sorted(_spans(stamps)):
-            begin = max(begin, reach, start)
-            if end > begin:
-                total += end - begin
-            reach = max(reach, end)
-        return total
+            if event.at >= start:
+                key = group_of.get(event.session)
+                if key is not None:
+                    stamps.setdefault(key, {}).setdefault(event.session, []).append(event.at)
+        return {key: _wall(stamps.get(key, {}), start, float("inf")) for key in groups}
 
     @cached_property
     def activity(self) -> Activity:
@@ -227,6 +278,7 @@ class Report:
                     active_days[index].add(sid)
                 previous = moment
         day_seconds = [0.0] * self.days
+        day_hours = [[0.0] * 24 for _ in range(self.days)]
         slots = [[0.0] * 24 for _ in range(7)]
         spans.sort()
         merged: list[list[float]] = []
@@ -244,9 +296,20 @@ class Report:
                 index = local.date().toordinal() - day0
                 if 0 <= index < self.days:
                     day_seconds[index] += piece
+                    day_hours[index][local.hour] += piece
                 slots[local.weekday()][local.hour] += piece
                 moment += piece
-        return Activity(day_seconds, slots, per_session, [len(s) for s in active_days])
+        per_day = [len(s) for s in active_days]
+        for day, kept in self.archive.items():
+            index = day - day0
+            if 0 <= index < self.days:
+                day_seconds[index] += kept.seconds
+                per_day[index] += kept.sessions
+                weekday = date.fromordinal(day).weekday()
+                for hour, seconds in enumerate(kept.hours[:24]):
+                    day_hours[index][hour] += seconds
+                    slots[weekday][hour] += seconds
+        return Activity(day_seconds, slots, per_session, per_day, day_hours)
 
     def week_against_last(self) -> tuple[dict, dict] | None:
         """This week (today and the six days before) against the seven before; None if the
@@ -263,8 +326,54 @@ class Report:
             weeks.append({"tokens": use.total, "output": use.output,
                           "seconds": sum(self.activity.day_seconds[i] for i in index),
                           "sessions": len({e.session for e in self.window_events()
-                                           if first <= date.fromtimestamp(e.at) <= last})})
+                                           if first <= date.fromtimestamp(e.at) <= last})
+                          + sum(kept.sessions for day, kept in self.archive.items()
+                                if first.toordinal() <= day <= last.toordinal())})
         return weeks[0], weeks[1]
+
+
+    def day(self, ordinal: int) -> Day:
+        """One day of the window as the history keeps it: from the sessions' replies that day."""
+        begin = datetime.combine(date.fromordinal(ordinal), time.min).timestamp()
+        end = begin + 86400
+        index = ordinal - self.first.toordinal()
+        out = Day(seconds=self.activity.day_seconds[index], hours=list(self.activity.day_hours[index]),
+                  sessions=self.activity.sessions_per_day[index])
+        by_session: dict[str, Tokens] = {}
+        stamps: dict[str, list[int]] = {}
+        tools: Counter[str] = Counter()
+        for event in self.events:
+            if begin <= event.at < end:
+                stamps.setdefault(event.session, []).append(event.at)
+                tools.update(event.tools)
+                if event.use.total:
+                    out.models.setdefault(event.model, Tokens()).add(event.use)
+        for (sid, day), use in self.cells.items():
+            if day == ordinal:
+                by_session[sid] = use
+                out.use.add(use)
+        folders: dict[str, list[str]] = {}
+        for sid in set(by_session) | set(stamps):
+            folders.setdefault(self.folders.get(sid, ""), []).append(sid)
+        for folder, ids in folders.items():
+            use = Tokens()
+            for sid in ids:
+                use.add(by_session.get(sid, Tokens()))
+            seconds = _wall({sid: stamps[sid] for sid in ids if sid in stamps}, begin, end)
+            out.projects[folder] = (use, len(ids), seconds)
+        out.tools = dict(tools)
+        return out
+
+
+def _wall(stamps: dict[str, list[int]], begin: float, end: float) -> float:
+    """Time at work between begin and end for these sessions together, side by side counted once."""
+    total, reach = 0.0, float("-inf")
+    for start, stop in sorted(_spans(stamps)):
+        start, stop = max(start, reach, begin), min(stop, end)
+        if stop > start:
+            total += stop - start
+        reach = max(reach, stop)
+    return total
 
 
 def _spans(stamps: dict[str, list[int]]) -> list[tuple[float, float]]:
@@ -437,6 +546,55 @@ def _files(cutoff: float) -> list[tuple[Path, str, str]]:
     return out
 
 
+def _stamp() -> tuple:
+    """Which tokens.json, and as it is now: its size and time, or none."""
+    path = config_dir() / CACHE_FILE
+    try:
+        found = path.stat()
+    except OSError:
+        return str(path), None
+    return str(path), found.st_size, found.st_mtime_ns
+
+
+def _load_entries() -> dict:
+    """The cache's entries: from memory while tokens.json is as the last count left it."""
+    stamp = _stamp()
+    if _memory["entries"] is not None and stamp == _memory["stamp"]:
+        return _memory["entries"]
+    cached = read_json(CACHE_FILE)
+    entries = cached.get("entries", {}) if isinstance(cached, dict) and cached.get("format") == CACHE_FORMAT else {}
+    _memory.update(stamp=stamp, entries=entries, saved=clock.monotonic())
+    return entries
+
+
+def _keep_entries(entries: dict, changed: bool) -> None:
+    """Kept in memory; written to tokens.json when it changed and was last written SAVE_EVERY
+    seconds ago (or never), and by save()."""
+    _memory["entries"] = entries
+    _memory["dirty"] = _memory.get("dirty", False) or changed
+    unsaved = _memory["stamp"] is None or _memory["stamp"][1] is None  # no file yet: written at once
+    if _memory["dirty"] and (unsaved or clock.monotonic() - _memory["saved"] >= SAVE_EVERY):
+        _save_locked()
+
+
+def _save_locked() -> None:
+    try:
+        write_json(CACHE_FILE, {"format": CACHE_FORMAT, "entries": _memory["entries"]}, indent=None)
+    except OSError:
+        return  # a read-only config folder only costs speed
+    _memory.update(stamp=_stamp(), saved=clock.monotonic(), dirty=False)
+
+
+def save() -> None:
+    """What the counts read since tokens.json was last written, written now (the dashboard closing)."""
+    with _lock:
+        if _memory.get("dirty") and _memory["entries"] is not None:
+            _save_locked()
+
+
+atexit.register(save)  # the dashboard closing, or a command done: nothing counted is lost
+
+
 def collect(days: float = 14) -> Report:
     """What happened over today and the days before it, `days` days in all."""
     with _lock:
@@ -469,8 +627,7 @@ def _collect(days: float) -> Report:
     span = max(1, math.ceil(days))
     first = date.today() - timedelta(days=span - 1)
     cutoff = datetime.combine(first, time.min).timestamp()
-    cached = read_json(CACHE_FILE)
-    entries = cached.get("entries", {}) if isinstance(cached, dict) and cached.get("format") == CACHE_FORMAT else {}
+    entries = _load_entries()
     fresh: dict[str, dict] = {}
     changed = not entries
     for path, sid, cli in _files(cutoff):
@@ -496,13 +653,9 @@ def _collect(days: float) -> Report:
         fresh[key] = entry
         changed = True
     # Keep what a wider --days run read, as long as the file is still there.
-    kept = {key: entry for key, entry in entries.items() if key not in fresh and Path(key).exists()}
+    kept = {key: entry for key, entry in entries.items() if key not in fresh and os.path.exists(key)}
     changed = changed or len(kept) + len(fresh) != len(entries)
-    if changed:
-        try:
-            write_json(CACHE_FILE, {"format": CACHE_FORMAT, "entries": fresh | kept}, indent=None)
-        except OSError:
-            pass  # a read-only config folder only costs speed
+    _keep_entries(fresh | kept, changed)
 
     report = Report(first=first, days=span)
     seen: set[str] = set()
@@ -523,4 +676,10 @@ def _collect(days: float) -> Report:
                     report.models.setdefault(model, Tokens()).add(use)
             report.events.append(Event(sid, at, model, use, rest[4], rest[5]))
     report.events.sort(key=lambda e: e.at)
+    from . import history  # its days are made from a count: imported here, not at the top
+
+    try:
+        history.record(report)  # the days just finished, kept for when their files are gone
+    except OSError:
+        pass
     return report

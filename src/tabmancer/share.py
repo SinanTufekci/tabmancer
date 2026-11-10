@@ -57,11 +57,12 @@ class Shared:
     note: str  # what was done and what is left to you, in a line or two
 
 
-def share(place: Place, week: wrapped.Week, accent: Colour, folder: Path | None = None) -> Shared:
-    """The card saved and copied in the place's shape, and the place's new post opened. Raises
-    OSError when the card cannot be saved."""
-    canvas = wrapped.draw(week, accent, shape=place.shape)
-    path = card.save(canvas, wrapped.filename(week, place.shape), folder)
+def share(place: Place, week: wrapped.Week, accent: Colour, folder: Path | None = None, slide: str = "summary",
+          names: bool = False) -> Shared:
+    """The slide (the card that sums it up by default) saved and copied in the place's shape, and the
+    place's new post opened. Raises OSError when it cannot be saved."""
+    canvas = wrapped.draw(week, accent, shape=place.shape, slide=slide, names=names)
+    path = card.save(canvas, wrapped.filename(week, place.shape, slide), folder)
     copied = card.copy_picture(canvas)
     address = page(place, wrapped.words(week))
     open_page(address)

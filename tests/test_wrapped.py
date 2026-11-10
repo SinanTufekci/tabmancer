@@ -212,9 +212,19 @@ async def test_w_shows_the_card_in_pixels_saves_and_copies_it(fake_home, monkeyp
         assert isinstance(app.screen, WrappedScreen)
         shown = app.screen.query_one(CardPicture)
         assert shown.unit() >= 2 and shown.picture.data.startswith("\x1bP") and str(shown.render()) == ""
+        today = date.today().isoformat()
+        assert app.screen.slide == "you"  # the slides start with who you were
         await pilot.press("s", "c")
         await pilot.pause(0.1)
-        assert saved == [(1200, f"claude-code-wrapped-{date.today().isoformat()}.png")] and copied == [675]
+        assert saved == [(1200, f"claude-code-wrapped-{today}-you.png")] and copied == [675]
+        await pilot.press("left")  # round to the last slide: the card that sums it up
+        await pilot.pause(0.1)
+        assert app.screen.slide == "summary" and shown.slide == "summary"
+        await pilot.press("s")
+        await pilot.pause(0.1)
+        assert saved[-1] == (1200, f"claude-code-wrapped-{today}.png")
+        await pilot.press("right", "right")
+        assert app.screen.slide == "tokens"
         await pilot.press("escape")
         assert not isinstance(app.screen, WrappedScreen)
 
@@ -241,6 +251,7 @@ async def test_f_turns_the_card_to_a_story_and_p_takes_it_where_it_is_shared(fak
         await pilot.pause(0.3)
         screen = app.screen
         assert isinstance(screen, WrappedScreen)
+        await pilot.press("left")  # the card that sums it up
         await pilot.press("f")  # the story: 640 design pixels down, too tall for 50 rows at three a pixel
         picture = screen.query_one(CardPicture)
         assert screen.shape == "story" and picture.shape == "story" and 0 < picture.unit() < 3

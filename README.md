@@ -54,7 +54,7 @@ picker at login when sessions were left open.
 - **Shows what each one is doing.** Every open session, whichever terminal it is in: working,
   waiting for you or needing you, the model and effort it runs on, and how full its context is;
   your plan limits in the top bar.
-  `j` goes to the next one waiting for you, and `Enter` on an open one goes to its tab.
+  `j` goes to the next one that needs you (then the ones waiting for you), and `Enter` on an open one goes to its tab.
 - **Brings your sessions back.** Closed before they were done, by you, a reboot or a crash,
   they say how they ended (cut off, unanswered, at a usage limit, done) and wait under TO
   CONTINUE. `Enter` opens them again where they left off, each in its own tab and folder, and
@@ -74,9 +74,10 @@ picker at login when sessions were left open.
   for your first message: the cheapest that will still do the work well, yours to take with
   `Ctrl+R` or leave. [The context cap](docs/handover.md#the-context-cap).
 - **Counts.** Tokens, when you work, tools and files, plan limits with a forecast, and a
-  written report of the week to share.
-- **Wraps your week up.** [Claude Code Wrapped](#claude-code-wrapped): your week as a card to
-  post on X, Bluesky, Threads or your Instagram story.
+  written report of the week to share; an overview set against the period before, one project at
+  a time, and all time, kept past the day Claude Code deletes a transcript.
+- **Wraps your week up.** [Claude Code Wrapped](#claude-code-wrapped): your week, month or all
+  time as slides to post on X, Bluesky, Threads or your Instagram story, still or moving.
 - **Finds.** `/` finds a session by anything you or Claude said in it.
 - **Codex and Antigravity too**, if you use them.
 
@@ -88,22 +89,28 @@ status means, every key, writing to a session, background sessions, workspaces) 
 ## Claude Code Wrapped
 
 <p align="center">
-  <img src="docs/wrapped.png" alt="A Claude Code Wrapped card from the demo: I'm the Comeback Kid, 4 sessions brought back; 55.8M tokens, 14h 14m at work over 7 days, 13 sessions, 4 side by side, Claude wrote about 8 novels; Bit in confetti and the tokens of each day" width="64%">
+  <img src="docs/wrapped-slides.png" alt="Claude Code Wrapped's six slides from the demo's week, each in a sky of its own colour: I'm the Night Owl, 43% of the work at night, Bit with a mug; 55.1M tokens and a bar a day; 14h 14m at work and the hours of the day; 13 sessions, up to 4 at once; the top tool and the models; and the card that sums it all up" width="100%">
+</p>
+<p align="center">
+  <img src="docs/wrapped-moving.gif" alt="The tokens slide as a GIF: the numbers and the bars count up, then hold" width="64%">
   <img src="docs/wrapped-story.png" alt="The same week as a story card: every number, the models used, the longest session, the top tool and the hours of the day the work was done in" width="20%">
 </p>
 
-Your week with Claude Code as a card worth posting, drawn in pixels like Bit. On Fridays Bit
+Your week with Claude Code as slides worth posting, drawn in pixels like Bit. On Fridays Bit
 says it is ready, and `W` shows it any day: who the week made you (the Conductor, the Night
-Owl, the Marathoner, the Comeback Kid and more, each with the number behind it), the tokens
-against last week, the time at work, the sessions side by side, what Claude wrote in novels'
-worth, the files edited, the models, the longest session and the hours you worked. `f` turns it
-into a story card. `p` shares it: X, Bluesky or Threads open a new post with the words already
-written and the card on your clipboard to paste in; for Instagram the story card is saved and
-its folder opened, to send to your phone. Nothing is posted until you post it, and the card
-holds counts only: no project names, nothing said in a session.
+Owl, the Marathoner, the Comeback Kid and more, each with the number behind it and Bit in a pose
+of its own), then a slide each for the tokens against the period before, the time at work and
+the hours you worked, the sessions side by side, the tools and models, and a card that sums it
+all up. `←` `→` go through them; `2` makes it your month and `3` all of your time. `f` turns a
+slide into a story card. `p` shares the slide shown: X, Bluesky or Threads open a new post with
+the words already written and the card on your clipboard to paste in; for Instagram the story
+card is saved and its folder opened, to send to your phone. `g` saves it as a GIF, its numbers
+counting up. Nothing is posted until you post it, and the cards hold counts only: no project
+names (unless `n` puts the top one on), nothing said in a session.
 
 ```sh
 tabmancer wrapped --share x    # or bluesky, threads, instagram; --story saves the tall card
+tabmancer wrapped --period month --gif   # the last 30 days, moving
 ```
 
 ## Keys
@@ -114,14 +121,14 @@ tabmancer wrapped --share x    # or bluesky, threads, instagram; --story saves t
 | `Space` | tick a session |
 | `m` | how it opens: resume → auto-continue → fork → new |
 | `p` | write a prompt to a session (an open one: go to its tab) |
-| `j` | the next open session waiting for you |
+| `j` | the next open session that needs you, else the next one waiting for you |
 | `/` | find by project, title, or anything said in a session |
-| `n` | fresh sessions in several projects at once; `Ctrl+R` takes the router's model, effort and cap |
+| `n` | fresh sessions in several projects at once, with a model, effort, context cap and advisor; `Ctrl+R` takes the router's |
 | `T` | teams |
 | `h` | hand a session over to a fresh one; on a team, the whole team (twice) |
 | `c` | continue the sessions stopped at a usage limit |
-| `u` | stats |
-| `W` | Claude Code Wrapped: your week as a card; `p` shares it, `f` makes it a story |
+| `u` | stats; `5` all time, `p` one project |
+| `W` | Claude Code Wrapped: your week as slides; `←` `→` go through them, `p` shares one, `f` makes it a story |
 | `?` | every key, explained; `Enter` runs the one picked |
 
 [All the keys](docs/using.md#keys).
@@ -148,16 +155,21 @@ Codex's `auth.json`, to show it in the top bar, and remembers the emails of the 
 has seen, in its own folder, to offer them when you switch (`A`), with the browser profile each
 one's sign-in page opens in: for that it reads your browsers' list of profiles (each one's name
 and the Google account it syncs with), never their cookies or passwords; and the ids of the sessions it
-opened again, to count them on your week's card (`W`). Once a day it asks PyPI which version of
-tabmancer is the latest, to tell you of a newer one (`tabmancer updates off` stops it). A model
+opened again, to count them on your week's card (`W`). It keeps a summary of each day's work
+(`history.json`: tokens, time at work, sessions, tools, project folders) so the stats reach back
+past the day Claude Code deletes a transcript, and reads Claude Code's own `stats-cache.json` for
+the days before. Once a day it asks PyPI which version of
+tabmancer is the latest, to tell you of a newer one (`tabmancer updates off` stops it), and, only
+if you turn it on (`tabmancer claude-updates on`), runs `claude update` once a day before your
+sessions open. A model
 is called only when you ask for one, through your own CLI
 and plan: an AI summary (`s`), a handover (`h`; a team's lead writes its team's, `h` in the team
 view), a report (`r` in the stats), a team's line-up
 (`Ctrl+R` in the new-team form, which sends the goal, the project's file names and its README's
-start, and the goal and members' parts of a team at work in that project). One call is made
-without asking: in `n`, once you stop typing a first message, the router sends that message and
-the ticked folders' names to Haiku to suggest a model, effort and context cap (`"router": false`
-in its `config.json` stops it; `Ctrl+R` then asks). It types into
+start, and the goal and members' parts of a team at work in that project), and the router
+(`Ctrl+R` in `n`, which sends the first message and the ticked folders' names to Haiku to pick a
+model, effort and context cap), and `Ctrl+E` there or in the new-team form, which sends the first
+message or the goal (with the folders' names) to Sonnet to have it rewritten clearer. It types into
 an open session only when you have it continue the ones stopped at a usage limit (`c`), or send
 a team at work's lead the message `Ctrl+R` wrote for it (`Ctrl+S`).
 Sharing your week's card (`p` on it) opens the platform's own page for a new post in your

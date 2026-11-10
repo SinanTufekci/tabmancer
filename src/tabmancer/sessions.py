@@ -15,7 +15,7 @@ import subprocess
 import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -319,23 +319,39 @@ def _shorten(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def read_session(path: Path, strict: bool = False) -> Session | None:
+def read_session(path: Path, strict: bool = False, follow: bool = False) -> Session | None:
     """Summarise one transcript. None if it holds no real prompt (nothing to resume), or (unless
-    strict, when the error is raised) when it cannot be read."""
+    strict, when the error is raised) when it cannot be read.
+
+    With follow, a transcript read this way before and only grown since is read on from where that
+    read ended: the dashboard's poll of the sessions at work, which would otherwise parse two
+    megabytes of each again every two seconds and hold up the screen (typing in a dialog froze)."""
     try:
         stat = path.stat()
     except OSError:
         return None
     if stat.st_size == 0:
         return None
+    key = str(path)
+    followed = _FOLLOWED.get(key) if follow else None
+    if followed is not None and followed.read <= stat.st_size and followed.ident == stat.st_ino:
+        try:
+            return _read_on(path, stat, followed)
+        except OSError:
+            if strict:
+                raise
+            return None
+        except Exception as error:  # noqa: BLE001 - as below
+            unreadable(error)
+            return None
     session = Session(session_id=path.stem, path=path, size=stat.st_size,
                       last_active=datetime.fromtimestamp(stat.st_mtime))
     try:
         with path.open("rb") as f:
-            _read_head(f, stat.st_size, session)
+            real = _read_head(f, stat.st_size, session)
             if not session.first_prompt:
                 return None
-            _read_tail(f, stat.st_size, session)
+            tail, read = _read_tail(f, stat.st_size, session)
     except OSError:
         if strict:
             raise
@@ -343,6 +359,53 @@ def read_session(path: Path, strict: bool = False) -> Session | None:
     except Exception as error:  # noqa: BLE001 - a shape this version cannot read: this transcript goes, never the list
         unreadable(error)
         return None
+    if follow:
+        _follow(key, _Followed(read, stat.st_ino, replace(session), tail, real))
+    return session
+
+
+@dataclass
+class _Followed:
+    """A transcript as read_session(follow=True) last read it: up to which byte (the end of its last
+    whole line), which file it was, the session it made, how the tail stood, and whether its first
+    prompt is yours (a team member a lead started has only the lead's message until you write in it)."""
+
+    read: int
+    ident: int
+    session: Session
+    tail: _Tail
+    real: bool = True
+
+
+_FOLLOWED: dict[str, _Followed] = {}
+FOLLOWED_MOST = 256  # transcripts remembered so; the open sessions are a few dozen at most
+
+
+def _follow(key: str, followed: _Followed) -> None:
+    _FOLLOWED.pop(key, None)
+    _FOLLOWED[key] = followed  # newest last: the oldest goes first
+    while len(_FOLLOWED) > FOLLOWED_MOST:
+        _FOLLOWED.pop(next(iter(_FOLLOWED)), None)
+
+
+def _read_on(path: Path, stat: os.stat_result, followed: _Followed) -> Session:
+    """The session from what was read of it before and the lines it has gained since."""
+    with path.open("rb") as f:
+        f.seek(followed.read)
+        data = f.read(max(0, stat.st_size - followed.read))
+    whole = data.rfind(b"\n") + 1  # a line still being written waits for the next read
+    tail = replace(followed.tail, files=dict(followed.tail.files))
+    session = replace(followed.session, size=stat.st_size, last_active=datetime.fromtimestamp(stat.st_mtime),
+                      live_state="", resets=None, signed_in_again=False)
+    records = _parse_lines(data[:whole], drop_first=False, drop_last=False)
+    real = followed.real
+    if not real and followed.read < MAX_HEAD_BYTES:  # your first prompt, where a first read would find it
+        mine = next((r for r in records if _is_real_prompt(r)), None)
+        if mine is not None:
+            session.first_prompt, real = _shorten(_text(mine["message"]["content"]), 300), True
+    _scan_tail(records, session, tail)
+    _finish_tail(None, stat.st_size, session, tail)
+    _follow(str(path), _Followed(followed.read + whole, stat.st_ino, replace(session), tail, real))
     return session
 
 
@@ -361,7 +424,8 @@ def _peer_text(record: dict) -> str:
     return str(origin.get("body") or _text((record.get("message") or {}).get("content")))
 
 
-def _read_head(f, size: int, session: Session) -> None:
+def _read_head(f, size: int, session: Session) -> bool:
+    """The session's start from the head of its transcript; whether your own first prompt is in it."""
     span = HEAD_BYTES
     while True:
         f.seek(0)
@@ -382,47 +446,69 @@ def _read_head(f, size: int, session: Session) -> None:
                 session.cwd = record["cwd"]
             if _is_real_prompt(record):
                 session.first_prompt = _shorten(_text(record["message"]["content"]), 300)
-                return
+                return True
             peer = peer or _peer_text(record)
         if len(chunk) >= size or span >= MAX_HEAD_BYTES:
             # Never written to, only told by the lead: it is still a session, to see and to resume.
             # Taken for nothing to resume, such a member was missing from the list for good.
             session.first_prompt = _shorten(peer, 300) if peer else ""
-            return
+            return False
         span *= 4
 
 
-def _read_tail(f, size: int, session: Session) -> None:
+@dataclass
+class _Tail:
+    """How a transcript's tail stands after the records read so far, so that reading can go on from
+    there when it grows. Places count records from the first one read."""
+
+    seen: int = 0
+    custom_title: str = ""
+    ai_title: str = ""
+    last_conversation: dict | None = None
+    last_local: dict | None = None
+    signed_in: bool = False  # a /login since the last of the conversation
+    last_activity: int = -1
+    last_cost: int = -1
+    cost_state: dict | None = None
+    last_prompt_record: dict | None = None
+    files: dict[str, None] = field(default_factory=dict)
+
+
+def _read_tail(f, size: int, session: Session) -> tuple[_Tail, int]:
+    """The session's state from the end of its transcript, and how far that read went (the end of
+    its last whole line)."""
     span = TAIL_BYTES
     while True:
         start = max(0, size - span)
         f.seek(start)
-        records = _parse_lines(f.read(), drop_first=start > 0, drop_last=False)
+        chunk = f.read()
+        records = _parse_lines(chunk, drop_first=start > 0, drop_last=False)
         if start == 0 or span >= MAX_TAIL_BYTES or any(
                 r.get("type") in ("user", "assistant") and not r.get("isSidechain") for r in records):
             break
         span *= 4  # a few huge trailing records pushed the conversation out of view
+    tail = _Tail()
+    _scan_tail(records, session, tail)
+    _finish_tail(f, size, session, tail)
+    return tail, start + chunk.rfind(b"\n") + 1
 
-    custom_title = ai_title = ""
-    last_conversation = last_local = None
-    signed_in = False  # a /login since the last of the conversation
-    last_activity = last_cost = -1
-    cost_state = last_prompt_record = None
-    files: dict[str, None] = {}
-    for i, record in enumerate(records):
+
+def _scan_tail(records: list[dict], session: Session, tail: _Tail) -> None:
+    """Records in the order written, into the tail's state and the session's fields."""
+    for i, record in enumerate(records, start=tail.seen):
         kind = record.get("type")
         if kind == "custom-title":
-            custom_title = record.get("customTitle") or custom_title
+            tail.custom_title = record.get("customTitle") or tail.custom_title
         elif kind == "ai-title":
-            ai_title = record.get("aiTitle") or ai_title
+            tail.ai_title = record.get("aiTitle") or tail.ai_title
         elif kind == "last-prompt":
-            last_prompt_record = record
+            tail.last_prompt_record = record
         elif kind == "cost-state":
-            last_cost, cost_state = i, record
+            tail.last_cost, tail.cost_state = i, record
         elif kind in ("mode", "permission-mode"):
-            last_activity = i
+            tail.last_activity = i
         elif kind in ("user", "assistant") and not record.get("isSidechain"):
-            last_activity = i
+            tail.last_activity = i
             session.cwd = record.get("cwd") or session.cwd
             session.git_branch = record.get("gitBranch") or session.git_branch
             if record.get("isMeta") or (record.get("isVisibleInTranscriptOnly")
@@ -430,10 +516,10 @@ def _read_tail(f, size: int, session: Session) -> None:
                 continue
             said = _text((record.get("message") or {}).get("content")).lstrip() if kind == "user" else ""
             if said.startswith(LOCAL_PREFIXES):  # /login, /usage, a ! command: not how the session stands
-                last_local = record
-                signed_in = signed_in or "Login successful" in said
+                tail.last_local = record
+                tail.signed_in = tail.signed_in or "Login successful" in said
                 continue
-            last_conversation, signed_in = record, False
+            tail.last_conversation, tail.signed_in = record, False
             content = (record.get("message") or {}).get("content")
             if kind == "assistant":
                 usage = (record.get("message") or {}).get("usage")
@@ -454,35 +540,40 @@ def _read_tail(f, size: int, session: Session) -> None:
                         target = (block.get("input") or {}).get("file_path") \
                             or (block.get("input") or {}).get("notebook_path")
                         if target:
-                            files.pop(target, None)
-                            files[target] = None
+                            tail.files.pop(target, None)
+                            tail.files[target] = None
             elif _is_real_prompt(record):
                 session.last_prompt = _shorten(_text(content), 300)
+    tail.seen += len(records)
 
+
+def _finish_tail(f, size: int, session: Session, tail: _Tail) -> None:
+    """The session's title, files, status and exit from the tail's state. With the file (a first
+    read), what the tail lacks is looked for further back; a read going on has done that already."""
     # Fields that may sit further back than the tail window. Custom titles are
     # re-written every turn, so a session without one in the tail has none.
-    if not custom_title and not ai_title:
+    if f is not None and not tail.custom_title and not tail.ai_title:
         record = _rfind_record(f, size, b'"type":"ai-title"')
-        ai_title = (record or {}).get("aiTitle") or ""
-    if cost_state is None:
-        cost_state = _rfind_record(f, size, b'"type":"cost-state"')
-    if not session.last_prompt and last_prompt_record:
-        session.last_prompt = _shorten(last_prompt_record.get("lastPrompt") or "", 300)
+        tail.ai_title = (record or {}).get("aiTitle") or ""
+    if f is not None and tail.cost_state is None:
+        tail.cost_state = _rfind_record(f, size, b'"type":"cost-state"')
+    if not session.last_prompt and tail.last_prompt_record:
+        session.last_prompt = _shorten(tail.last_prompt_record.get("lastPrompt") or "", 300)
 
-    session.title = _shorten(custom_title or ai_title or session.first_prompt, 80)
-    session.files = _relative(list(reversed(files)), session.cwd)[:8]
-    last_conversation = last_conversation or last_local  # nothing but local commands: they are all there is
+    session.title = _shorten(tail.custom_title or tail.ai_title or session.first_prompt, 80)
+    session.files = _relative(list(reversed(tail.files)), session.cwd)[:8]
+    last_conversation = tail.last_conversation or tail.last_local  # nothing but local commands: they are all there is
     session.status = _conversation_status(last_conversation) if last_conversation else Status.UNKNOWN
     if session.status is Status.ERROR and last_conversation.get("error") == "rate_limit":
         session.status, session.resets = Status.LIMIT, _limit_resets(last_conversation)
-        session.signed_in_again = signed_in
+        session.signed_in_again = tail.signed_in
     elif session.status is Status.ERROR and last_conversation.get("error") == "server_error":
         session.status = Status.DROPPED  # "Can't reach the API server", "Connection dropped" and the like
-    session.exit = Exit.CLEAN if last_cost > last_activity else Exit.KILLED
-    if cost_state:
-        session.lines_added = cost_state.get("totalLinesAdded")
-        session.lines_removed = cost_state.get("totalLinesRemoved")
-        session.cost_usd = cost_state.get("totalCostUSD")
+    session.exit = Exit.CLEAN if tail.last_cost > tail.last_activity else Exit.KILLED
+    if tail.cost_state:
+        session.lines_added = tail.cost_state.get("totalLinesAdded")
+        session.lines_removed = tail.cost_state.get("totalLinesRemoved")
+        session.cost_usd = tail.cost_state.get("totalCostUSD")
 
 
 def _relative(paths: list[str], cwd: str) -> list[str]:

@@ -1,8 +1,9 @@
 """The router: the model, effort and context cap a task needs, suggested before its session opens.
 
 One quick call to a small model (Haiku at low effort, no tools, no transcript left) reads the first
-message and answers with a pick and why, in a sentence. Nothing is applied by it: the new-session
-dialog shows the suggestion and Ctrl+R takes it, so the pick stays yours.
+message and answers with a pick and why, in a sentence. It is asked only when you press Ctrl+R in
+the new-session dialog, once the first message is written, and its pick goes into the rows there,
+yours to change.
 
 What a plan's usage goes on decides what the router weighs. Over two weeks of one user's many
 parallel sessions, two thirds of it was the conversation read back from the cache with every reply,
@@ -20,7 +21,6 @@ import re
 from dataclasses import dataclass
 
 from . import summarize
-from .config import read_json
 from .picks import CAPS, EFFORTS, MODELS, Pick, cap_tokens
 
 MODEL = os.environ.get("TABMANCER_ROUTER_MODEL", "haiku")
@@ -33,7 +33,7 @@ MAX_CHARS = 4000  # of the first message sent: its start says what the work is
 GUIDE = (
     "Models: opus for hard design, tricky debugging and code where a mistake costs much; sonnet for routine "
     "code, tests, docs and well-defined changes; haiku for quick look-ups, small edits and summaries; fable only "
-    "for the hardest problems (2.5 times Opus's price). Efforts: low for look-ups and simple, well-defined edits, "
+    "for the hardest problems (twice Opus's price for what it writes; plans give it at most half the week). Efforts: low for look-ups and simple, well-defined edits, "
     "medium for routine work, high for most coding, xhigh for long, many-step or hard work, max only when being "
     "right matters more than the cost. Every reply reads the whole conversation again, and a higher effort makes "
     "more and longer replies, so pick the lowest that will do the work well.")
@@ -104,12 +104,3 @@ def suggest(message: str, folders: list[str]) -> Route:
     if route is None:
         raise summarize.SummaryError("The router's answer named no model or effort.")
     return route
-
-
-def enabled() -> bool:
-    """Whether the new-session dialog asks the router by itself: on unless TABMANCER_ROUTER=0 or
-    "router": false in config.json. Ctrl+R asks it either way."""
-    if os.environ.get("TABMANCER_ROUTER", "").strip().lower() in ("0", "off", "false", "no"):
-        return False
-    saved = read_json("config.json")
-    return not (isinstance(saved, dict) and saved.get("router") is False)

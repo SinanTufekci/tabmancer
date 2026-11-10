@@ -23,7 +23,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import clis, picks, router, teams, workspaces
+from . import clis, improve, picks, router, teams, workspaces
 from .dialogs import Choice, cards, frame, light_rows, pill, title
 from .launch import Launch, Mode
 from .sessions import Session, folder_key
@@ -98,7 +98,9 @@ def linked_team(folder: str, message: str, pick: picks.Pick, taken: set[str]) ->
         member = named[0] if named else teams.Member(ORDINALS[index % len(ORDINALS)], line)
         while member.name in {m.name for m in members}:
             member = replace(member, name=f"{member.name}{index + 1}")
-        members.append(replace(member, model=member.model or pick.model, effort=member.effort or pick.effort))
+        members.append(replace(member, model=member.model or pick.model, effort=member.effort or pick.effort,
+                               advisor=pick.advisor if picks.advisor_ok(member.model or pick.model, pick.advisor)
+                               else ""))
     # Cleaned as new_team will clean it: cut to 18, "my-shop-frontends-" became "my-shop-frontends"
     # there, a name taken already, and the second linked team was saved over the first.
     base = teams.clean(teams.clean(Path(folder).name)[:18]) or "team"
@@ -176,8 +178,9 @@ class NewSessions(ModalScreen[Request | None]):
         Binding("ctrl+o", "next_cli", "CLI", priority=True),
         Binding("ctrl+l", "link", "Linked", priority=True),
         Binding("ctrl+r", "route", "Router's pick", priority=True),
+        Binding("ctrl+e", "improve", "Improve the first message", priority=True),
     ]
-    ROUTE_AFTER = 2.0  # seconds of no typing before the router is asked about the first message
+    MESSAGE_NOTE = "optional · Ctrl+E improves it"
 
     def __init__(self, found: list[Project], ticked: set[str] | None = None) -> None:
         super().__init__()
@@ -187,12 +190,12 @@ class NewSessions(ModalScreen[Request | None]):
         self.shown: dict[str, Project] = {}
         self.cli = default_cli()
         self.linked = False  # Ctrl+L: the lines as a team of peers in the one folder ticked
-        # The router (Ctrl+R): its answers by the message they were for, the messages it is being
-        # asked about, whether Ctrl+R waits to take an answer, and the timer that asks once typing stops.
+        # The router, asked only with Ctrl+R: its answers by the message they were for, the messages
+        # it is being asked about, and whether an answer is taken into the rows when it comes.
         self.routes: dict[str, router.Route | str] = {}  # a string: why there was no answer
         self.routing: set[str] = set()
         self.take_route = False
-        self.route_timer = None
+        self.improving: str | None = None  # Ctrl+E: the first message being rewritten, as it was sent
 
     def compose(self) -> ComposeResult:
         # Ids of their own: the dashboard's stylesheet hides its own #filter box.
@@ -219,6 +222,7 @@ class NewSessions(ModalScreen[Request | None]):
                         yield Choice([picks.DEFAULT, *picks.EFFORTS], id="new-effort", labels=SHORT)
                         yield Choice([*picks.CAPS, picks.NO_CAP], value=picks.default_cap(), id="new-cap",
                                      labels=CAP_SHORT)
+                        yield Choice([picks.NO_ADVISOR, *picks.ADVISORS], id="new-advisor", labels=ADVISOR_SHORT)
                         yield Label("", id="new-pick-words")
                         yield Label("", id="new-route")
                     with Vertical(id="opens-card", classes="card"):
@@ -232,8 +236,8 @@ class NewSessions(ModalScreen[Request | None]):
     def on_mount(self) -> None:
         self.query_one("#folders-card").border_title = "Folders"
         self.query_one("#message-card").border_title = "First message"
-        self.query_one("#message-card").border_subtitle = "optional"
-        self.query_one("#pick-card").border_title = "Model · Effort · Context"
+        self.query_one("#message-card").border_subtitle = self.MESSAGE_NOTE
+        self.query_one("#pick-card").border_title = "Model · Effort · Context · Advisor"
         self.show_folders()
         self.show_cli()
         self.show_link()
@@ -302,12 +306,7 @@ class NewSessions(ModalScreen[Request | None]):
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         self.show_link()
-        self.show_route()
-        if self.route_timer is not None:
-            self.route_timer.stop()
-            self.route_timer = None
-        if router.enabled():  # asked once the typing stops, so the suggestion is there by the time you look
-            self.route_timer = self.set_timer(self.ROUTE_AFTER, self.ask_route)
+        self.show_route()  # the router is asked only with Ctrl+R: never half-way through a message
 
     def action_link(self) -> None:
         self.linked = not self.linked
@@ -428,13 +427,17 @@ class NewSessions(ModalScreen[Request | None]):
         """What the Model, Effort and Context rows say; nothing for other CLIs."""
         if self.cli != "claude":
             return picks.Pick()
-        model, effort, cap = (self.query_one(f"#new-{row}", Choice).value for row in ("model", "effort", "cap"))
-        return picks.Pick("" if model == picks.DEFAULT else model, "" if effort == picks.DEFAULT else effort, cap)
+        model, effort, cap, advisor = (self.query_one(f"#new-{row}", Choice).value
+                                       for row in ("model", "effort", "cap", "advisor"))
+        model = "" if model == picks.DEFAULT else model
+        advisor = advisor if advisor != picks.NO_ADVISOR and picks.advisor_ok(model, advisor) else ""
+        return picks.Pick(model, "" if effort == picks.DEFAULT else effort, cap, advisor)
 
     def pick_parts(self) -> list[str]:
         """The pick as the card of what opens says it: 'sonnet · high', '300k context'."""
         pick = self.pick()
-        return [part for part in (pick.words(), f"{pick.cap} context" if picks.cap_tokens(pick.cap) else "") if part]
+        return [part for part in (pick.words(), f"{pick.cap} context" if picks.cap_tokens(pick.cap) else "",
+                                  f"{pick.advisor} advisor" if pick.advisor else "") if part]
 
     def show_pick(self) -> None:
         """A line on the row in focus, or on what is picked: what it means for the sessions."""
@@ -444,7 +447,15 @@ class NewSessions(ModalScreen[Request | None]):
         else:
             model, effort = self.query_one("#new-model", Choice), self.query_one("#new-effort", Choice)
             cap = self.query_one("#new-cap", Choice)
-            if self.focused is cap:
+            advisor = self.query_one("#new-advisor", Choice)
+            shown_model = "" if model.value == picks.DEFAULT else model.value
+            if advisor.value != picks.NO_ADVISOR and not picks.advisor_ok(shown_model, advisor.value):
+                words.update(f"{advisor.value} cannot advise {shown_model}: only a model as strong or stronger "
+                             "can, so none is given.")
+            elif self.focused is advisor:
+                words.update(f"{ADVISOR_SHORT.get(advisor.value, advisor.value)}: "
+                             f"{picks.ADVISOR_WORDS[advisor.value]}. For these sessions only.")
+            elif self.focused is cap:
                 words.update(f"{CAP_SHORT.get(cap.value, cap.value)}: {picks.CAP_WORDS[cap.value]}")
             elif self.focused is effort or (self.focused is not model and effort.value != picks.DEFAULT
                                             and model.value == picks.DEFAULT):
@@ -461,10 +472,10 @@ class NewSessions(ModalScreen[Request | None]):
         """One line under the cards: how to use the box in focus."""
         focused = self.focused
         if focused is self.message:
-            about = "Enter adds a line: a session for each line, in every folder ticked. One folder: Ctrl+L links them."
+            about = "Enter: a line more, a session each in every folder ticked. Ctrl+L links them; Ctrl+E improves them."
         elif isinstance(focused, Choice):
-            about = ("←/→ picks; Ctrl+R takes the router's pick. Model and effort left at default: your Claude Code "
-                     "settings decide.")
+            about = ("←/→ picks. Ctrl+R: the router's pick for the first message (write it first). Left at default: "
+                     "your Claude Code settings decide.")
         else:
             about = ("Space ticks a folder. Type to filter by name or path (a / or a \\ alike); a folder path "
                      "works too.")
@@ -481,8 +492,6 @@ class NewSessions(ModalScreen[Request | None]):
 
     def on_descendant_blur(self, event: events.DescendantBlur) -> None:
         light_rows(self)
-        if event.widget is self.message and router.enabled():  # done writing it: no need to wait
-            self.ask_route()
 
     # --- the router -----------------------------------------------------------------
 
@@ -497,7 +506,6 @@ class NewSessions(ModalScreen[Request | None]):
     def ask_route(self, take: bool = False) -> None:
         """Ask the router about the first message as it is now, unless it was asked already: one
         quick call to a small model, in a thread. With take, its pick goes into the rows when it comes."""
-        self.route_timer = None
         key = self.route_key()
         if self.cli != "claude" or not router.worth_routing(key):
             self.show_route()
@@ -555,7 +563,9 @@ class NewSessions(ModalScreen[Request | None]):
             return
         found = self.routes.get(key)
         if not router.worth_routing(key):
-            label.update(Text("Router: write the first message, and it suggests a pick for it.", style=MUTED))
+            label.update(Text.assemble(("Router: ", MUTED), ("Ctrl+R", f"bold {MUTED}"),
+                                       (" suggests a pick once there is a ", MUTED), ("first message", f"bold {AMBER}"),
+                                       (" (3 words or more).", MUTED)))
         elif key in self.routing:
             label.update(Text.assemble(("Router: ", MUTED), (f"asking {router.MODEL} what this needs…", MUTED),
                                        ("  it goes in when it comes" if self.take_route else "", MUTED)))
@@ -571,7 +581,7 @@ class NewSessions(ModalScreen[Request | None]):
                                        ("). Ctrl+R asks again.", MUTED)))
         else:
             label.update(Text.assemble(("Router: ", MUTED), ("Ctrl+R", f"bold {AMBER}"),
-                                       (" suggests a model, effort and context for this message.", MUTED)))
+                                       (" picks a model, effort and context for this message.", MUTED)))
 
     def action_route(self) -> None:
         """Ctrl+R: the router's pick into the rows, asked for now if it is not there yet."""
@@ -579,9 +589,48 @@ class NewSessions(ModalScreen[Request | None]):
             self.notify("The router picks for Claude Code sessions: Ctrl+O to Claude Code first.", severity="warning")
             return
         if not router.worth_routing(self.route_key()):
-            self.notify("Write the first message first: the router picks for it.", severity="warning", timeout=5)
+            self.notify("Ctrl+R needs the first message: write what the session is to do (3 words or more), "
+                        "and the router picks for it.", severity="warning", timeout=6)
             return
         self.ask_route(take=True)
+
+    # --- improving the first message -------------------------------------------------
+
+    def action_improve(self) -> None:
+        """Ctrl+E: Claude rewrites the first message clearer, line for line (each line is a session).
+        It goes into the box as one edit, so Ctrl+Z there puts yours back."""
+        if self.improving is not None:
+            return
+        text = self.message.text
+        if not improve.worth_improving(text):
+            self.notify("Ctrl+E needs a first message to improve: write what the session is to do first.",
+                        severity="warning", timeout=5)
+            return
+        self.improving = text
+        self.show_improving()
+        folders = self.chosen_names()
+        self.run_worker(lambda: self.ask_improve(text, folders), thread=True, group="improve", exit_on_error=False)
+
+    def ask_improve(self, text: str, folders: list[str]) -> None:
+        """In a thread: the rewrite, or why there is none."""
+        try:
+            better, why = improve.improve_message(text, folders), ""
+        except (SummaryError, improve.NotImproved, OSError) as problem:
+            better, why = "", str(problem) or type(problem).__name__
+        self.app.call_from_thread(self.improved, text, better, why)
+
+    def improved(self, text: str, better: str, why: str) -> None:
+        self.improving = None
+        if not self.is_mounted:
+            return
+        self.show_improving()
+        if put_improved(self.message, text, better, why, self.notify):
+            self.notify("First message improved: Ctrl+Z in the box puts yours back.", timeout=6)
+
+    def show_improving(self) -> None:
+        card = self.query_one("#message-card")
+        card.border_subtitle = (Text(f"improving with {improve.MODEL}…", style=f"bold {AMBER}")
+                                if self.improving is not None else self.MESSAGE_NOTE)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input is self.filter_box:
@@ -637,9 +686,27 @@ class NewSessions(ModalScreen[Request | None]):
         self.dismiss(None)
 
 
+def put_improved(box: TextArea, sent: str, better: str, why: str, notify) -> bool:
+    """The rewrite into its box as one edit (Ctrl+Z puts yours back), unless there is none, it says
+    nothing new, or you changed the text while it was asked for. Says why not; True when put in."""
+    if why:
+        notify(f"Not improved: {why}", severity="warning", timeout=8)
+    elif box.text != sent:
+        notify("You changed the text meanwhile, so the rewrite was not put in: Ctrl+E asks again.",
+               severity="warning", timeout=6)
+    elif " ".join(better.split()) == " ".join(sent.split()):
+        notify("Claude found it clear as it is: nothing changed.", timeout=5)
+    else:
+        box.replace(better, (0, 0), box.document.end)
+        box.focus()
+        return True
+    return False
+
+
 TAIL = 20  # the sessions and the last time, right-aligned at a row's end
 SHORT = {picks.DEFAULT: "default"}  # "your default" as the Model and Effort rows show it
 CAP_SHORT = {picks.NO_CAP: "Claude's own"}  # no cap, as the Context row shows it
+ADVISOR_SHORT = {picks.NO_ADVISOR: "no advisor"}  # as the Advisor row shows it
 
 
 def _seps(text: str) -> str:

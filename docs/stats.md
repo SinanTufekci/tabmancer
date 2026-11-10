@@ -4,8 +4,26 @@
 
 ## Stats
 
-Press `u` for the stats. `1` to `4` look back 7, 14, 30 or 90 days, `←` `→` move between
-the five tabs, and `x` saves everything as JSON and CSV in your Downloads folder.
+Press `u` for the stats. `1` to `4` look back 7, 14, 30 or 90 days and `5` over all the time
+kept (see [all time](#all-time)), `p` shows one project only (`P` the one before, again until
+all of them), `←` `→` move between the six tabs, and `x` saves everything as JSON and CSV in
+your Downloads folder. The tabs are counted in the background: the screen opens at once, says
+*counting…* while it works, and you can move between tabs meanwhile.
+
+**Overview.** The first tab, the period at a glance. Four cards across the top: the tokens,
+the time at work, the sessions and the projects (with one project picked, the days at work in
+it), each against the period before it, as long (`▲ 24%` on the 14 days before). Under them
+every day of the period (a bar a day, a week or a month, as the period is long), then, in cards
+side by side, the top projects, the models, where the tokens went (cache reads, cache writes,
+fresh input, output) and **records**: the busiest day, the longest day at work, the most days
+in a row, the longest session, the busiest hour and the tool called most.
+
+![The overview: tokens, time at work, sessions and projects, every day, the top projects and the models](stats-overview.png)
+
+Where the period before is not all counted, the comparison says so rather than be wrong: with
+nothing in it, one line says there is nothing to set the numbers against; where only Claude
+Code's own record covers it (see below), the tokens and sessions are compared and the time and
+projects are not.
 
 Where the terminal draws Bit in real pixels (Sixel or kitty graphics), the bar charts and the
 map of the hours of the week are drawn in them too: bars of any length with round ends, a
@@ -14,7 +32,8 @@ drawn; elsewhere, and under a dialog, they are block characters, as `tabmancer s
 them.
 
 **Tokens.** Today, this week and the whole period; this week against the last (tokens,
-output, time at work, sessions); then by day, project, session and model.
+output, time at work, sessions); then by day (by week or by month over a long period), project,
+session and model, each in a card of its own.
 
 ![Tokens by day, project, session and model](stats-tokens.png)
 
@@ -50,11 +69,25 @@ summaries, file names and line counts. It is cached until those change. Set
 `TABMANCER_REPORT_MODEL` to use another model. It reads everything the sessions were
 about, so look it over before it goes beyond your team.
 
+### All time
+
+Claude Code deletes a session's transcript some weeks after it was last used (30 days unless
+`cleanupPeriodDays` says otherwise), and its token counts go with it. So tabmancer keeps each
+finished day as a summary in `history.json` in its own folder: the tokens by model and by
+project folder, the time at work and in which hours, the sessions and the tools, a few kilobytes
+a day. The stats count with those days where the files no longer tell the whole day.
+
+The days before tabmancer kept any come from Claude Code's own record, `~/.claude/stats-cache.json`
+(what its `/stats` shows as all time). It has the tokens by model, not split into cache reads,
+writes and the rest, and the sessions and tool calls; no time at work and no projects. Such days
+count in the tokens and sessions, and the stats say how much of a period comes from that record.
+
 From a shell:
 
 ```sh
 tabmancer report                # the last 7 days, as Markdown (--days 14, --save)
-tabmancer stats                 # all four, as text
+tabmancer stats                 # all of it, as text
+tabmancer stats --all-time      # over all the days kept
 tabmancer stats --days 30 --json
 tabmancer stats --csv > days.csv   # one row per day: sessions, minutes, tokens
 tabmancer tokens                # only the tokens
@@ -88,7 +121,14 @@ count stays current every minute at next to no cost.
 
 ## Claude Code Wrapped
 
-Your last seven days as a card to share, drawn in pixels like Bit.
+Your week, your month or all of your time with Claude Code as slides to share, drawn in pixels
+like Bit. `1` shows the last seven days, `2` the last thirty, `3` all the days kept (see
+[all time](#all-time)); `←` `→` go through the slides: **who you were** (the name, its number
+and Bit in a pose of its own), **the tokens** (a bar a day, against the period before), **the
+time** at work (the hours of the day you worked, the most days in a row), **the sessions**
+(side by side at most, a bar a day), **tools and models**, and the card that sums it all up. Each
+slide is in a sky of its own colour (the card that sums it up keeps the night) and is saved,
+copied or shared as it is shown.
 
 **Who the week made you.** Across the top, a name and the number behind it, the strongest of
 these, each against the bar it has to clear: *the Conductor* (4 or more sessions at work at
@@ -112,10 +152,22 @@ six of the numbers, roomy enough to read at half size in a feed. The story card 
 Instagram and other stories; `f` turns the card) has all of them and a bar for each hour of the
 day: when you worked.
 
+**Bit's pose** says the name: the Conductor with both arms up, the Night Owl with a mug and a
+moon, the Early Bird with a coffee, the Weekend Warrior in confetti, the Marathoner out of
+breath, the Steady Hand with a clipboard, the Toolsmith with a wrench, the Builder with a box.
+
 On Fridays from noon, or the first time the dashboard is open over the weekend after, Bit
-says your week is ready, once a week. `W` shows the card at any time: `s` saves it as a PNG in
-your Downloads, `c` copies it. In a terminal that draws no pictures (or a window too small for
-the story card), its numbers are shown in words; `s` still saves the picture.
+says your week is ready, once a week. `W` shows the slides at any time: `s` saves the one shown
+as a PNG in your Downloads, `g` as a GIF with its numbers counting up (for a post that takes
+one), `c` copies it. The cards hold counts only; `n` puts the top project's name on the tools
+slide, and it is off again the next time. In a terminal that draws no pictures (or a window too
+small for the story card), the numbers are shown in words; `s` still saves the picture.
+
+```sh
+tabmancer wrapped                                  # the week's card, in your Downloads
+tabmancer wrapped --period month --slide tokens    # one slide of the last 30 days
+tabmancer wrapped --period all --gif --story       # all time, moving, for a story
+```
 
 **Sharing it.** `p` lists the places, and a letter goes straight there:
 

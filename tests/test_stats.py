@@ -171,12 +171,18 @@ async def test_the_stats_screen_has_tabs_periods_and_export(fake_home, monkeypat
         await pilot.press("u")
         screen = app.screen
         assert isinstance(screen, StatsScreen) and screen.report.days == 14
+        assert screen.query_one("TabbedContent").active == "overview"
         await pilot.press("right")
-        assert screen.query_one("TabbedContent").active == "work"
+        assert screen.query_one("TabbedContent").active == "tokens"
         await pilot.press("left", "left")
         assert screen.query_one("TabbedContent").active == "report"  # round the end
         await pilot.press("left")
         assert screen.query_one("TabbedContent").active == "limits"
+        for _ in range(80):  # the first count with the kept days and the period before
+            await pilot.pause(0.05)
+            if not screen.counting:
+                break
+        assert screen.before is not None
         await pilot.press("3")
         for _ in range(80):
             await pilot.pause(0.05)

@@ -70,6 +70,10 @@ async def open_stats(app, pilot):
         if app.token_report is not None:
             break
     await pilot.press("u")
+    for _ in range(100):  # counted again with the kept days, and the period before for the overview
+        await pilot.pause(0.05)
+        if not app.screen.counting:
+            break
     await pilot.pause(0.3)
     return app.screen
 
@@ -81,6 +85,8 @@ async def test_in_pixels_the_charts_are_pictures_over_blank_cells(in_demo, monke
     app = in_demo
     async with app.run_test(size=(160, 60)) as pilot:
         screen = await open_stats(app, pilot)
+        await pilot.press("right")  # from the overview to the tokens
+        await pilot.pause(0.3)
         days, projects = screen.query_one("#tokens-scroll").query(BarsPicture)  # BY DAY, BY PROJECT
         for bars in (days, projects):
             assert bars.picture is not None and bars.picture.data.startswith("\x1bP")
@@ -101,6 +107,7 @@ async def test_without_pixels_the_charts_are_the_block_characters_of_tabmancer_s
         WeekChart,
         WeekPicture,
         bar,
+        charts,
         tools_parts,
         work_parts,
     )
@@ -108,9 +115,9 @@ async def test_without_pixels_the_charts_are_the_block_characters_of_tabmancer_s
     app = in_demo
     async with app.run_test(size=(160, 60)) as pilot:
         screen = await open_stats(app, pilot)
-        await pilot.press("right")
+        await pilot.press("right", "right")
         await pilot.pause(0.3)
-        parts = work_parts(screen.report, screen.sessions, screen.accent)
+        parts = charts(work_parts(screen.report, screen.sessions, screen.accent))
         week = next(p for p in parts if isinstance(p, WeekChart))
         days = next(p for p in parts if isinstance(p, BarChart))
         shown = screen.query_one(WeekPicture)
@@ -118,7 +125,8 @@ async def test_without_pixels_the_charts_are_the_block_characters_of_tabmancer_s
         assert shown.render().plain.split("\n") == [week.tiles(day, screen.accent).plain for day in range(7)]
         bars = screen.query_one("#work-scroll").query_one(BarsPicture)
         assert bars.render().plain.split("\n") == [bar(value, max(days.values)) for value in days.values]
-        tools = next(p for p in tools_parts(screen.report, screen.sessions, screen.accent) if isinstance(p, BarChart))
+        tools = next(p for p in charts(tools_parts(screen.report, screen.sessions, screen.accent))
+                     if isinstance(p, BarChart))
         shown = screen.query_one("#tools-scroll").query_one(BarsPicture)
         assert shown.render().plain.split("\n") == [bar(v, max(tools.values), 20) for v in tools.values]
 
@@ -132,7 +140,7 @@ async def test_scrolled_partly_out_of_sight_the_part_in_sight_is_shown_and_under
     app = in_demo
     async with app.run_test(size=(160, 40)) as pilot:
         screen = await open_stats(app, pilot)
-        await pilot.press("right")
+        await pilot.press("right", "right")
         await pilot.pause(0.3)
         week = screen.query_one(WeekPicture)
         scroll = screen.query_one("#work-scroll")

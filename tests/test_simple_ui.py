@@ -54,23 +54,28 @@ async def test_nothing_is_said_that_says_nothing(fake_home):
         assert len(app.cards) == 4
 
 
-async def test_j_goes_round_the_sessions_waiting_for_you(fake_home, monkeypatch):
-    monkeypatch.setattr(sessions, "_agents_json", lambda: [
-        {"sessionId": "one", "kind": "interactive", "status": "idle"},
-        {"sessionId": "two", "kind": "interactive", "status": "blocked"}])
+async def test_j_goes_to_the_sessions_that_need_you_first_then_round_the_waiting_ones(fake_home, monkeypatch):
+    live = [{"sessionId": "one", "kind": "interactive", "status": "idle"},
+            {"sessionId": "two", "kind": "interactive", "status": "blocked"}]
+    monkeypatch.setattr(sessions, "_agents_json", lambda: live)
     went = []
     monkeypatch.setattr(focus, "focus_tab", lambda title: went.append(title) or True)
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: all(app.sessions.get(s) and app.sessions[s].live_state for s in ("one", "two")))
+        two = app.sessions["two"].title
         await pilot.press("j")
         await wait_for(pilot, lambda: len(went) == 1)
         await pilot.press("j")
         await wait_for(pilot, lambda: len(went) == 2)
-        await pilot.press("j")
-        await wait_for(pilot, lambda: len(went) == 3)
-        assert went[0] != went[1] and went[2] == went[0]  # one, the other, the first again
-        assert app.current().title == went[2]
+        assert went == [two, two]  # it needs you: the one waiting for you comes after
+        live[1] = {"sessionId": "two", "kind": "interactive", "status": "idle"}  # answered
+        app.poll_live(full=True)
+        await wait_for(pilot, lambda: app.sessions["two"].live_state == "idle")
+        await pilot.press("j", "j", "j")
+        await wait_for(pilot, lambda: len(went) == 5)
+        assert went[2] != went[3] and went[4] == went[2]  # now round both: one, the other, the first again
+        assert app.current().title == went[4]
 
 
 def test_the_home_folder_is_written_as_a_tilde():

@@ -171,6 +171,119 @@ def png(width: int, height: int, palette: list[Colour], rows: list[bytes | bytea
             + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
+# --- moving: a GIF ------------------------------------------------------------------------------
+
+def gif(frames: list[Canvas], delays: list[int]) -> bytes:
+    """Canvases of one size as a GIF that plays again and again, each shown for its delay (in
+    hundredths of a second). One palette for all of them (a frame's colours mapped into it); after
+    the first, each frame is only the box of pixels that changed, so numbers counting up cost little."""
+    palette: list[Colour] = []
+    index: dict[Colour, int] = {}
+    for frame in frames:
+        for colour in frame.palette:
+            if colour not in index:
+                if len(palette) < 256:
+                    index[colour] = len(palette)
+                    palette.append(colour)
+                else:  # the nearest one there is
+                    index[colour] = min(range(256), key=lambda n: sum((a - b) ** 2 for a, b in zip(colour, palette[n])))
+    bits = max(1, (len(palette) - 1).bit_length())
+    width, height = frames[0].width, frames[0].height
+    out = bytearray(b"GIF89a")
+    out += struct.pack("<HHBBB", width, height, 0x80 | (bits - 1), 0, 0)
+    out += b"".join(bytes(colour) for colour in palette) + bytes(3 * ((1 << bits) - len(palette)))
+    out += b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00"  # played again and again
+    previous: list[bytes] | None = None
+    for frame, delay in zip(frames, delays):
+        table = bytes(index[colour] for colour in frame.palette) + bytes(256 - len(frame.palette))
+        rows = [bytes(row).translate(table) for row in frame.rows]
+        box = (0, 0, width, height) if previous is None else _changed(previous, rows, width) or (0, 0, 1, 1)
+        x, y, w, h = box
+        out += b"\x21\xf9\x04" + struct.pack("<BHBB", 0x04, delay, 0, 0)  # kept under the next frame
+        out += b"\x2c" + struct.pack("<HHHHB", x, y, w, h, 0)
+        size = max(2, bits)
+        data = _lzw(b"".join(row[x:x + w] for row in rows[y:y + h]), size)
+        out.append(size)
+        for start in range(0, len(data), 255):
+            block = data[start:start + 255]
+            out.append(len(block))
+            out += block
+        out.append(0)
+        previous = rows
+    out.append(0x3B)
+    return bytes(out)
+
+
+def _changed(old: list[bytes], new: list[bytes], width: int) -> tuple[int, int, int, int] | None:
+    """The box (x, y, width, height) round the pixels that differ, or None."""
+    rows = [y for y in range(len(new)) if new[y] != old[y]]
+    if not rows:
+        return None
+    left, right = width, 0
+    for y in rows:
+        a, b = old[y], new[y]
+        first = 0
+        while first < width and a[first:first + 64] == b[first:first + 64]:
+            first += 64
+        while a[first] == b[first]:
+            first += 1
+        last = width
+        while last > 0 and a[max(0, last - 64):last] == b[max(0, last - 64):last]:
+            last -= 64
+        last = max(last, 1)
+        while a[last - 1] == b[last - 1]:
+            last -= 1
+        left, right = min(left, first), max(right, last)
+    return left, rows[0], right - left, rows[-1] - rows[0] + 1
+
+
+def _lzw(data: bytes, size: int) -> bytes:
+    """GIF's LZW: codes from size + 1 bits up to 12, the table started again when it is full."""
+    clear, end = 1 << size, (1 << size) + 1
+    out = bytearray()
+    buffer = filled = 0
+    width = size + 1
+    table: dict[int, int] = {}
+    following = end + 1
+
+    def emit(code: int) -> None:
+        nonlocal buffer, filled
+        buffer |= code << filled
+        filled += width
+        while filled >= 8:
+            out.append(buffer & 0xFF)
+            buffer >>= 8
+            filled -= 8
+
+    emit(clear)
+    if not data:
+        emit(end)
+        return bytes(out) + (bytes([buffer]) if filled else b"")
+    prefix = data[0]
+    for byte in data[1:]:
+        key = prefix << 8 | byte
+        code = table.get(key)
+        if code is not None:
+            prefix = code
+            continue
+        emit(prefix)
+        if following < 4096:
+            table[key] = following
+            following += 1
+            if following > 1 << width and width < 12:
+                width += 1
+        else:
+            emit(clear)
+            table.clear()
+            following, width = end + 1, size + 1
+        prefix = byte
+    emit(prefix)
+    emit(end)
+    if filled:
+        out.append(buffer & 0xFF)
+    return bytes(out)
+
+
 # --- the clipboard -----------------------------------------------------------------------------
 
 def dib(canvas: Canvas) -> bytes:
@@ -255,6 +368,14 @@ def save(canvas: Canvas, name: str, folder: Path | None = None) -> Path:
     if folder is None:
         downloads = Path.home() / "Downloads"
         folder = downloads if downloads.is_dir() else Path.home()
+    return save_data(canvas.png(), name, folder)
+
+
+def save_data(data: bytes, name: str, folder: Path | None = None) -> Path:
+    """A picture's bytes (a PNG, a GIF) in your Downloads (or the folder given)."""
+    if folder is None:
+        downloads = Path.home() / "Downloads"
+        folder = downloads if downloads.is_dir() else Path.home()
     path = folder / name
-    path.write_bytes(canvas.png())
+    path.write_bytes(data)
     return path

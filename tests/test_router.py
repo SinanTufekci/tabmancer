@@ -214,18 +214,6 @@ def test_the_router_asks_a_small_model_without_tools(monkeypatch):
         router.suggest("write the tests", ["a"])
 
 
-def test_the_router_can_be_turned_off(monkeypatch):
-    from tabmancer.config import write_json
-
-    monkeypatch.delenv("TABMANCER_ROUTER", raising=False)
-    assert router.enabled()
-    write_json("config.json", {"router": False})
-    assert not router.enabled()
-    write_json("config.json", {})
-    monkeypatch.setenv("TABMANCER_ROUTER", "0")
-    assert not router.enabled()
-
-
 # --- the n dialog --------------------------------------------------------------------------------
 
 async def open_dialog(pilot, app):
@@ -249,7 +237,7 @@ async def test_the_n_dialog_takes_the_routers_pick_with_ctrl_r(fake_home, tmp_pa
         dialog = await open_dialog(pilot, app)
         route = dialog.query_one("#new-route")
         assert dialog.query_one("#new-cap").value == "300k"  # the default cap, there to see and change
-        assert "write the first message" in str(route.render())
+        assert "once there is a first message" in str(route.render())
         await pilot.press("space", "tab")  # tick the folder, to the first message
         await pilot.press("ctrl+r")  # too short to say anything yet
         assert not asked
@@ -265,26 +253,30 @@ async def test_the_n_dialog_takes_the_routers_pick_with_ctrl_r(fake_home, tmp_pa
                                    "write unit tests for the picks module"]
 
 
-async def test_the_n_dialog_suggests_by_itself_and_leaves_the_pick_yours(fake_home, tmp_path, monkeypatch, capped):
+async def test_the_n_dialog_asks_the_router_only_with_ctrl_r(fake_home, tmp_path, monkeypatch, capped):
     asked = []
-    monkeypatch.delenv("TABMANCER_ROUTER", raising=False)
-    monkeypatch.setattr(NewSessions, "ROUTE_AFTER", 0.05)
     monkeypatch.setattr(summarize, "ask", lambda prompt, model, timeout=180, effort="":
                         asked.append(prompt) or "Pick: haiku low 200k\nWhy: a quick look")
     app = SessionPicker(days=14)
     async with app.run_test(size=(120, 30)) as pilot:
         dialog = await open_dialog(pilot, app)
+        route = dialog.query_one("#new-route")
+        assert "first message" in str(route.render())  # what Ctrl+R needs, said before it is pressed
+        assert "Ctrl+E improves it" in str(dialog.query_one("#message-card").border_subtitle)
         await pilot.press("tab")
         dialog.message.insert("what does the config file hold")
-        route = dialog.query_one("#new-route")
-        await until(pilot, lambda: "Router suggests" in str(route.render()))
-        assert "haiku · low · 200k" in str(route.render()) and "Ctrl+R" in str(route.render())
-        assert dialog.pick() == Pick(cap="300k")  # suggested only: nothing taken without Ctrl+R
-        await pilot.press("ctrl+r")  # the answer is there already: taken at once, not asked again
-        assert dialog.pick() == Pick("haiku", "low", "200k") and len(asked) == 1
-        dialog.query_one("#new-model").pick("sonnet")  # changed after: the suggestion shows again
+        await pilot.press("shift+tab")  # typed and left the box: still not asked
+        await pilot.pause(0.3)
+        assert not asked and dialog.pick() == Pick(cap="300k")
+        assert "Ctrl+R" in str(route.render())
+        await pilot.press("ctrl+r")
+        await until(pilot, lambda: dialog.pick() == Pick("haiku", "low", "200k"))
+        assert len(asked) == 1
+        dialog.query_one("#new-model").pick("sonnet")  # changed after: the pick shows as a suggestion
         await pilot.pause(0.05)
         assert "Router suggests" in str(route.render())
+        await pilot.press("ctrl+r")  # the answer is there already: taken at once, not asked again
+        assert dialog.pick() == Pick("haiku", "low", "200k") and len(asked) == 1
 
 
 async def test_a_failed_router_says_why_and_asks_again(fake_home, monkeypatch, capped):

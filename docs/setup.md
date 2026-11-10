@@ -32,6 +32,22 @@ tabmancer updates        # this version, and whether a newer one is out
 tabmancer updates off    # never ask PyPI (on again with: on); TABMANCER_UPDATE_CHECK=0 does it too
 ```
 
+### Claude Code up to date before your sessions open
+
+Claude Code updates itself in the background, but an update it downloads takes effect the next
+time it starts: the sessions you open in the morning start on yesterday's version. Turn this on
+and tabmancer runs `claude update` first, once a day: the dashboard as it opens (the sessions you
+ask for meanwhile, with Enter, `n`, a team or a prompt, open once it is done, on the new version),
+and `tabmancer new`, `open` and `team` before they start anything. With a new version it checks at
+once that Claude Code still takes every flag tabmancer runs it with, and says so if not. An update
+that fails (no network, say) is said, and the sessions open on the version there is.
+
+```sh
+tabmancer claude-updates on     # off by default; off again with: off
+tabmancer claude-updates now    # run it now, whether it is due or not
+tabmancer claude-updates        # on or off, and when it last ran
+```
+
 What changed in each version: [CHANGELOG](../CHANGELOG.md), and the
 [releases](https://github.com/SinanTufekci/tabmancer/releases) on GitHub (Watch → Custom →
 Releases tells you of each one).
@@ -48,6 +64,7 @@ tabmancer --days 30      # look further back (default 14)
 tabmancer --all          # include claude -p, desktop app and IDE sessions
 tabmancer doctor         # check that everything tabmancer relies on still works
 tabmancer updates        # whether a newer tabmancer is out (off: never ask PyPI)
+tabmancer claude-updates # claude update once a day before sessions open (on, off, now)
 tabmancer --demo         # the dashboard over made-up sessions: nothing of yours is touched
 ```
 

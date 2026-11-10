@@ -59,7 +59,7 @@ def test_a_transcript_that_cannot_be_read_at_all_is_left_out_and_counted(fake_ho
     def fails_on_broken(f, size, session):
         if session.session_id == "broken":
             raise TypeError("a shape nobody expected")
-        tail(f, size, session)
+        return tail(f, size, session)
 
     monkeypatch.setattr(sessions, "_read_tail", fails_on_broken)
     found = {s.session_id for s in sessions.find_sessions(14, quick=True)}

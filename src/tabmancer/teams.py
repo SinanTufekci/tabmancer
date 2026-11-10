@@ -77,6 +77,7 @@ class Member:
     model: str = ""  # its session's --model (an alias such as sonnet, or a full name); empty: the default
     effort: str = ""  # its session's --effort (picks.EFFORTS); empty: the default
     owns: str = ""   # the folders or files that are its own ("src/api, docs/api.md"), written [...] in its line
+    advisor: str = ""  # its session's --advisor (picks.ADVISORS): the lead's, picked in the new-team form
 
     def line(self) -> str:
         """The member as a line of the members box: 'api: endpoints [src/api] @sonnet @high'."""
@@ -86,7 +87,7 @@ class Member:
 
     @property
     def pick(self) -> picks.Pick:
-        return picks.Pick(self.model, self.effort)
+        return picks.Pick(self.model, self.effort, advisor=self.advisor)
 
 
 @dataclass
@@ -337,7 +338,8 @@ def load() -> dict[str, Team]:
         try:
             members = [Member(m["name"], m.get("focus", ""), bool(m.get("lead")), str(m.get("model") or ""),
                               str(m.get("effort") or "") if m.get("effort") in picks.EFFORTS else "",
-                              str(m.get("owns") or ""))
+                              str(m.get("owns") or ""),
+                              str(m.get("advisor") or "") if picks.family(str(m.get("advisor") or "")) else "")
                        for m in item["members"]]
             teams[item["name"]] = Team(item["name"], item["cwd"], item.get("goal", ""), members,
                                        item.get("created", ""), int(item.get("decide") or 0),

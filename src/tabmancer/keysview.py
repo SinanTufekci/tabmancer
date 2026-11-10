@@ -53,7 +53,7 @@ KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("Work with a session", [
         ("p", "prompt", ("write it a prompt: Enter opens it in a tab with the prompt, Ctrl+B runs it in the "
                          "background. An open session: go to its tab, to type there")),
-        ("j", "next_waiting", "go to the next open session waiting for you, round and round"),
+        ("j", "next_waiting", "go to the next session that needs you, else the next one waiting for you"),
         ("h", "handover", ("hand it over to a fresh session that starts from a full handover. An open session "
                            "is closed on the way; a working one as soon as it finishes (h again cancels)")),
         ("c", "continue_at_reset", ("the sessions stopped at a usage limit: continue them now (after you sign "

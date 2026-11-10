@@ -44,6 +44,9 @@ Claude Code 2.1.317 in `-p` runs: the lock stayed after the session ended).
   that kind's rules besides its area: a reviewer changes no code and sends what it finds to
   whoever made the change; tests tell a member about a bug in its part rather than fix it there;
   docs ask rather than guess; research changes no files and reports with its sources.
+- **Improve the goal (`Ctrl+E`).** Claude rewrites the goal clearer (what is to be done, what
+  must hold, when it is done, as far as you said it), keeping its lines; `Ctrl+Z` in the box puts
+  yours back. Every member is given all of it, so a clear goal pays several times over.
 - **Suggest (`Ctrl+R`).** With the goal and the folder written, Claude reads the goal, the
   project's files (from git, folder by folder; else its top level) and the start of its README,
   and suggests how many members the work needs and why (2 to 8 besides a lead, as few as can
@@ -179,6 +182,8 @@ either way a note for it goes to the clipboard and you to its tab, to paste it. 
 hands the whole team over to a new generation of itself (its lead writes the handover and the
 line-up for the rest; see [a whole team](handover.md#a-whole-team)), and `H` the picked member
 alone. A team's members start under the context cap: the new-team form's **Context** row, in its
-**Runs** card (300k unless you change it). `x` twice
+**Runs** card (300k unless you change it). Its **Advisor** row gives the lead alone an advisor
+(`--advisor opus` or `fable`, for its session only): the lead asks it at the turns that matter,
+and the members work on without one. `x` twice
 closes the whole team: every open member's tab, Claude exiting as on `/exit`, so `s` starts
 them again later. Under the goal, the tokens the team has used, and each member's.

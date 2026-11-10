@@ -18,7 +18,7 @@ STRIP = 56  # under the window: what the scene shows, in words
 FONT = ImageFont.truetype("C:/Windows/Fonts/consolab.ttf", 24)
 STILLS = {  # scene -> the README's picture
     0: "picker", 2: "team-rows", 4: "team", 5: "live",
-    6: "stats-tokens", 7: "stats-work", 8: "stats-limits", 9: "stats-report",
+    6: "stats-overview", 7: "stats-tokens", 8: "stats-work", 9: "stats-limits", 10: "stats-report",
 }
 # (scene, what the caption says) for the moving picture, in order
 MOVIE = [
@@ -28,7 +28,7 @@ MOVIE = [
     (3, "e  ·  the team's members, each on its wire"),
     (4, "T  ·  who said what to whom"),
     (5, "l  ·  the live view: what each one is doing"),
-    (10, "?  ·  every key, and Enter runs it"),
+    (11, "?  ·  every key, and Enter runs it"),
 ]
 FRAME_MS, HOLD_MS = 120, 1700  # a scene's quick frames, then its last held
 

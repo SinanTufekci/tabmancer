@@ -19,7 +19,7 @@ from PIL import Image
 
 HERE = Path(__file__).resolve().parent
 OUT = Path(sys.argv[1])
-SCENES = 11
+SCENES = 12
 FRAMES = 10  # quick frames of each scene, for the moving picture
 FRAME_GAP = 0.12
 WT = Path(os.environ["LOCALAPPDATA"]) / "Microsoft" / "WindowsApps" / "wt.exe"

@@ -1,7 +1,10 @@
-"""W: Claude Code Wrapped on the screen. The card in real pixels where the terminal draws them, as
-large as fits in whole units; elsewhere its numbers in words. f turns it between the wide card and
-the story one, p shares it (X, Bluesky, Threads, Instagram: share.py), s saves it as a PNG, c
-copies it to paste where you share it (wrapped.py draws it)."""
+"""W: Claude Code Wrapped on the screen. The slides in real pixels where the terminal draws them,
+as large as fit in whole units; elsewhere the numbers in words. ← → go from slide to slide (who
+you were, the tokens, the time, the sessions, the tools, then the card that sums it up), 1 2 3 take
+the week, the month or all of the time kept, f turns it between the wide shape and the story one,
+p shares the slide shown (X, Bluesky, Threads, Instagram: share.py), s saves it as a PNG, g as a
+GIF with its numbers counting up, c copies it, n puts the top project's name on it (left off
+otherwise: wrapped.py draws them all)."""
 
 from __future__ import annotations
 
@@ -16,8 +19,9 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from . import card, share, sixel, wrapped
+from . import card, history, share, sixel, wrapped
 from .dialogs import frame, pills, title
+from .safework import work
 from .theme import MUTED, TEXT, keys
 from .tokenchart import PixelPicture
 
@@ -35,9 +39,10 @@ class CardPicture(PixelPicture, Static):
 
     DEFAULT_CSS = "CardPicture { width: 1fr; height: 1fr; }"
 
-    def __init__(self, week: wrapped.Week, accent: str, shape: str = "wide") -> None:
+    def __init__(self, week: wrapped.Week, accent: str, shape: str = "wide", slide: str = "summary",
+                 names: bool = False) -> None:
         super().__init__("")
-        self.week, self.accent, self.shape = week, accent, shape
+        self.week, self.accent, self.shape, self.slide, self.names = week, accent, shape, slide, names
 
     def on_mount(self) -> None:
         if self.start_pixels():
@@ -45,6 +50,10 @@ class CardPicture(PixelPicture, Static):
 
     def turn(self, shape: str) -> None:
         self.shape = shape
+        self.refresh()
+
+    def show(self, week: wrapped.Week, shape: str, slide: str, names: bool) -> None:
+        self.week, self.shape, self.slide, self.names = week, shape, slide, names
         self.refresh()
 
     def unit(self) -> int:
@@ -57,10 +66,11 @@ class CardPicture(PixelPicture, Static):
         return min(width // wide, height // high, wrapped.UNIT)
 
     def picture_key(self) -> tuple:
-        return repr(self.week), self.accent, self.shape, self.unit()
+        return repr(self.week), self.accent, self.shape, self.slide, self.names, self.unit()
 
     def picture_rows(self, width: int, height: int):
-        drawn = wrapped.draw(self.week, _rgb(self.accent), max(1, self.unit()), self.shape)
+        drawn = wrapped.draw(self.week, _rgb(self.accent), max(1, self.unit()), self.shape, self.slide,
+                             names=self.names)
         left, top = max(0, (width - drawn.width) // 2), max(0, (height - drawn.height) // 2)
         right = max(0, width - left - drawn.width)
         blank = bytes(width)
@@ -123,30 +133,82 @@ class WrappedScreen(ModalScreen[None]):
     """
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape,q,W", "close", "Close"),
+        Binding("left", "slide(-1)", "Previous slide", priority=True),
+        Binding("right", "slide(1)", "Next slide", priority=True),
+        Binding("1", "period(7)", "The week"),
+        Binding("2", "period(30)", "The month"),
+        Binding("3", "period(0)", "All time"),
         Binding("p", "share", "Share"),
         Binding("f", "turn", "Wide or story"),
         Binding("s", "save", "Save"),
+        Binding("g", "save_moving", "Save it moving"),
         Binding("c", "copy", "Copy"),
+        Binding("n", "names", "Project names"),
     ]
+    PERIODS: ClassVar[dict[int, str]] = {7: "week", 30: "month", 0: "all time"}
 
     def __init__(self, week: wrapped.Week, accent: str) -> None:
         super().__init__()
         self.week, self.accent = week, accent
         self.shape = "wide"
+        self.slide = wrapped.SLIDES[0]
+        self.period = 0 if week.whole else week.days
+        self.names = False  # the top project's name on the tools slide
+        self.counting = False
 
     def compose(self) -> ComposeResult:
         with Vertical():
             with Horizontal(id="wrapped-top"):
                 yield Label(self.heading(), id="wrapped-title")
                 yield Static(self.shapes(), id="wrapped-shape")
-            yield CardPicture(self.week, self.accent, self.shape)
+            yield CardPicture(self.week, self.accent, self.shape, self.slide, self.names)
             yield Label(self.about(), id="wrapped-about")
-            yield Label(keys(("p", "share: X, Bluesky, Threads, Instagram"), ("f", "wide or story"),
-                             ("s", "save"), ("c", "copy"), ("Esc", "close")), classes="hint")
+            yield Label(keys(("← →", "slides"), ("1 2 3", "week, month, all time"), ("p", "share"),
+                             ("f", "wide or story"), ("s", "save"), ("g", "save it moving"), ("c", "copy"),
+                             ("n", "names"), ("Esc", "close")), classes="hint")
 
     def heading(self) -> Text:
-        return Text.assemble(("Claude Code ", f"bold {TEXT}"), ("Wrapped", f"bold {self.accent}"),
-                             (f"   {wrapped.span(self.week)}", _hex(wrapped.MUTED)))
+        muted = _hex(wrapped.MUTED)
+        out = Text.assemble(("Claude Code ", f"bold {TEXT}"), ("Wrapped", f"bold {self.accent}"),
+                            (f"   {wrapped.span(self.week)}   ", muted))
+        out.append_text(pills(list(self.PERIODS.values()), self.PERIODS.get(self.period, "week")))
+        if self.counting:
+            out.append("   counting…", style=f"italic {muted}")
+        return out
+
+    def show(self) -> None:
+        """The slide, the period, the shape and the names as they are now."""
+        self.query_one(CardPicture).show(self.week, self.shape, self.slide, self.names)
+        self.query_one("#wrapped-title", Label).update(self.heading())
+        self.query_one("#wrapped-shape", Static).update(self.shapes())
+        self.query_one("#wrapped-about", Label).update(self.about())
+
+    def action_slide(self, step: int) -> None:
+        at = wrapped.SLIDES.index(self.slide)
+        self.slide = wrapped.SLIDES[(at + step) % len(wrapped.SLIDES)]
+        self.show()
+
+    def action_names(self) -> None:
+        self.names = not self.names
+        self.show()
+
+    def action_period(self, days: int) -> None:
+        if days == self.period or self.counting:
+            return
+        self.counting = True
+        self.query_one("#wrapped-title", Label).update(self.heading())
+        self.recount(days)
+
+    @work(thread=True, exclusive=True)
+    def recount(self, days: int) -> None:
+        """The period counted with the kept days (history.py), and the one before it as long."""
+        report = history.collect(None if days == 0 else max(14, days * 2))
+        week = wrapped.week(report, {}, days=None if days == 0 else days)
+        self.app.call_from_thread(self.recounted, days, week)
+
+    def recounted(self, days: int, week: wrapped.Week) -> None:
+        self.period, self.week, self.counting = days, week, False
+        self.show()
 
     def shapes(self) -> Text:
         """The two cards, the one shown marked, and the key that turns it."""
@@ -155,16 +217,37 @@ class WrappedScreen(ModalScreen[None]):
                              ("   f", _hex(wrapped.MUTED)))
 
     def about(self) -> Text:
-        return Text("Your last seven days: counts only, no project names. Nothing is posted until you post it.",
-                    style=_hex(wrapped.MUTED))
+        muted = _hex(wrapped.MUTED)
+        out = Text(style=muted)
+        at = wrapped.SLIDES.index(self.slide)
+        out.append("".join("●" if k == at else "·" for k in range(len(wrapped.SLIDES))) + "  ", style=self.accent)
+        out.append(f"{wrapped.SLIDE_NAMES[self.slide]}   ", style=f"bold {TEXT}")
+        out.append("Counts only; " + ("the top project's name is on the tools slide (n leaves it off). "
+                                       if self.names else "no project names (n puts the top one on). ")
+                   + "Nothing is posted until you post it.")
+        return out
 
     def canvas(self) -> card.Canvas:
-        return wrapped.draw(self.week, _rgb(self.accent), shape=self.shape)
+        return wrapped.draw(self.week, _rgb(self.accent), shape=self.shape, slide=self.slide, names=self.names)
 
     def action_turn(self) -> None:
         self.shape = "story" if self.shape == "wide" else "wide"
-        self.query_one(CardPicture).turn(self.shape)
-        self.query_one("#wrapped-shape", Static).update(self.shapes())
+        self.show()
+
+    @work(thread=True, exclusive=True, group="moving")
+    def action_save_moving(self) -> None:
+        """g: the slide as a GIF, its numbers counting up (a second or two to draw)."""
+        week, shape, slide, names = self.week, self.shape, self.slide, self.names
+        self.app.call_from_thread(self.notify, "Drawing the moving card…", timeout=3)
+        try:
+            data = wrapped.moving(week, _rgb(self.accent), shape, slide, names)
+            path = card.save_data(data, wrapped.filename(week, shape, slide, "gif"))
+        except OSError as error:
+            self.app.call_from_thread(self.notify, f"The moving card was not saved: {error}", severity="error",
+                                      timeout=10)
+            return
+        self.app.call_from_thread(self.notify, f"Saved as {path}: a GIF, for a post that takes one (X does).",
+                                  timeout=10)
 
     def action_share(self) -> None:
         def chosen(key: str | None) -> None:
@@ -178,7 +261,7 @@ class WrappedScreen(ModalScreen[None]):
             if place is None:
                 return
             try:
-                done = share.share(place, self.week, _rgb(self.accent))
+                done = share.share(place, self.week, _rgb(self.accent), slide=self.slide, names=self.names)
             except OSError as error:
                 self.notify(f"The card was not saved: {error}", severity="error", timeout=10)
                 return
@@ -188,7 +271,7 @@ class WrappedScreen(ModalScreen[None]):
 
     def action_save(self) -> None:
         try:
-            path = card.save(self.canvas(), wrapped.filename(self.week, self.shape))
+            path = card.save(self.canvas(), wrapped.filename(self.week, self.shape, self.slide))
         except OSError as error:
             self.notify(f"The card was not saved: {error}", severity="error", timeout=10)
             return

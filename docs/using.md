@@ -99,7 +99,7 @@ the highlighted session the preview says what `Enter` will do with it, as it sta
 | `?` | every key, explained; `Enter` runs the one picked |
 | `Space`, click `[ ]` | tick / untick a session; on a closed team's row, all its members |
 | `Enter` | open the ticked sessions (or the highlighted one if none are ticked); on a team's row, its members, then the team view; on a closed team's row, start the team |
-| `j` | go to the next open session waiting for you (again for the one after) |
+| `j` | go to the next open session that needs you (a question, a permission), again for the one after; when none does, the ones waiting for you |
 | `m` | cycle how it opens: resume → auto-continue → fork → new |
 | `a` | tick / untick everything visible; on a team's row, add members |
 | `/` | find by project, title, or anything said in a session (`Esc` clears) |
@@ -118,8 +118,8 @@ the highlighted session the preview says what `Enter` will do with it, as it sta
 | `x` | hide the ticked sessions, or the highlighted one (in the sidebar: the whole project); nothing is deleted. On an open team's row, twice: close its members' tabs |
 | `X` | show the hidden ones too (`x` on one brings it back) |
 | `f` | pin the ticked sessions, or the highlighted one, above the rest; again unpins |
-| `u` | stats: tokens, when you work, tools and files, plan limits, a written report |
-| `W` | Claude Code Wrapped: your last seven days as a card to share ([stats](stats.md#claude-code-wrapped)) |
+| `u` | stats: an overview, tokens, when you work, tools and files, plan limits, a written report; `5` all time, `p` one project |
+| `W` | Claude Code Wrapped: your week, month (`2`) or all time (`3`) as slides to share, `←` `→` between them ([stats](stats.md#claude-code-wrapped)) |
 | `B` | background sessions: attach, stop, remove, clean up |
 | `,` | which CLIs to list: Claude Code, Codex, Antigravity |
 | `t` | next colour theme (remembered) |
@@ -214,6 +214,11 @@ often the better move. Press `n`:
   workspaces. Type to filter them, or type any folder path to add it.
 - `Space` ticks a project. Write a first message if you want one: every new session
   gets it, so they all start working right away.
+- **Improve it (`Ctrl+E`).** Claude (Sonnet at a low effort, no tools) rewrites the first
+  message so a session can act on it at once: what is to be done, where, what must hold and when
+  it is done, as far as your words say so, in your language and with nothing made up. One line
+  stays one line, since each line is a session. The rewrite goes into the box as one edit:
+  `Ctrl+Z` there puts yours back.
 - **Several topics at once.** In the message box `Enter` adds a line, and each line is a session
   of its own, in every ticked folder: two related topics in one project are two lines. The tab of
   each is titled by its line.
@@ -229,13 +234,20 @@ often the better move. Press `n`:
   under them says what the pick is good for. Left at *your default*, nothing is passed and your
   own Claude Code settings decide. **Context** is the context cap they start with, 300k unless you
   pick another (see [the context cap](handover.md#the-context-cap)).
-- **The router** suggests the three for the first message. Once you stop typing, one quick call
-  to Haiku (at a low effort, with no tools) reads the message and the folders' names and answers
-  with a pick and why: `Router suggests sonnet · medium · 300k — well-defined tests  Ctrl+R takes
-  it`. Nothing changes until you press `Ctrl+R`; the pick stays yours to change after. It weighs
-  the cost to your plan: the cheapest model and effort that will still do the work well, and a
-  wider cap only where the work needs much of a codebase in view at once. Turn the automatic call
-  off with `"router": false` in `config.json` (or `TABMANCER_ROUTER=0`); `Ctrl+R` asks it then.
+- **Advisor** gives these sessions Claude Code's advisor (`--advisor opus` or `fable`): a stronger
+  model each one asks at the turns that matter, before it settles on an approach, when an error
+  keeps coming back, before it says it is done. Given as a flag, it holds for these sessions only
+  (`/advisor` in a session saves it for all of them), and tabmancer gives it again when they are
+  resumed. Only a model as strong as the session's or stronger can advise it (a Fable session takes
+  only Fable): the row says so when the pick cannot. Each time it is asked, the advisor reads the
+  whole conversation again, uncached, so it costs most on a long session.
+- **The router** picks the three for the first message, so it needs one: write what the session
+  is to do (three words or more), then press `Ctrl+R`. One quick call to Haiku (at a low effort,
+  with no tools) reads the message and the folders' names, and its pick goes into the rows with
+  why: `✓ the router's pick — well-defined tests`. It is never asked by itself, so nothing is sent
+  while you are still writing; the pick stays yours to change after. It weighs the cost to your
+  plan: the cheapest model and effort that will still do the work well, and a wider cap only where
+  the work needs much of a codebase in view at once.
 
 Claude Code resumes a session on the model it ran on, but at your default effort. So a session
 opened here with an effort gets its id from tabmancer (`--session-id`), and whenever tabmancer

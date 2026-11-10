@@ -20,7 +20,19 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import background, context, focus, handover, newsessions, picks, summarize, teams, teamtree, viewmodel
+from . import (
+    background,
+    context,
+    focus,
+    handover,
+    improve,
+    newsessions,
+    picks,
+    summarize,
+    teams,
+    teamtree,
+    viewmodel,
+)
 from .dialogs import Choice, FolderSuggester, cards, frame, light_rows, pill, pills, tilde, title
 from .safework import work
 from .sessions import Exit, Session, Status, folder_key
@@ -1136,7 +1148,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
     NewTeamDialog #team-preview { height: auto; margin-bottom: 1; }
     NewTeamDialog #team-graph-box { height: 1fr; scrollbar-size-vertical: 1; }
     NewTeamDialog #runs-card { height: auto; }
-    NewTeamDialog #team-cap-row { height: auto; }
+    NewTeamDialog #team-cap-row, NewTeamDialog #team-advisor-row { height: auto; }
     NewTeamDialog #team-help { height: 1; margin-top: 1; color: $text-muted; }
     """
     BINDINGS: ClassVar[list[Binding]] = [
@@ -1147,6 +1159,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         Binding("ctrl+o", "toggle_worktrees", "Own worktrees", priority=True),
         Binding("ctrl+r", "suggest", "Suggest a line-up", priority=True),
         Binding("ctrl+g", "show_role", "What a member is told", priority=True),
+        Binding("ctrl+e", "improve", "Improve the goal", priority=True),
         Binding("ctrl+s", "create", "Create", priority=True),
         Binding("ctrl+n", "new_instead", "A new team after all", priority=True),
     ]
@@ -1174,6 +1187,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         self.forgetting: str | None = None  # Ctrl+L once on a kept line-up: again forgets it
         self.background = False  # Ctrl+B: the members run as background sessions, the lead in a tab
         self.asking = False  # Ctrl+R: Claude is being asked for a line-up
+        self.improving: str | None = None  # Ctrl+E: the goal being rewritten, as it was sent
         self.worktrees = False  # Ctrl+O: each member in a git worktree of its own
         self.repositories: dict[str, bool] = {}  # folder -> is a repository's top (is_repository)
 
@@ -1222,6 +1236,10 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
                             yield Label("Context", classes="name")
                             yield Choice([*picks.CAPS, picks.NO_CAP], value=picks.default_cap(), id="team-cap",
                                          labels=newsessions.CAP_SHORT)
+                        with Horizontal(classes="row", id="team-advisor-row"):  # the lead's advisor: ←/→
+                            yield Label("Advisor", classes="name")
+                            yield Choice([picks.NO_ADVISOR, *picks.ADVISORS], id="team-advisor",
+                                         labels=newsessions.ADVISOR_SHORT)
             yield Label("", id="team-help")
             # One line, even in a 120x30 window: a second one would be cut off there.
             yield Label(keys(("Ctrl+S", "create"), ("Tab", "next"), ("Ctrl+T", "line-up"), ("Ctrl+L", "keep"),
@@ -1365,11 +1383,12 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         about = {
             "team-name": "One word: each member's tab is named after it, checkout-api.",
             "team-folder": "Type to find a project; ↑/↓ and Enter pick it. A folder path works too, → completes it.",
-            "team-goal": "What the team is for. A plan pasted in keeps its lines; every member gets all of it.",
+            "team-goal": "What the team is for: a plan pasted in keeps its lines, every member gets it. Ctrl+E improves it.",
             "team-members": (TOWARD_HELP[self.toward.kind] if self.toward is not None
                              else LEAD_HELP if self.deciding() else MEMBERS_HELP),
             "team-most": "At most this many: the lead picks them from the goal, fewer for small work. Ctrl+R suggests one.",
             "team-cap": self.cap_help(),
+            "team-advisor": self.advisor_help(),
         }.get(focused.id if focused is not None else "",
               "Every member is a session of its own; with no lead line, they work as peers.")
         self.query_one("#team-help", Label).update(about)
@@ -1381,6 +1400,25 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         cap = self.query_one("#team-cap", Choice).value
         return (f"←/→ the context cap every member starts under. "
                 f"{newsessions.CAP_SHORT.get(cap, cap)}: {picks.CAP_WORDS[cap]}.")
+
+    def advisor(self) -> str:
+        """The lead's advisor picked; empty for none."""
+        value = self.query_one("#team-advisor", Choice).value if self.is_mounted else picks.NO_ADVISOR
+        return "" if value == picks.NO_ADVISOR else value
+
+    def advisor_help(self) -> str:
+        """The Advisor row's help: whose advisor it is, and what it costs."""
+        if not self.is_mounted:
+            return ""
+        advisor = self.advisor()
+        if self.peers():
+            return "←/→ an advisor for the lead; a team of peers has none, so it is not given."
+        if not advisor:
+            return "←/→ an advisor for the lead (only the lead): a stronger model it asks at the turns that matter."
+        lead = next((m for m in self.read()[3] if m.lead), None)
+        if lead is not None and not picks.advisor_ok(lead.model, advisor):
+            return f"{advisor} cannot advise a {picks.family(lead.model)} lead: only a model as strong or stronger can."
+        return f"←/→ the lead's advisor, for its session only. {advisor}: {picks.ADVISOR_WORDS[advisor]}."
 
     def on_choice_changed(self, event: Choice.Changed) -> None:
         self.show_help()
@@ -1695,6 +1733,36 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
 
     # --- help with the roles ---------------------------------------------------------------
 
+    def action_improve(self) -> None:
+        """Ctrl+E: Claude rewrites the goal clearer; it goes into the box as one edit, so Ctrl+Z there
+        puts yours back."""
+        if self.improving is not None:
+            return
+        box = self.query_one("#team-goal", TextArea)
+        if not improve.worth_improving(box.text):
+            self.notify("Ctrl+E needs a goal to improve: write what the team is for first.", severity="warning",
+                        timeout=5)
+            return
+        self.improving = box.text
+        self.notify(f"Improving the goal with {improve.MODEL}…", timeout=4)
+        folder = self.read()[1]
+        text = box.text
+        self.run_worker(lambda: self.ask_improve(text, folder), thread=True, group="improve", exit_on_error=False)
+
+    def ask_improve(self, text: str, folder: str) -> None:
+        """In a thread: the rewrite, or why there is none."""
+        try:
+            better, why = improve.improve_goal(text, folder), ""
+        except Exception as problem:  # noqa: BLE001 - no rewrite leaves the goal as it was, and says why
+            better, why = "", str(problem) or type(problem).__name__
+        self.app.call_from_thread(self.improved, text, better, why)
+
+    def improved(self, text: str, better: str, why: str) -> None:
+        self.improving = None
+        if self.is_mounted and newsessions.put_improved(self.query_one("#team-goal", TextArea), text, better, why,
+                                                        self.notify):
+            self.notify("Goal improved: Ctrl+Z in the box puts yours back.", timeout=6)
+
     def action_suggest(self) -> None:
         """Ctrl+R: Claude reads the goal and the project's top level and suggests the team's size, and
         why, with a line-up: each member with its part, its own files, a model and an effort, a lead
@@ -1793,10 +1861,15 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
             return
         name, folder, goal, members = self.read()
         peers = self.peers()
-        self.dismiss(teams.new_team(name, str(Path(folder).resolve()), goal, members,
-                                    decide=self.most() if self.deciding() else 0,
-                                    background=self.background and not peers, peers=peers,
-                                    worktrees=self.worktrees, cap=self.query_one("#team-cap", Choice).value))
+        team = teams.new_team(name, str(Path(folder).resolve()), goal, members,
+                              decide=self.most() if self.deciding() else 0,
+                              background=self.background and not peers, peers=peers,
+                              worktrees=self.worktrees, cap=self.query_one("#team-cap", Choice).value)
+        advisor = self.advisor()
+        if advisor:  # the lead's alone, where it can advise the lead's model
+            team.members = [replace(m, advisor=advisor) if m.lead and picks.advisor_ok(m.model, advisor) else m
+                            for m in team.members]
+        self.dismiss(team)
 
     def action_cancel(self) -> None:
         self.dismiss(None)

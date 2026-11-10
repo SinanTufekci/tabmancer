@@ -10,10 +10,10 @@ import sys
 from dataclasses import asdict
 from datetime import timedelta
 
-from . import clis, shortcuts, workspaces
+from . import claudeupdate, clis, shortcuts, workspaces
 from .config import read_json, write_json
 from .launch import Launch, continue_prompt, open_tabs
-from .picks import EFFORTS, NO_CAP, Pick, cap_tokens
+from .picks import EFFORTS, NO_CAP, Pick, advisor_ok, cap_tokens
 from .sessions import find_sessions, nothing_found
 from .shutdowns import open_at_shutdown, recent_shutdowns
 
@@ -51,6 +51,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("live", parents=[filters], help="watch open sessions: which are working, which need you")
     stating = sub.add_parser("stats", parents=[filters],
                              help="tokens, when you work, tools and files, plan limits (text, JSON or CSV)")
+    stating.add_argument("--all-time", action="store_true",
+                         help="from the first day kept (tabmancer's history, Claude Code's own record before it)")
     kind = stating.add_mutually_exclusive_group()
     kind.add_argument("--json", action="store_true", help="everything as JSON")
     kind.add_argument("--csv", action="store_true", help="one row per day as CSV")
@@ -75,6 +77,9 @@ def main(argv: list[str] | None = None) -> None:
     fresh.add_argument("--autocompact", type=_cap, metavar="CAP",
                        help="the context Claude Code keeps before it compacts: 100k to 1M, or auto for its own "
                             "window (default: 300k, or context_cap in config.json)")
+    fresh.add_argument("--advisor", choices=["opus", "fable"],
+                       help="a stronger model the sessions ask at the turns that matter (Claude Code's --advisor), "
+                            "for these sessions only")
     using = sub.add_parser("clis", help="which coding CLIs' sessions to list: claude, codex, agy")
     using.add_argument("action", nargs="?", choices=["enable", "disable"])
     using.add_argument("names", nargs="*", metavar="name", help=", ".join(clis.CLIS))
@@ -101,14 +106,23 @@ def main(argv: list[str] | None = None) -> None:
     telling = sub.add_parser("notifications", help="desktop notifications when a session wants you back")
     telling.add_argument("action", nargs="?", choices=["on", "off", "test"])
     checking = sub.add_parser("updates", help="say when a newer tabmancer is out (PyPI, once a day): on or off")
+    claude_updating = sub.add_parser("claude-updates", help="run claude update once a day before sessions open: "
+                                                            "on, off, or now")
+    claude_updating.add_argument("action", nargs="?", choices=["on", "off", "now"])
     checking.add_argument("action", nargs="?", choices=["on", "off"])
-    wrapping = sub.add_parser("wrapped", help="Claude Code Wrapped: your last seven days as a picture to share; "
-                                              "on or off: the dashboard's word on Fridays")
+    wrapping = sub.add_parser("wrapped", help="Claude Code Wrapped: your week (or month, or all time) as a picture "
+                                              "to share; on or off: the dashboard's word on Fridays")
     wrapping.add_argument("action", nargs="?", choices=["on", "off"])
     wrapping.add_argument("--out", help="where to save the picture (default: Downloads)")
     wrapping.add_argument("--story", action="store_true", help="the tall card for stories (1080x1920), not the wide one")
     wrapping.add_argument("--share", choices=["x", "bluesky", "threads", "instagram"],
                           help="save and copy the card, and open a new post there with the words in it")
+    wrapping.add_argument("--period", choices=["week", "month", "all"], default="week",
+                          help="the last seven days (default), the last thirty, or all the days kept")
+    wrapping.add_argument("--slide", choices=["you", "tokens", "time", "sessions", "tools", "summary"],
+                          default="summary", help="one slide, not the card that sums it up")
+    wrapping.add_argument("--gif", action="store_true", help="a GIF, its numbers counting up, not a still PNG")
+    wrapping.add_argument("--names", action="store_true", help="the top project's name on the tools slide")
     # What the login shortcut runs when there is no windowless gui launcher.
     sub.add_parser("startup-run", help="(used by the login shortcut)")
     args = parser.parse_args(argv)
@@ -126,15 +140,17 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "tokens":
         print_tokens(args.days, args.json)
     elif args.command == "stats":
-        print_stats(args.days, args.json, args.csv)
+        print_stats(None if args.all_time else args.days, args.json, args.csv)
     elif args.command == "report":
         print_report(args.days, args.save)
     elif args.command == "clis":
         manage_clis(args.action, args.names)
     elif args.command == "new":
+        claudeupdate.before_opening(print)  # today's claude update, before the sessions open
         start_fresh(args.folders, "\n".join(args.prompt or []), args.cli, args.days,
-                    Pick(args.model or "", args.effort or "", args.autocompact or ""), args.linked)
+                    Pick(args.model or "", args.effort or "", args.autocompact or "", args.advisor or ""), args.linked)
     elif args.command == "open":
+        claudeupdate.before_opening(print)
         open_workspace(args.name, args.days, args.all)
     elif args.command == "workspaces":
         manage_workspaces(args.delete)
@@ -154,11 +170,15 @@ def main(argv: list[str] | None = None) -> None:
         manage_startup(args.action)
     elif args.command == "notifications":
         manage_notifications(args.action)
+    elif args.command == "claude-updates":
+        manage_claude_updates(args.action)
     elif args.command == "updates":
         manage_updates(args.action)
     elif args.command == "wrapped":
-        save_wrapped(args.action, args.out, "story" if args.story else "wide", args.share)
+        save_wrapped(args.action, args.out, "story" if args.story else "wide", args.share, args.period, args.slide,
+                     args.gif, args.names)
     elif args.command == "team":
+        claudeupdate.before_opening(print)  # today's claude update, before the members open
         sys.exit(start_team(args.team, args.members) if args.action == "start" else add_to_team(args.team, args.members))
     elif args.command == "startup-run":
         startup_main()
@@ -373,6 +393,23 @@ def manage_notifications(action: str | None) -> None:
           "and waits for you, or stops at a usage limit, is told outside the dashboard too.")
 
 
+def manage_claude_updates(action: str | None) -> None:
+    """claudeupdate.py: on, off, now (whether due or not), or how it stands."""
+    if action in ("on", "off"):
+        claudeupdate.set_enabled(action == "on")
+    if action == "now":
+        print("Updating Claude Code (claude update)…")
+        print(claudeupdate.run().words())
+        return
+    done = claudeupdate.last()
+    when = f" Last run {done['at'].replace('T', ' ')}: {done.get('after', '?')}." if done.get("at") else ""
+    if claudeupdate.enabled():
+        print("On: once a day, claude update runs before tabmancer opens a session (the dashboard, tabmancer new, "
+              f"tabmancer team), and the sessions open when it is done.{when}")
+    else:
+        print(f"Off: tabmancer never runs claude update (tabmancer claude-updates on turns it on).{when}")
+
+
 def manage_updates(action: str | None) -> None:
     from . import __version__, updates
 
@@ -458,7 +495,9 @@ def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: flo
 
     cli = cli or newsessions.default_cli()
     if pick and cli != "claude":
-        sys.exit("--model, --effort and --autocompact are for Claude Code sessions.")
+        sys.exit("--model, --effort, --autocompact and --advisor are for Claude Code sessions.")
+    if pick and not advisor_ok(pick.model, pick.advisor):
+        sys.exit(f"{pick.advisor} cannot advise {pick.model}: only a model as strong or stronger can.")
     if linked and (cli != "claude" or len(names) != 1 or len(newsessions.topics(prompt)) < 2):
         sys.exit("--linked takes one folder, two --prompt or more, and Claude Code.")
     listed = find_sessions(days, quick=True)
@@ -515,12 +554,13 @@ def print_report(days: float, save: bool) -> None:
         print(f"Saved {report.save(entry)}", file=sys.stderr)
 
 
-def save_wrapped(action: str | None, out: str | None, shape: str = "wide", where: str | None = None) -> None:
-    """Claude Code Wrapped: the last seven days saved as a picture, or taken where it is shared;
-    on/off: the Friday word."""
+def save_wrapped(action: str | None, out: str | None, shape: str = "wide", where: str | None = None,
+                 period: str = "week", slide: str = "summary", moving: bool = False, names: bool = False) -> None:
+    """Claude Code Wrapped: the week, the month or all of it saved as a picture (a GIF with moving),
+    or taken where it is shared; on/off: the Friday word."""
     from pathlib import Path
 
-    from . import card, share, tokens, wrapped
+    from . import card, history, share, wrapped
     from .theme import DEFAULT_THEME, THEMES
 
     if action:
@@ -528,25 +568,30 @@ def save_wrapped(action: str | None, out: str | None, shape: str = "wide", where
         print("On Fridays from noon the dashboard says your week is ready (W shows it)." if action == "on" else
               "The dashboard no longer says so on Fridays; W and tabmancer wrapped still show your week.")
         return
-    week = wrapped.week(tokens.collect(14), {s.session_id: s for s in find_sessions(14, include_all=True, quick=True)})
+    days = {"week": 7, "month": 30, "all": None}[period]
+    report = history.collect(None if days is None else days * 2)
+    week = wrapped.week(report, {s.session_id: s for s in find_sessions(report.days, include_all=True, quick=True)},
+                        days=days)
     accent = THEMES[DEFAULT_THEME][1].lstrip("#")
     colour = (int(accent[0:2], 16), int(accent[2:4], 16), int(accent[4:6], 16))
     target = Path(out).expanduser() if out else None
     name, why = wrapped.persona(week)
     if where:
         place = next(p for p in share.PLACES if p.label.lower() == where)
-        folder = target if target is not None and target.suffix.lower() != ".png" else None
-        done = share.share(place, week, colour, folder)
+        folder = target if target is not None and target.suffix.lower() not in (".png", ".gif") else None
+        done = share.share(place, week, colour, folder, slide=slide, names=names)
         print(f"Claude Code Wrapped, {wrapped.span(week).lower()}: saved as {done.path}\n{done.note}")
         return
-    canvas = wrapped.draw(week, colour, shape=shape)
-    if target is not None and target.suffix.lower() != ".png":  # a folder
-        path = card.save(canvas, wrapped.filename(week, shape), target)
+    kind = "gif" if moving else "png"
+    data = wrapped.moving(week, colour, shape, slide, names) if moving else \
+        wrapped.draw(week, colour, shape=shape, slide=slide, names=names).png()
+    if target is not None and target.suffix.lower() not in (".png", ".gif"):  # a folder
+        path = card.save_data(data, wrapped.filename(week, shape, slide, kind), target)
     elif target is not None:
-        target.write_bytes(canvas.png())
+        target.write_bytes(data)
         path = target
     else:
-        path = card.save(canvas, wrapped.filename(week, shape))
+        path = card.save_data(data, wrapped.filename(week, shape, slide, kind))
     print(f"Claude Code Wrapped, {wrapped.span(week).lower()}: saved as {path}")
     print(f"  I'm {name.title()}: {why.lower()}")
     for what, number, note in wrapped.tiles(week):
@@ -554,11 +599,12 @@ def save_wrapped(action: str | None, out: str | None, shape: str = "wide", where
     print(f"\nTo post it: tabmancer wrapped --share x (or bluesky, threads, instagram). The words:\n{wrapped.words(week)}")
 
 
-def print_stats(days: float, as_json: bool, as_csv: bool) -> None:
-    from . import stats, tokens
+def print_stats(days: float | None, as_json: bool, as_csv: bool) -> None:
+    """days None: all of it. Counted with the days tabmancer has kept (history.py)."""
+    from . import history, stats
 
-    report = tokens.collect(days)
-    sessions = {s.session_id: s for s in find_sessions(days, include_all=True, quick=True)}
+    report = history.collect(None if days is None else max(1, round(days)))
+    sessions = {s.session_id: s for s in find_sessions(report.days, include_all=True, quick=True)}
     if as_json:
         json.dump(stats.export(report, sessions), sys.stdout, indent=2, ensure_ascii=False)
         print()
@@ -573,8 +619,9 @@ def print_stats(days: float, as_json: bool, as_csv: bool) -> None:
     from .theme import DEFAULT_THEME, THEMES
 
     usage.record(usage.read_all())  # a fresh reading for the limits part
+    before = None if days is None else stats.before(history.collect(report.days * 2), report.days, sessions)
     console = Console()
-    for part in plain_text(report, sessions, THEMES[DEFAULT_THEME][1]):
+    for part in plain_text(report, sessions, THEMES[DEFAULT_THEME][1], before):
         console.print(part)
 
 

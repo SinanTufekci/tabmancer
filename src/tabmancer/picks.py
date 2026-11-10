@@ -12,6 +12,13 @@ keeps before Claude Code compacts it into a summary (it compacts some 33k before
 reply reads the whole conversation again, so a long one is where most of a plan's limit goes;
 tabmancer starts its sessions with a cap (300k unless you change it) and says where one is set.
 
+An advisor (--advisor) is a stronger model the session consults at the turns that matter: before
+it settles on an approach, when an error keeps coming back, before it says it is done. Given as a
+flag it holds for that session only (checked with 2.1.322: /advisor would save it for every session
+in your settings, the flag does not), so it is kept here too and given again on resume. Each time
+it is asked, the advisor reads the whole conversation, uncached: on a long session that is the
+costly part.
+
 Nothing is passed for a model or an effort not picked: the session runs on your own settings.
 """
 
@@ -50,7 +57,7 @@ MODEL_WORDS = {
     "opus": "strong all-round: the usual pick for coding and for a team's lead",
     "sonnet": "about half Opus's price: routine coding, tests, docs",
     "haiku": "a fraction of the price: quick look-ups, small edits, summaries",
-    "fable": "the most capable, about 2.5 times Opus's price: the hardest problems",
+    "fable": "the most capable, twice Opus's price (the same for re-reading the conversation): the hardest problems",
 }
 EFFORT_WORDS = {
     DEFAULT: "whatever your Claude Code settings say",
@@ -60,6 +67,16 @@ EFFORT_WORDS = {
     "xhigh": "thorough: coding and long, many-step work",
     "max": "as deep as it goes: when being right matters more than the cost",
 }
+ADVISORS = ("opus", "fable")  # who can advise: a model at least as strong as the session's
+NO_ADVISOR = "none"
+RANKS = {"haiku": 0, "sonnet": 1, "opus": 2, "fable": 3}
+FAMILY = re.compile(r"(haiku|sonnet|opus|fable)", re.IGNORECASE)
+ADVISOR_WORDS = {
+    NO_ADVISOR: "the session works on its own",
+    "opus": "the session asks Opus at the turns that matter; each ask reads the whole conversation again",
+    "fable": "the session asks Fable at the turns that matter; each ask reads the whole conversation again "
+             "at Fable's price, uncached: for a session that stays small",
+}
 TAG = re.compile(r"(?:^|\s)@([A-Za-z0-9][\w.\-\[\]]*)\s*$")  # "tests: checks it @sonnet @high"
 
 
@@ -68,13 +85,14 @@ class Pick:
     model: str = ""   # an alias such as sonnet, or a full name; empty: your default
     effort: str = ""  # one of EFFORTS; empty: your default
     cap: str = ""     # the context cap, such as 300k, or NO_CAP; empty: not decided (default_cap())
+    advisor: str = ""  # --advisor: one of ADVISORS; empty: none
 
     def __bool__(self) -> bool:
-        return bool(self.model or self.effort or self.cap)
+        return bool(self.model or self.effort or self.cap or self.advisor)
 
     def flags(self) -> tuple[str, ...]:
         return (*(("--model", self.model) if self.model else ()), *(("--effort", self.effort) if self.effort else ()),
-                *cap_flags(self.cap))
+                *cap_flags(self.cap), *(("--advisor", self.advisor) if self.advisor else ()))
 
     def words(self) -> str:
         """'sonnet · high', 'sonnet', 'high effort', or '' when nothing was picked."""
@@ -104,6 +122,23 @@ def split(text: str) -> tuple[str, Pick]:
 def tags(pick: Pick) -> str:
     """The pick as it is written at the end of a line: ' @sonnet @high'."""
     return "".join(f" @{word}" for word in (pick.model, pick.effort) if word)
+
+
+# --- the advisor ---------------------------------------------------------------------------------
+
+def family(model: str) -> str:
+    """opus, sonnet, haiku or fable, from an alias or a full name; empty for anything else."""
+    found = FAMILY.search(model or "")
+    return found[1].lower() if found else ""
+
+
+def advisor_ok(model: str, advisor: str) -> bool:
+    """Whether Claude Code takes this advisor for a session on this model: one at least as strong
+    (a Fable session takes only Fable). With the model left to your settings, it is not known here."""
+    if not advisor:
+        return True
+    have, want = family(model), family(advisor)
+    return bool(want) and (not have or RANKS[want] >= RANKS[have])
 
 
 # --- the context cap -----------------------------------------------------------------------------
@@ -188,6 +223,7 @@ def _load() -> dict[str, dict]:
 def remember(session_id: str, pick: Pick) -> None:
     picks = dict(_load())
     picks[session_id] = {"model": pick.model, "effort": pick.effort, "cap": pick.cap,
+                         **({"advisor": pick.advisor} if pick.advisor else {}),
                          "at": datetime.now().isoformat(timespec="seconds")}
     if len(picks) > KEEP:
         picks = dict(sorted(picks.items(), key=lambda item: str(item[1].get("at", "")))[-KEEP:])
@@ -201,8 +237,9 @@ def recall(session_id: str, picks: dict[str, dict] | None = None) -> Pick:
     """What a session was opened with by tabmancer; an empty Pick for any other session."""
     found = (_load() if picks is None else picks).get(session_id) or {}
     effort, cap = str(found.get("effort") or ""), str(found.get("cap") or "")
+    advisor = str(found.get("advisor") or "")
     return Pick(str(found.get("model") or ""), effort if effort in EFFORTS else "",
-                cap if cap == NO_CAP or cap_tokens(cap) else "")
+                cap if cap == NO_CAP or cap_tokens(cap) else "", advisor if family(advisor) else "")
 
 
 def cap_of(session_id: str, picks: dict[str, dict] | None = None) -> int:
@@ -219,11 +256,11 @@ def fresh(launch: Launch, pick: Pick) -> Launch:
     if launch.cli != "claude" or launch.mode is not Mode.NEW:
         return launch
     pick = decided(pick)
-    if not (pick.model or pick.effort) and pick.cap == NO_CAP == default_cap():
+    if not (pick.model or pick.effort or pick.advisor) and pick.cap == NO_CAP == default_cap():
         return launch  # nothing of its own: a resume gives it nothing either
     new_id = str(uuid.uuid4())
     remember(new_id, pick)
-    return replace(launch, model=pick.model, effort=pick.effort, cap=pick.cap, new_id=new_id)
+    return replace(launch, model=pick.model, effort=pick.effort, cap=pick.cap, advisor=pick.advisor, new_id=new_id)
 
 
 def resumed(launch: Launch, picks: dict[str, dict] | None = None, context: int = 0) -> Launch:
@@ -236,11 +273,14 @@ def resumed(launch: Launch, picks: dict[str, dict] | None = None, context: int =
         return launch
     known = recall(launch.session_id, picks)
     effort = launch.effort or ("" if "--effort" in launch.options else known.effort)
+    advisor = launch.advisor or ("" if "--advisor" in launch.options else known.advisor)
     cap = launch.cap or ("" if "--autocompact" in launch.options else known.cap)
     if not cap and "--autocompact" not in launch.options:
         default = default_cap()
         cap = default if cap_tokens(default) and context < cap_tokens(default) - CAP_ROOM else ""
-    return replace(launch, effort=effort, cap=cap) if (effort, cap) != (launch.effort, launch.cap) else launch
+    if (effort, cap, advisor) == (launch.effort, launch.cap, launch.advisor):
+        return launch
+    return replace(launch, effort=effort, cap=cap, advisor=advisor)
 
 
 def note_opened(launches: list[Launch]) -> None:

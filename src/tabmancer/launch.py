@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from . import claudeupdate
 from .config import read_json
 from .sessions import Status
 
@@ -74,6 +75,7 @@ class Launch:
     model: str = ""   # --model for Claude Code; empty: your default (see picks)
     effort: str = ""  # --effort for Claude Code; empty: your default
     cap: str = ""     # --autocompact for Claude Code, such as 300k; empty or "auto": Claude Code's own
+    advisor: str = ""  # --advisor for Claude Code (picks.ADVISORS); empty: none
     new_id: str = ""  # a fresh session's id, given by tabmancer (--session-id) so its pick is kept
     env: tuple[tuple[str, str], ...] = ()  # set in the tab for this command, e.g. a sign-in's BROWSER
 
@@ -90,7 +92,9 @@ class Launch:
             return self._agy_argv()
         capped = self.cap and self.cap != "auto" and "--autocompact" not in self.options
         more = [*(["--model", self.model] if self.model else []), *(["--effort", self.effort] if self.effort else []),
-                *(["--autocompact", self.cap] if capped else []), *self.options]
+                *(["--autocompact", self.cap] if capped else []),
+                *(["--advisor", self.advisor] if self.advisor and "--advisor" not in self.options else []),
+                *self.options]
         if self.mode is Mode.NEW and self.new_id:
             more = ["--session-id", self.new_id, *more]
         if self.mode is Mode.RESUME:
@@ -157,6 +161,7 @@ def run_in_background(launch: Launch) -> str:
     claude = shutil.which("claude")
     if not claude:
         raise OSError("The claude CLI is not on PATH.")
+    claudeupdate.before_opening()  # today's claude update first, when it is on
     _note([launch])
     rest = launch.argv[1:]
     if Path(claude).suffix.lower() in (".cmd", ".bat"):
@@ -380,6 +385,8 @@ def open_tabs(launches: list[Launch]) -> list[str]:
     Anything that could not be opened comes back as a shell line to run by hand. Raises OSError
     when Windows Terminal would not start.
     """
+    if any(launch.cli == "claude" for launch in launches):
+        claudeupdate.before_opening()  # today's claude update first, when it is on
     _note(launches)
     kind = terminal_kind()
     if kind == "windows-terminal":
