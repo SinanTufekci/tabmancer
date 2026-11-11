@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.9
+
+- **Wrapped's picture follows what you pick.** `← →`, `f`, `n` and `1 2 3` changed the slide, the
+  shape, the names or the period, but the picture in the terminal stayed the first one drawn (who
+  you were) until the window was resized; it is drawn again at each change. A card larger than the
+  window (the story card in a 120x40 one) is shown in words, as it is meant to be, and no longer as
+  a cropped picture over them.
+- **`Ctrl+E` is easier to find in the new-team form.** It improved the goal already; now the Team
+  card's border says so, says when it is at it (improving the goal with sonnet…), and the key joins
+  the keys under the form where the window has room for it.
+
 ## 0.1.8
 
 - **`E` unfolds every team, and folds them all again.** Each press goes the other way: the
