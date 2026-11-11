@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.8
 
 - **`E` unfolds every team, and folds them all again.** Each press goes the other way: the
   teams' members under their rows, or every team back to one row (any team still folded makes the
