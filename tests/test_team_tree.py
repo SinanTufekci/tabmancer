@@ -105,6 +105,47 @@ async def test_a_team_is_one_row_of_chips_till_unfolded(fake_home, tmp_path, mon
         assert app.table.get_row(f"{TEAM_ROW}shop")[0].plain == "▾" and "lead-1" in app.table.rows
 
 
+async def test_e_capital_unfolds_every_team_and_folds_them_again(fake_home, tmp_path, monkeypatch):
+    shop(fake_home, tmp_path, monkeypatch)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await ready(pilot, app)
+        assert "lead-1" not in app.table.rows  # folded, as a team starts
+        await pilot.press("E")
+        assert "shop" in app.unfolded and {"lead-1", "api-1", "ui-1"} <= {r.key.value for r in app.table.ordered_rows}
+        assert app.table.get_row(f"{TEAM_ROW}shop")[0].plain == "▾"
+        # From a member's row, folding takes the cursor to its team, not to a stray row.
+        app.table.move_cursor(row=app.table.get_row_index("api-1"))
+        await pilot.press("E")
+        assert "shop" not in app.unfolded and "api-1" not in app.table.rows
+        assert app.cursor_key() == f"{TEAM_ROW}shop"
+        await pilot.press("E")  # and the other way again
+        assert "shop" in app.unfolded and "api-1" in app.table.rows
+
+
+async def test_e_capital_says_so_when_no_team_is_in_the_list(fake_home):
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if app.sessions:
+                break
+        await pilot.press("E")
+        assert any("No team" in note.message for note in app._notifications) and not app.unfolded
+
+
+async def test_e_capital_is_off_in_the_live_view_where_no_team_shows(fake_home, tmp_path, monkeypatch):
+    shop(fake_home, tmp_path, monkeypatch)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await ready(pilot, app)
+        await pilot.press("l")
+        await pilot.pause(0.2)
+        assert app.live_mode and app.check_action("fold_teams", ()) is False
+        await pilot.press("E")
+        assert not app.unfolded
+
+
 async def test_a_team_heads_its_members_in_open_now(fake_home, tmp_path, monkeypatch):
     shop(fake_home, tmp_path, monkeypatch)
     app = SessionPicker(days=14)

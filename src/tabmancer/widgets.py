@@ -380,25 +380,45 @@ class TopBar(Horizontal):
         self.put("info", text)
 
 
-def project_line(mark: tuple[str, str], name: Text, count: int, git: str = "") -> Table:
+def project_line(mark: tuple[str, str], name: Text, count: int, git: str = "", inset: int = 0) -> Table:
     """A sidebar line: the mark and name on the left, then where its folder stands in git (± changes
-    not committed, ↑ commits not pushed), the number of sessions lined up on the right."""
+    not committed, ↑ commits not pushed), the number of sessions lined up on the right. `inset` cells
+    of margin on both sides are inside the line, so the row's highlight runs the sidebar's whole width
+    while its text lines up with the heading above it."""
     marks = Text.assemble(*((("±", AMBER),) if "±" in git else ()), *((("↑", CYAN),) if "↑" in git else ()))
     right = Text.assemble(marks, " " if marks else "", (str(count), MUTED))
     line = Table.grid(expand=True)
+    cells = [Text.assemble(mark, name), right]
+    if inset:
+        line.add_column(width=inset)
     # A long name gives way, not the marks or the count: only a ratio column is shrunk to fit.
     line.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
     line.add_column(justify="right", no_wrap=True, width=right.cell_len + 1)
-    line.add_row(Text.assemble(mark, name), right)
+    if inset:
+        line.add_column(width=inset)
+        cells = [Text(""), *cells, Text("")]
+    line.add_row(*cells)
     return line
 
 
 class ProjectList(OptionList):
-    """All projects first, then one line per project, in a stable alphabetical order."""
+    """All projects first, a rule, then one line per project, in a stable alphabetical order. As high
+    as its projects are many, so the legend under it follows it up (fit says how high it may grow)."""
 
+    INSET = 2  # the sidebar's text starts this far in: the heading, the legend and these lines
     DEFAULT_CSS = """
-    ProjectList { background: $surface; border: none; padding: 0 1; }
+    ProjectList { background: $surface; border: none; padding: 0; height: auto; }
     """
+
+    def fit(self) -> None:
+        """At most the height the rest of the sidebar leaves, so what is under the list (its legend,
+        the token chart) is never pushed out of sight: a long list scrolls instead."""
+        side = self.parent
+        if side is None or not side.size.height:
+            return
+        taken = sum(child.outer_size.height + child.styles.margin.height
+                    for child in side.children if child is not self and child.id != "gap")
+        self.styles.max_height = max(3, side.size.height - taken)
 
     def show_projects(self, sessions: list[Session], waiting: set[str] = frozenset(),
                       git: dict[str, str] | None = None) -> None:
@@ -413,7 +433,8 @@ class ProjectList(OptionList):
         groups: dict[str, list[Session]] = {}
         for session in sessions:
             groups.setdefault(folder_key(session.cwd) or "?", []).append(session)
-        entries = [(ALL_PROJECTS, project_line(("", ""), Text("All projects", style="bold"), len(sessions)))]
+        entries = [(ALL_PROJECTS, project_line(("", ""), Text("All projects", style="bold"), len(sessions),
+                                               inset=self.INSET))]
         for key, items in sorted(groups.items(), key=lambda item: item[1][0].project.casefold()):
             if any(s.session_id in waiting for s in items):
                 mark = ("● ", RED)
@@ -424,7 +445,7 @@ class ProjectList(OptionList):
             else:
                 mark = ("  ", "")
             entries.append((key, project_line(mark, Text(_shorten(items[0].project, 18)), len(items),
-                                              (git or {}).get(key, ""))))
+                                              (git or {}).get(key, ""), self.INSET)))
         ids = [key for key, _ in entries]
         if ids == [self.get_option_at_index(i).id for i in range(self.option_count)]:
             for key, prompt in entries:
@@ -432,8 +453,11 @@ class ProjectList(OptionList):
             return
         keep = self.highlighted_id()
         self.clear_options()
-        self.add_options([Option(prompt, id=key) for key, prompt in entries])
+        # A rule under All projects (it is no project, it takes none of the list's indexes).
+        self.add_options([Option(entries[0][1], id=entries[0][0]), None,
+                          *(Option(prompt, id=key) for key, prompt in entries[1:])])
         self.highlighted = ids.index(keep) if keep in ids else 0
+        self.fit()
 
     def highlighted_id(self) -> str | None:
         if self.highlighted is None or self.option_count == 0:

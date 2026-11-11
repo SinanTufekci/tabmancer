@@ -35,6 +35,8 @@ KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
                              "session in its folder)")),
         ("e", "expand", ("show how the session ended, under its title (or click the row). On a team's row: its "
                          "members under it, or the team back to one row")),
+        ("E", "fold_teams", ("every team's members under its row, or every team back to one row: each press "
+                             "goes the other way (not in the live view)")),
         ("/", "filter", "find by project, title or anything said in a session; Esc clears it"),
         ("1", "card('open')", ("only the open sessions, as the OPEN NOW card counts them (or click the card); "
                                "again, or Esc, shows all")),

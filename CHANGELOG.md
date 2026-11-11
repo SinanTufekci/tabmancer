@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`E` unfolds every team, and folds them all again.** Each press goes the other way: the
+  teams' members under their rows, or every team back to one row (any team still folded makes the
+  next press unfold). From a member's row, folding takes the cursor to its team's row. `e` still
+  does one team. Not in the live view, where no team shows.
+- **The project sidebar lines up.** The list was 4 cells narrower than the sidebar (a dead strip
+  on its right) and its lines started a cell to the left of the heading above them; now they fill
+  the sidebar, the selection bar runs edge to edge, and the text starts where the heading's does.
+  A rule sets All projects apart from the projects, and the legend of the marks follows the list
+  instead of sinking to the bottom behind a dozen empty lines (a long list scrolls and leaves the
+  legend and the token chart in sight).
 - **A team spends less on waiting.** Measured on six teams' transcripts (31 sessions, some 20k
   replies): files read by more than one member cost 1.3% of what the teams used, and a message
   answered with nothing done about 1%, but sessions left for more than an hour cost 7.2% (Claude's

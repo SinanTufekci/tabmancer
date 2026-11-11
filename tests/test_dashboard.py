@@ -12,6 +12,13 @@ from tabmancer.sessions import Exit, Status
 from tabmancer.widgets import ProjectList, StatCard
 
 
+def replace_cwd(session, cwd):
+    """The session as if it ran in another folder (its own id, so each one is a project of its own)."""
+    from dataclasses import replace
+
+    return replace(session, session_id=f"{session.session_id}@{cwd}", cwd=cwd)
+
+
 def test_a_card_emptied_at_shutdown_takes_a_late_update_quietly():
     # Seen on CI: a live update landed while the app was closing and the card had no caption left.
     card = StatCard("TRANSCRIPTS", "MB, these sessions", "MB")  # never mounted: no caption inside
@@ -185,6 +192,38 @@ async def test_project_list_updates_in_place_and_keeps_its_order(fake_home):
         again = [projects.get_option_at_index(i) for i in range(projects.option_count)]
         assert [o.id for o in again] == [o.id for o in first]
         assert projects.highlighted == 1  # nothing jumped
+
+
+async def test_the_sidebar_lines_up_and_its_legend_follows_the_list(fake_home):
+    """The list as wide as the sidebar (it was 4 cells short), its text where the heading's is, the
+    legend right under it (not at the bottom, with empty lines between) and the chart still last."""
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await loaded(pilot, app)
+        await pilot.pause(0.3)
+        side, projects = app.query_one("#sidebar"), app.projects
+        heading, legend, chart = (app.query_one(".heading"), app.query_one(".legend"), app.query_one("#activity"))
+        assert projects.region.width == side.region.width  # no dead strip on its right
+        # The text of the lines starts where the heading's does: the first mark under the heading's first letter.
+        assert projects.region.x + ProjectList.INSET == heading.region.x + heading.styles.padding.left
+        assert legend.region.y - (projects.region.y + projects.region.height) == 1  # one line between
+        assert projects.region.height == projects.option_count + 1  # as high as its lines and the rule under All
+        assert chart.region.y > legend.region.bottom  # the chart is below, where it was
+
+
+async def test_a_long_project_list_scrolls_and_leaves_the_legend_and_chart_in_sight(fake_home):
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 30)) as pilot:
+        await loaded(pilot, app)
+        projects = app.projects
+        first = next(iter(app.sessions.values()))
+        many = [replace_cwd(first, f"/work/project-{i}") for i in range(40)]
+        projects.show_projects(many)
+        await pilot.pause(0.3)
+        legend, chart = app.query_one(".legend"), app.query_one("#activity")
+        assert projects.region.bottom <= legend.region.y  # it does not push the legend off
+        assert legend.region.bottom <= chart.region.y and chart.region.bottom <= app.size.height
+        assert projects.virtual_size.height > projects.size.height  # so the rest scrolls
 
 
 async def test_live_updates_change_rows_in_place(fake_home, monkeypatch):

@@ -182,7 +182,8 @@ QUIET_SECONDS = 5 * 60
 COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon starts it (cold_note)
 KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
 SETTLE_AFTER = (5, 45)  # seconds after the list is shown: memory set aside from the collector (settle_memory)
-PICKER_ONLY = {"toggle", "cycle_mode", "toggle_all", "save_workspace", "open", "hide", "toggle_hidden"}
+PICKER_ONLY = {"toggle", "cycle_mode", "toggle_all", "save_workspace", "open", "hide", "toggle_hidden",
+               "fold_teams"}
 SHIMMER = "#e8f3ff"  # the bright band that sweeps across "working"
 STAR = "·✢✶✻✽✻✶✢"   # Claude Code's turning star; none of these are drawn as emoji
 EXPAND_WIDTH = 64   # the Title column at its widest: the outcome wraps inside it
@@ -522,8 +523,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     #body { height: 1fr; margin: 0 1; opacity: 0; }
     #sidebar { width: 26; margin-right: 1; background: $sunken; }
     #sidebar > .heading { color: $text-muted; text-style: bold; padding: 1 2 0 2; }
-    #sidebar > .legend { height: 2; padding: 0 2; }
-    #projects { height: 1fr; background: $sunken; }
+    #sidebar > .legend { height: 2; margin-top: 1; padding: 0 2; }
+    #sidebar > #gap { height: 1fr; }  /* what the list leaves: the legend follows the list, the chart keeps the bottom */
+    #projects { width: 100%; background: $sunken; }
     #projects:focus { background: $sunken; }
     #activity { height: 4; margin: 0 2 1 2; }
     #activity > .sparkline--max-color { color: $accent; }
@@ -564,6 +566,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         # Kept out of the footer so the rest fits; ? lists every key.
         Binding("a", "toggle_all", "All/none", show=False),
         Binding("e", "expand", "Expand", show=False),
+        Binding("E", "fold_teams", "Fold teams", show=False),
         Binding("p", "prompt", "Prompt"),
         Binding("j", "next_waiting", "Waiting"),
         Binding("s", "summarize", "Summary"),
@@ -669,6 +672,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 yield Label("PROJECTS", classes="heading")
                 yield ProjectList(id="projects")
                 yield Static(LEGEND, classes="legend")
+                yield Static(id="gap")
                 yield Label(f"TOKENS · {CHART_DAYS} DAYS", classes="heading")
                 yield TokenChart([0] * CHART_DAYS, id="activity")  # in real pixels where it can be
             with Vertical(id="main"):
@@ -818,6 +822,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         least = OTHER_COLUMNS["live" if self.live_mode else "picker"] + TITLE_MIN
         width = self.size.width if width is None else width
         self.dashboard.set_class(width - SIDEBAR < least, "no-sidebar")
+        if hasattr(self, "projects"):  # the first resize comes before on_mount
+            self.call_after_refresh(self.projects.fit)  # the list keeps clear of the legend and chart at any height
         self.call_after_refresh(self.fit_title)
 
     @work(thread=True)
@@ -2334,10 +2340,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def team_key_pairs(self, state: teamtree.TeamState) -> tuple[tuple[str, str], ...]:
         name = state.team.name
         if not self.team_open(name):
-            return (("Enter", "team view"), ("s", "start the team"), ("e", "members"), ("Space", "tick"),
-                    ("a", "add"), ("x", "hide"), ("T", "teams"))
+            return (("Enter", "team view"), ("s", "start the team"), ("e", "members"), ("E", "all teams"),
+                    ("Space", "tick"), ("a", "add"), ("x", "hide"), ("T", "teams"))
         unfolded = name in self.unfolded
-        return (("Enter", "team view"), ("e", "fold" if unfolded else "unfold"),
+        return (("Enter", "team view"), ("e", "fold" if unfolded else "unfold"), ("E", "all teams"),
                 ("s", "start the rest"), ("a", "add"), ("x", "close"), ("T", "teams"))
 
     def member_messages(self, session: Session, room: int) -> Text:
@@ -2356,6 +2362,21 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def toggle_folded(self, name: str) -> None:
         self.unfolded ^= {name}
         self.refresh_rows()
+
+    def action_fold_teams(self) -> None:
+        """E: every team in the list unfolded, its members under its row; pressed again, every team back
+        to one row. Any team still folded (one that came in since) makes the next press unfold."""
+        names = {state.team.name for state, _ in self.blocks}
+        if not names:
+            self.notify("No team in the list to unfold.", timeout=4)
+            return
+        key = self.cursor_key()
+        self.unfolded = self.unfolded - names if names <= self.unfolded else self.unfolded | names
+        self.refresh_rows()
+        if key is not None and key not in self.table.rows:  # a member folded away: its team's row, not a stray one
+            team = self.member_rows.get(key, ("", ""))[0]
+            if f"{TEAM_ROW}{team}" in self.table.rows:
+                self.table.move_cursor(row=self.table.get_row_index(f"{TEAM_ROW}{team}"))
 
     def toggle_team_selected(self, name: str) -> None:
         """Tick a closed team's members, or untick them all when they are all ticked."""

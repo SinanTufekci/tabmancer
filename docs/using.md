@@ -109,6 +109,7 @@ the highlighted session the preview says what `Enter` will do with it, as it sta
 | `s` | AI summary of the highlighted session; on a team's row, start every member not open |
 | `l` | switch to the live view and back |
 | `e`, click | open the row to see how the session ended (again to close); on a team's row, its members under it (again to fold) |
+| `E` | every team's members under its row, or every team back to one row; each press goes the other way |
 | `p` | write a prompt to the highlighted session |
 | `n` | start fresh sessions in several projects at once |
 | `T` | teams: several sessions on one project with an orchestrator, talking to each other; the list of them, and a new one (a team's own view: `Enter` on its row) |

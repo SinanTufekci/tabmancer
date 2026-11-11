@@ -129,7 +129,8 @@ latest one beside it, and a message flying along the wires as it is sent. From 1
 the newest messages are listed beside it.
 
 `Enter` on the team's row opens the team view. `e` unfolds the team: its members hang under
-its row as a tree, the lead first, each with the latest message to or from it. A
+its row as a tree, the lead first, each with the latest message to or from it. `E` does it for every
+team in the list at once, and again folds them all. A
 member's row is an ordinary session row (`Enter`, `h`, `p` and the rest work as on any
 other), and its preview says how many messages it got and sent. On the team's row, `s`
 starts every member that is not open, `a` adds members (each opens and introduces itself to
