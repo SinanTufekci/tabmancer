@@ -104,6 +104,34 @@ class Host(App):
         self.push_screen(self.dialog)
 
 
+async def test_the_team_form_shows_that_ctrl_e_improves_the_goal(tmp_path, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(summarize, "ask", lambda prompt, model, timeout=180, effort="": release.wait(5) and "Better.")
+    dialog = NewTeamDialog(str(tmp_path), set())
+    async with Host(dialog).run_test(size=(120, 30)) as pilot:
+        await pilot.pause(0.2)
+        card = dialog.query_one("#team-card")
+        assert str(card.border_subtitle) == "Ctrl+E improves the goal"  # always there, as n's message card has it
+        keys = dialog.query_one("#team-keys")
+        assert len(keys.render().plain) <= keys.parent.content_size.width  # one line in a 120x30 window...
+        assert "Ctrl+E" not in keys.render().plain  # ...which has no room for one more key: the border says it
+        goal = dialog.query_one("#team-goal", TextArea)
+        goal.insert("add stripe checkout with tests")
+        goal.focus()
+        await pilot.press("ctrl+e")
+        await until(pilot, lambda: dialog.improving is not None)
+        assert "improving the goal with" in str(card.border_subtitle)  # at it, and the card says so
+        release.set()
+        await until(pilot, lambda: goal.text == "Better.")
+        await until(pilot, lambda: str(card.border_subtitle) == "Ctrl+E improves the goal")
+    async with Host(NewTeamDialog(str(tmp_path), set())).run_test(size=(170, 40)) as pilot:
+        await pilot.pause(0.3)
+        shown = pilot.app.screen.query_one("#team-keys").render().plain
+        assert "Ctrl+E  improve" in shown and "Esc  cancel" in shown  # room for it: among the keys
+
+
 async def test_ctrl_e_improves_a_teams_goal(tmp_path, monkeypatch):
     asked = answering(monkeypatch, "Add Stripe checkout:\n- the payment page\n- tests for each case")
     dialog = NewTeamDialog(str(tmp_path), set())

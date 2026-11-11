@@ -1263,21 +1263,44 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
                             yield Choice([picks.NO_ADVISOR, *picks.ADVISORS], id="team-advisor",
                                          labels=newsessions.ADVISOR_SHORT)
             yield Label("", id="team-help")
-            # One line, even in a 120x30 window: a second one would be cut off there.
-            yield Label(keys(("Ctrl+S", "create"), ("Tab", "next"), ("Ctrl+T", "line-up"), ("Ctrl+L", "keep"),
-                             ("Ctrl+R", "suggest"), ("Ctrl+G", "role"), ("Esc", "cancel")), classes="hint")
+            yield Label(self.key_line(0), id="team-keys", classes="hint")
+
+    GOAL_NOTE = "Ctrl+E improves the goal"  # on the Team card's border, as n's message card has its own
+
+    def key_line(self, width: int) -> Text:
+        """The keys under the dialog, on one line, even in a 120x30 window: a second one would be cut off
+        there. Ctrl+E (also on the Team card's border, always) joins them where the line has room."""
+        pairs = [("Ctrl+S", "create"), ("Tab", "next"), ("Ctrl+T", "line-up"), ("Ctrl+L", "keep"),
+                 ("Ctrl+R", "suggest"), ("Ctrl+G", "role"), ("Esc", "cancel")]
+        with_improve = [*pairs[:5], ("Ctrl+E", "improve"), *pairs[5:]]
+        wide = keys(*with_improve)
+        return wide if width and wide.cell_len <= width else keys(*pairs)
+
+    def show_keys(self) -> None:
+        line = self.query_one("#team-keys", Label)
+        line.update(self.key_line(line.parent.content_size.width if line.parent is not None else 0))
+
+    def show_improving(self) -> None:
+        """The Team card's border: what Ctrl+E does, or that it is at it (the goal is rewritten in a thread)."""
+        self.query_one("#team-card").border_subtitle = (
+            Text(f"improving the goal with {improve.MODEL}…", style=f"bold {AMBER}")
+            if self.improving is not None else self.GOAL_NOTE)
 
     def on_mount(self) -> None:
         self.query_one("#team-card").border_title = "Team"
+        self.show_improving()
         self.query_one("#lineup-card").border_title = "Line-up"
         self.query_one("#runs-card").border_title = "Runs"
         self.show_preview()
         self.show_help()
+        self.show_keys()
         self.call_after_refresh(self.show_preview)  # laid out: the line-ups wrap to the card's width
+        self.call_after_refresh(self.show_keys)
 
     def on_resize(self, event: events.Resize) -> None:
         if self.is_mounted:
             self.show_preview()
+            self.show_keys()
 
     def accent(self) -> str:
         theme = getattr(self.app, "theme", "") if self.is_attached else ""
@@ -1766,6 +1789,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
                         timeout=5)
             return
         self.improving = box.text
+        self.show_improving()
         self.notify(f"Improving the goal with {improve.MODEL}…", timeout=4)
         folder = self.read()[1]
         text = box.text
@@ -1781,6 +1805,8 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
 
     def improved(self, text: str, better: str, why: str) -> None:
         self.improving = None
+        if self.is_mounted:
+            self.show_improving()
         if self.is_mounted and newsessions.put_improved(self.query_one("#team-goal", TextArea), text, better, why,
                                                         self.notify):
             self.notify("Goal improved: Ctrl+Z in the box puts yours back.", timeout=6)
