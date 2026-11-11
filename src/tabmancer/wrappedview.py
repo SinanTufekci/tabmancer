@@ -51,10 +51,22 @@ class CardPicture(PixelPicture, Static):
     def turn(self, shape: str) -> None:
         self.shape = shape
         self.refresh()
+        self.draw_picture()
 
     def show(self, week: wrapped.Week, shape: str, slide: str, names: bool) -> None:
         self.week, self.shape, self.slide, self.names = week, shape, slide, names
         self.refresh()
+        self.draw_picture()  # the picture is only drawn again when asked: a new slide, shape, period or names
+
+    def draw_picture(self) -> None:
+        """The picture, unless the card is larger than the room: then the card in words (render) is
+        what shows, and no picture, clipped, goes over it."""
+        if self.picture is not None and self.unit() == 0:
+            if self.picture.data:
+                self.picture.data, self.drawn = "", None
+                self.refresh()  # its words written over a Sixel image; a kitty one is taken off by the host
+            return
+        super().draw_picture()
 
     def unit(self) -> int:
         """Real pixels a design pixel, the most the card fits in at: 0 when it does not."""

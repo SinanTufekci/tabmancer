@@ -155,6 +155,57 @@ async def test_the_screen_goes_through_slides_periods_and_saves_one_moving(in_de
         assert saved == [(b"GIF89a", f"claude-code-wrapped-{date.today().isoformat()}-all-time-tokens.gif")]
 
 
+async def test_the_picture_follows_the_slide_the_shape_the_names_and_the_period(in_demo, monkeypatch):
+    from tabmancer import bitart, sixel
+    from tabmancer.wrappedview import CardPicture
+
+    monkeypatch.setattr(sixel, "_terminal", sixel.Terminal(bitart.WT_CELL))
+    app = in_demo
+    async with app.run_test(size=(160, 50)) as pilot:
+        for _ in range(80):
+            await pilot.pause(0.05)
+            if app.token_report is not None:
+                break
+        await pilot.press("W")
+        await pilot.pause(0.3)
+        shown = app.screen.query_one(CardPicture)
+        seen = [shown.picture.data]
+        # a slide, the story shape, on to the tools slide (the one the top project's name is on), the names, the month
+        for key in ("right", "f", "right", "right", "right", "n", "2"):
+            await pilot.press(key)
+            for _ in range(100):
+                await pilot.pause(0.05)
+                if not app.screen.counting:
+                    break
+            assert shown.drawn is not None and shown.drawn[0] == shown.picture_key(), key  # not the last one's
+            assert shown.picture.data != seen[-1], key
+            seen.append(shown.picture.data)
+
+
+async def test_a_card_larger_than_the_room_is_in_words_with_no_picture_over_them(in_demo, monkeypatch):
+    from tabmancer import bitart, sixel
+    from tabmancer.wrappedview import CardPicture
+
+    monkeypatch.setattr(sixel, "_terminal", sixel.Terminal(bitart.WT_CELL))
+    app = in_demo
+    async with app.run_test(size=(120, 40)) as pilot:  # the story card needs more rows than this has
+        for _ in range(80):
+            await pilot.pause(0.05)
+            if app.token_report is not None:
+                break
+        await pilot.press("W")
+        await pilot.pause(0.3)
+        shown = app.screen.query_one(CardPicture)
+        assert shown.unit() == 2 and shown.picture.data.startswith("\x1bP")  # the wide card fits
+        await pilot.press("f")
+        await pilot.pause(0.2)
+        assert shown.unit() == 0 and shown.picture.data == ""  # no clipped card sent over the words
+        assert "larger than this window" in shown.render().plain
+        await pilot.press("f")  # and back: the picture comes again
+        await pilot.pause(0.2)
+        assert shown.unit() == 2 and shown.picture.data.startswith("\x1bP")
+
+
 def test_tabmancer_wrapped_saves_a_month_slide_as_a_gif(in_demo, tmp_path, capsys, monkeypatch):
     from tabmancer import cli
 
