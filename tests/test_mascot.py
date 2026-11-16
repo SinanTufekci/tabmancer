@@ -315,7 +315,7 @@ async def test_the_dashboard_tells_bit_where_the_pointer_is(fake_home):
         assert app.mascot.pointer_seen > before
 
 
-async def test_without_the_focus_bit_is_drawn_less_often_and_lives_on(fake_home, monkeypatch):
+async def test_without_the_focus_bit_is_drawn_as_smoothly(fake_home, monkeypatch):
     from textual import events
 
     from tabmancer.app import SessionPicker
@@ -338,7 +338,7 @@ async def test_without_the_focus_bit_is_drawn_less_often_and_lives_on(fake_home,
         app.post_message(events.AppBlur())
         await pilot.pause(0.1)
         part, frames = await share(1.0)
-        assert part <= M.UNFOCUSED_FPS / M.FPS + 0.1 and frames >= 8  # a few times a second; it goes on all the same
+        assert part > 0.9 and frames >= 8  # a window on a second screen is watched without the focus
         app.post_message(events.AppFocus())
         await pilot.pause(0.1)
         assert (await share(0.8))[0] > 0.9

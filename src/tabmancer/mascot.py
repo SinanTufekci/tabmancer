@@ -39,7 +39,6 @@ ROWS = 4
 PIXELS = ROWS * 4       # pixel rows
 FPS = 20
 TICK = 1 / FPS
-UNFOCUSED_FPS = 5       # drawn this often while the window does not have the focus
 SPRITE_W = 22           # sprite width in pixels: a cell each side for the arms when raised
 SPRITE_H = 15           # ... and height, standing on the bottom of the strip
 WIDTH = SPRITE_W // 2   # sprite width in cells
@@ -416,10 +415,9 @@ class Mascot(Widget):
 
     def tick(self) -> None:
         self.advance()
-        # In a window without the focus (another one in front, another tab), Bit goes on at its
-        # own pace but is drawn and sent a few times a second only: the drawing is what costs.
-        if not getattr(self.app, "app_focus", True) and self.frame % (FPS // UNFOCUSED_FPS):
-            return
+        # Drawn as often without the focus: a window on a second screen has none and is watched all
+        # the same (drawn five times a second there, Bit moved in jerks), and a terminal says nothing
+        # of whether its window can be seen.
         # Behind a dialog it is not drawn at all: there its picture cannot be shown, and with a
         # dialog in front, Textual sends the whole screen again for any change behind it.
         if self.app.screen is not self.screen:
