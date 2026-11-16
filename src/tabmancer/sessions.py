@@ -25,7 +25,7 @@ from . import __version__
 from .config import read_json, write_json
 
 CACHE_FILE = "index.json"
-CACHE_FORMAT = 7  # bump when Session or the parser changes shape (7: the effort of the last reply)
+CACHE_FORMAT = 8  # bump when Session or the parser changes shape (8: what runs in the background)
 HEAD_BYTES = 512 * 1024
 TAIL_BYTES = 2 * 1024 * 1024
 MAX_HEAD_BYTES = 8 * 1024 * 1024
@@ -37,6 +37,40 @@ LOCAL_PREFIXES = ("<command-name>", "<command-message>", "<local-command", "<bas
 RESETS = re.compile(r"resets\s+(?:(?P<month>[A-Za-z]{3})[a-z]*\s+(?P<day>\d{1,2}),?\s+)?(?P<hour>\d{1,2})"
                     r"(?::(?P<minute>\d{2}))?\s*(?P<half>[ap]m)(?:\s*\((?P<zone>[^)]+)\))?", re.IGNORECASE)
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+# A command a session runs in the background to keep its cache warm while it waits (teams.py's roles
+# ask for `sleep 3300`): "sleep 3300", "sleep 55m", "Start-Sleep -Seconds 3300". Its seconds, by group.
+KEEP_WARM = re.compile(r"^\s*(?:sleep\s+(?P<n>\d+(?:\.\d+)?)(?P<unit>[smh]?)"
+                       r"|start-sleep\s+(?:-s(?:econds)?\s+)?(?P<ps>\d+))\s*;?\s*$", re.IGNORECASE)
+UNITS = {"": 1, "s": 1, "m": 60, "h": 3600}
+# Claude Code tells a session a background command has ended with a <task-notification> naming the
+# tool call that started it (as a user record, or a queued_command attachment when it was mid-turn).
+TASK_DONE = re.compile(r"<task-notification>.*?<tool-use-id>([^<\s]+)</tool-use-id>", re.DOTALL)
+SLEEP_GRACE = 120  # seconds past its end a keep-warm sleep still counts, before it is taken for gone
+# The id Claude Code gives a command it runs in the background, in the call's result, and its word when
+# the session stops one itself (TaskStop; KillShell before it), which no <task-notification> follows.
+TASK_ID = re.compile(r"Command running in background with ID: (\w+)")
+TASK_STOPPED = re.compile(r"Successfully (?:stopped task|killed shell): (\w+)")
+BACKGROUND_BACK = timedelta(hours=2)  # how far back a first read looks for what still runs in the background
+# Lines worth parsing there: a call that runs in the background, its id, its end.
+BACKGROUND_MARKS = (b'"run_in_background":true', b"Command running in background", b"<task-notification>",
+                    b"Successfully stopped task", b"Successfully killed shell")
+# Claude Code's notice when another model answers in the one asked for (2.1.325, seen once in 340
+# transcripts): "Opus 5.5's safeguards flagged this session. ... Opus 4.8 is answering instead, or you
+# can edit and retry with Opus 5.5." Looser words for the other ways it might say so.
+NAMED = r"(?:Opus|Sonnet|Haiku|Fable) \d+(?:\.\d+)?"
+ANSWERS_INSTEAD = re.compile(rf"(?P<to>{NAMED}) is answering instead|(?:falling|fell|fallen) back to (?P<to2>{NAMED})"
+                             rf"|switch(?:ed|ing) to (?P<to3>{NAMED})", re.IGNORECASE)
+MODEL_COMMAND = "<command-name>/model</command-name>"  # you picked the model: not a fall
+
+
+def keep_warm_seconds(command: str) -> float | None:
+    """How long a keep-warm sleep lasts, or None when the command is anything else."""
+    found = KEEP_WARM.match(command)
+    if found is None:
+        return None
+    if found["ps"]:
+        return float(found["ps"])
+    return float(found["n"]) * UNITS[found["unit"].lower()]
 
 
 class Status(str, Enum):
@@ -94,6 +128,14 @@ class Session:
     effort: str = ""  # ...and its effort, which Claude Code writes on each reply (2.1.319); empty before that
     resets: datetime | None = None  # stopped at a usage limit (open or not): when the limit lifts
     signed_in_again: bool = False  # ...and /login in it since: another account, so it can go on now
+    # From the transcript, for an open session (mark_live): Claude Code says "busy" while a command
+    # the session started in the background runs, though its turn is over and it waits.
+    turn_over: bool = False  # its last reply ended (or you stopped it): nothing is being worked on
+    warm_until: datetime | None = None  # a keep-warm sleep runs in the background until then
+    aside: list[str] = field(default_factory=list)  # other background commands still running
+    # Another model answering in the one it ran on, which Claude Code did by itself (its safeguards
+    # stopped a reply, say): "Opus 5.5 → Opus 4.8 (safeguards)". Gone once the first one answers again.
+    fell_back: str = ""
 
     @property
     def project(self) -> str:
@@ -394,7 +436,8 @@ def _read_on(path: Path, stat: os.stat_result, followed: _Followed) -> Session:
         f.seek(followed.read)
         data = f.read(max(0, stat.st_size - followed.read))
     whole = data.rfind(b"\n") + 1  # a line still being written waits for the next read
-    tail = replace(followed.tail, files=dict(followed.tail.files))
+    tail = replace(followed.tail, files=dict(followed.tail.files), shells=dict(followed.tail.shells),
+                   tasks=dict(followed.tail.tasks))
     session = replace(followed.session, size=stat.st_size, last_active=datetime.fromtimestamp(stat.st_mtime),
                       live_state="", resets=None, signed_in_again=False)
     records = _parse_lines(data[:whole], drop_first=False, drop_last=False)
@@ -472,6 +515,162 @@ class _Tail:
     cost_state: dict | None = None
     last_prompt_record: dict | None = None
     files: dict[str, None] = field(default_factory=dict)
+    # Commands started in the background and not reported done: tool call id -> (command, started at)
+    shells: dict[str, tuple[str, datetime | None]] = field(default_factory=dict)
+    tasks: dict[str, str] = field(default_factory=dict)  # their ids as Claude Code names them -> tool call id
+    model: str = ""  # the model of the last reply, as an id
+    turn_model: str = ""  # ...of the last reply in this turn ('' until the turn has one)
+    before: str = ""  # the model it ran on before another took over ('' while none has)
+    fell_back: str = ""
+
+
+def _watch_model(record: dict, tail: _Tail) -> None:
+    """Another model taking over from the one a session runs on, by itself: Claude Code's notice that
+    one answers instead, or the replies of one turn coming from another model (you cannot change the
+    model in the middle of a turn, nor resume in it). A /model of yours, or the first model answering
+    again, ends it. A new turn on another model is not one: a session resumed with --model is so."""
+    kind = record.get("type")
+    if kind == "system":
+        said = record.get("content") if isinstance(record.get("content"), str) else ""
+        found = ANSWERS_INSTEAD.search(said) if record.get("level") in ("notice", "warning") else None
+        if found and tail.model:
+            why = " (safeguards)" if "safeguard" in said.lower() else " (overloaded)" if "overload" in said.lower() else ""
+            to = found["to"] or found["to2"] or found["to3"]
+            tail.before = tail.before or tail.model
+            tail.fell_back = f"{_model_words(tail.before)} → {to}{why}"
+        return
+    if kind == "user" and not record.get("isSidechain"):
+        said = _text((record.get("message") or {}).get("content"))
+        if MODEL_COMMAND in said:
+            tail.before = tail.fell_back = ""
+        elif _is_real_prompt(record) or _peer_text(record):
+            tail.turn_model = ""
+        return
+    if kind != "assistant" or record.get("isSidechain"):
+        return
+    model = (record.get("message") or {}).get("model")
+    if not isinstance(model, str) or not model or model.startswith("<"):
+        return
+    if tail.before and model == tail.before:  # the first one answers again
+        tail.before = tail.fell_back = ""
+    elif tail.turn_model and _weaker(model, tail.turn_model) and not tail.before:
+        tail.before = tail.turn_model
+        tail.fell_back = f"{_model_words(tail.turn_model)} → {_model_words(model)}"
+    tail.model = tail.turn_model = model
+
+
+RANK = {"haiku": 0, "sonnet": 1, "opus": 2, "fable": 3}
+STRENGTH = re.compile(r"(haiku|sonnet|opus|fable)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)")
+
+
+def _weaker(model: str, than: str) -> bool:
+    """Whether a model is weaker than another: by family, then version. A rise (back to the first
+    model, from a tail that began after the fall) is no fall."""
+    def strength(name: str) -> tuple[int, int, int] | None:
+        found = STRENGTH.search(name.lower())
+        return (RANK[found[1]], int(found[2]), int(found[3] or 0)) if found else None
+    a, b = strength(model), strength(than)
+    return a is not None and b is not None and a < b
+
+
+def _model_words(model: str) -> str:
+    """claude-opus-5-5 -> Opus 5.5 (as picks.model_name, which this module cannot import)."""
+    parts = model.removeprefix("claude-").split("[")[0].split("-")
+    if len(parts) < 2 or not parts[0].isalpha():
+        return model
+    numbers = [p for p in parts[1:] if p.isdigit() and len(p) < 4]
+    return f"{parts[0].capitalize()} {'.'.join(numbers)}".strip()
+
+
+def _started_in_background(record: dict) -> list[tuple[str, str]]:
+    """(tool call id, command) for each command an assistant record starts in the background."""
+    content = (record.get("message") or {}).get("content")
+    out = []
+    for block in content if isinstance(content, list) else []:
+        given = block.get("input") or {}
+        if block.get("type") == "tool_use" and block.get("id") and given.get("run_in_background") is True:
+            out.append((block["id"], str(given.get("command") or given.get("description") or block.get("name") or "")))
+    return out
+
+
+def _reported_done(record: dict) -> list[str]:
+    """The tool call ids of the background commands a record says have ended."""
+    kind = record.get("type")
+    if kind == "user":
+        text = _text((record.get("message") or {}).get("content"))
+    elif kind == "attachment":
+        text = str((record.get("attachment") or {}).get("prompt") or "")
+    elif kind == "queue-operation":
+        text = record.get("content") if isinstance(record.get("content"), str) else ""
+    else:
+        return []
+    return TASK_DONE.findall(text) if "<task-notification>" in text else []
+
+
+def _track_shells(record: dict, tail: _Tail) -> None:
+    """The commands the session runs in the background, after this record: one it starts, the id it is
+    given, its end reported, or its stop by the session itself."""
+    kind = record.get("type")
+    if kind == "assistant" and not record.get("isSidechain"):
+        for call, command in _started_in_background(record):
+            tail.shells[call] = (command, _stamp(record))
+        return
+    if not tail.shells:
+        return
+    if kind == "user":
+        content = (record.get("message") or {}).get("content")
+        for block in content if isinstance(content, list) else []:
+            if block.get("type") != "tool_result":
+                continue
+            said = _text(block.get("content")) if not isinstance(block.get("content"), str) else block["content"]
+            found = TASK_ID.search(said) if block.get("tool_use_id") in tail.shells else None
+            if found:
+                tail.tasks[found[1]] = block["tool_use_id"]
+            for task in TASK_STOPPED.findall(said):
+                tail.shells.pop(tail.tasks.pop(task, ""), None)
+    for call in _reported_done(record):
+        tail.shells.pop(call, None)
+
+
+def _shells_before(f, start: int, tail: _Tail) -> None:
+    """What still runs in the background, started before the tail window: a team member's keep-warm
+    sleep lasts 55 minutes, and its requests (logged whole) can push its start out of the window's 2
+    MB in a few. Only a transcript written to in the last BACKGROUND_BACK, and only the lines that say
+    something of such a command, are read, back to where the transcript is older than that."""
+    since = datetime.now() - BACKGROUND_BACK
+    if start <= 0 or datetime.fromtimestamp(os.fstat(f.fileno()).st_mtime) < since:
+        return
+    span, records = TAIL_BYTES, []
+    while True:
+        begin = max(0, start - span)
+        f.seek(begin)
+        chunk = f.read(start - begin)
+        first = chunk.find(b'"timestamp":"', chunk.find(b"\n") + 1 if begin else 0) + 13
+        oldest = _stamp({"timestamp": chunk[first:chunk.find(b'"', first)].decode("ascii", "replace")}) \
+            if first >= 13 else None
+        if begin == 0 or span >= MAX_TAIL_BYTES or (oldest is not None and oldest < since):
+            break
+        span *= 4
+    lines = chunk.split(b"\n")[1 if begin else 0:]
+    for raw in lines:
+        if raw.startswith(b'{"type":"api-request') or not any(mark in raw for mark in BACKGROUND_MARKS):
+            continue
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(record, dict):
+            records.append(sanitize(record))
+    for record in records:
+        _track_shells(record, tail)
+
+
+def _stamp(record: dict) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(record.get("timestamp")).replace("Z", "+00:00")).astimezone().replace(
+            tzinfo=None)
+    except ValueError:
+        return None
 
 
 def _read_tail(f, size: int, session: Session) -> tuple[_Tail, int]:
@@ -488,6 +687,7 @@ def _read_tail(f, size: int, session: Session) -> tuple[_Tail, int]:
             break
         span *= 4  # a few huge trailing records pushed the conversation out of view
     tail = _Tail()
+    _shells_before(f, start, tail)
     _scan_tail(records, session, tail)
     _finish_tail(f, size, session, tail)
     return tail, start + chunk.rfind(b"\n") + 1
@@ -497,6 +697,8 @@ def _scan_tail(records: list[dict], session: Session, tail: _Tail) -> None:
     """Records in the order written, into the tail's state and the session's fields."""
     for i, record in enumerate(records, start=tail.seen):
         kind = record.get("type")
+        _track_shells(record, tail)
+        _watch_model(record, tail)
         if kind == "custom-title":
             tail.custom_title = record.get("customTitle") or tail.custom_title
         elif kind == "ai-title":
@@ -570,10 +772,45 @@ def _finish_tail(f, size: int, session: Session, tail: _Tail) -> None:
     elif session.status is Status.ERROR and last_conversation.get("error") == "server_error":
         session.status = Status.DROPPED  # "Can't reach the API server", "Connection dropped" and the like
     session.exit = Exit.CLEAN if tail.last_cost > tail.last_activity else Exit.KILLED
+    session.turn_over = session.status in (Status.DONE, Status.STOPPED)
+    session.fell_back = tail.fell_back
+    _background_now(session, tail)
     if tail.cost_state:
         session.lines_added = tail.cost_state.get("totalLinesAdded")
         session.lines_removed = tail.cost_state.get("totalLinesRemoved")
         session.cost_usd = tail.cost_state.get("totalCostUSD")
+
+
+def _background_now(session: Session, tail: _Tail) -> None:
+    """What the session still runs in the background: until when a keep-warm sleep keeps its cache
+    warm, and the other commands. A sleep long past its end is taken for gone (its process ended
+    with the session, say, and nothing reported it), and so dropped from the tail."""
+    now = datetime.now()
+    warm, aside = None, []
+    for call, (command, started) in list(tail.shells.items()):
+        seconds = keep_warm_seconds(command)
+        if seconds is None:
+            aside.append(command)
+            continue
+        end = (started or now) + timedelta(seconds=seconds)
+        if end + timedelta(seconds=SLEEP_GRACE) < now:
+            del tail.shells[call]
+        else:
+            warm = max(warm, end) if warm else end
+    session.warm_until, session.aside = warm, aside
+
+
+def waits_in_background(session: Session) -> str:
+    """For a session Claude Code calls busy: "warm" when its turn is over and all it runs is a
+    keep-warm sleep (it waits, as an idle one does), "aside" when its turn is over and another
+    command it started runs in the background, else "" (it is at work)."""
+    if not session.turn_over:
+        return ""
+    if session.aside:
+        return "aside"
+    if session.warm_until is not None and session.warm_until + timedelta(seconds=SLEEP_GRACE) >= datetime.now():
+        return "warm"
+    return ""
 
 
 def _relative(paths: list[str], cwd: str) -> list[str]:
@@ -696,6 +933,15 @@ def mark_live(session: Session, info: dict | None) -> None:
         session.live_state = turn
     else:
         session.live_state = state or turn
+    # A command left running in the background after the turn ended: `claude agents --json` calls
+    # the session "busy", its pid file "shell" (2.1.325; the quick poll reads that, the full one the
+    # other, and the state went back and forth). A keep-warm sleep: it waits, as an idle session
+    # does. Another command: it is waiting for that, aside.
+    if session.live_state in ("busy", "working", "shell"):
+        how = waits_in_background(session)
+        if session.live_state == "shell" and not how:  # its turn is over, says Claude Code
+            how = "warm" if session.warm_until is not None and not session.aside else "aside"
+        session.live_state = {"warm": "idle", "aside": "aside"}.get(how, session.live_state)
 
 
 def transcript_path(session_id: str) -> Path | None:
@@ -709,10 +955,13 @@ def _to_cache(session: Session | None) -> dict | None:
         return None
     data = asdict(session)
     data.pop("live_state")
+    # What runs in the background is kept too: a session open when the dashboard starts, its transcript
+    # unchanged since, is not read again, and a keep-warm sleep in it would look like work for an hour.
     return dict(data, path=str(session.path), status=session.status.value, exit=session.exit.value,
                 started=session.started.isoformat() if session.started else None,
                 last_active=session.last_active.isoformat(),
-                resets=session.resets.isoformat() if session.resets else None)
+                resets=session.resets.isoformat() if session.resets else None,
+                warm_until=session.warm_until.isoformat() if session.warm_until else None)
 
 
 def _from_cache(data: dict) -> Session:
@@ -720,7 +969,8 @@ def _from_cache(data: dict) -> Session:
         data, path=Path(data["path"]), status=Status(data["status"]), exit=Exit(data["exit"]),
         started=datetime.fromisoformat(data["started"]) if data["started"] else None,
         last_active=datetime.fromisoformat(data["last_active"]),
-        resets=datetime.fromisoformat(data["resets"]) if data.get("resets") else None))
+        resets=datetime.fromisoformat(data["resets"]) if data.get("resets") else None,
+        warm_until=datetime.fromisoformat(data["warm_until"]) if data.get("warm_until") else None))
 
 
 def _read_cached(paths: list[Path], reader=None) -> list[Session]:

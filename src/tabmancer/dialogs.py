@@ -60,6 +60,7 @@ def cards(name: str) -> str:
     {name} .card {{ border: round $panel-lighten-2; border-title-color: $text-muted; border-title-style: bold;
                     border-subtitle-color: $text-muted; padding: 0 1; background: $surface; }}
     {name} .card.-lit {{ border: round $accent; border-title-color: $accent; }}
+    {name} .card.-improved {{ border: round $success; }}
     {name} Input, {name} TextArea {{ margin: 0; background: $panel; }}
     {name} Input:focus, {name} TextArea:focus {{ background: $panel-lighten-1; }}
     {name} .hint {{ dock: bottom; }}

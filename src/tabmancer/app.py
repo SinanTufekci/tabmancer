@@ -191,7 +191,8 @@ TITLE_MIN = 18      # ...and at its narrowest
 # Every column but the title at its widest (an 18-character project name), with the title's padding
 # and the scrollbar: the title gets the rest. tests/test_layout.py holds these to it.
 OTHER_COLUMNS = {"picker": 72, "live": 84}
-MODEL_COLUMN = 14  # the Model column ('sonnet·xhigh' and its padding); on a narrow screen it is left empty
+MODEL_COLUMN = 18  # the Model column ('sonnet 5.5·xhigh' and its padding); on a narrow screen it is left empty
+MODEL_ROOM = MODEL_COLUMN - 2  # ...its words
 COLUMNS = ("sel", "project", "title", "status", "model", "exit", "active", "mode")
 EFFORT_SHORT = {"medium": "med"}  # as the Model column says an effort
 HEADING = "\x00"  # the keys of the rows that head the open sessions and the rest
@@ -393,6 +394,13 @@ def home_short(path: str) -> str:
 class SessionTable(DataTable):
     """A DataTable where clicking a row opens it up to show how that session ended,
     and clicking its [ ] box ticks it."""
+
+    def on_resize(self, event: events.Resize) -> None:
+        # Its own width is known here only: the window's resize comes before the layout gives it one,
+        # and the columns were fitted to the width before (a window made full screen from a small
+        # one kept the small one's columns, the Model column left out).
+        if isinstance(self.app, SessionPicker):
+            self.app.call_after_refresh(self.app.fit_title)
 
     def on_click(self, event: events.Click) -> None:
         # The row comes from the click itself. hover_coordinate is only as fresh as the
@@ -1001,16 +1009,21 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         )
 
     def model_cell(self, session: Session) -> Text:
-        """'opus·xhigh': the model of its last reply and the effort it ran at (as Claude Code wrote it, else
-        as tabmancer opened it); quiet, and left empty where the screen is too narrow for it."""
+        """'opus 5.5·xhigh': the model of its last reply, with its version, and the effort it ran at (as
+        Claude Code wrote it, else as tabmancer opened it); quiet, and left empty where the screen is too
+        narrow for it. An amber ↓ after the model: another took over by itself (Session.fell_back), and
+        the effort makes room for it where both do not fit."""
         if not self.model_shown or not session.model or session.model.startswith("<"):
             return Text("")
-        found = context.MODEL.search(session.model.lower())
-        model = found.group(1) if found else _clip(session.model.removeprefix("claude-"), 7)
+        model = context.short_model(session.model, MODEL_ROOM - 4)
+        fell = bool(session.fell_back) and session.exit is Exit.RUNNING
+        out = Text(model, style=(AMBER if fell else TEXT) if session.exit is Exit.RUNNING else MUTED)
+        if fell:
+            out.append("↓", style=f"bold {AMBER}")
         effort = self.effort_of(session)
-        out = Text(model, style=TEXT if session.exit is Exit.RUNNING else MUTED)
-        if effort:
-            out.append(f"·{EFFORT_SHORT.get(effort, effort)}", style=MUTED)
+        word = f"·{EFFORT_SHORT.get(effort, effort)}" if effort else ""
+        if word and out.cell_len + len(word) <= MODEL_ROOM:
+            out.append(word, style=MUTED)
         return out
 
     def process_cell(self, session: Session) -> Text:
@@ -1399,7 +1412,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             return "!", f"bold {RED}", f"bold {RED}", rank
         if rank == 1:
             return "●", RED, RED, rank
-        if raw == "shell":
+        if raw in ("shell", "aside"):
             return "◦", CYAN, TEXT, 3
         return "●", state_of(session)[1], TEXT, rank
 
@@ -1603,6 +1616,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         elif model := picks.model_name(session.model):
             effort = self.effort_of(session)
             grid.add_row("Model", Text.assemble((model, TEXT), (f" · {effort} effort" if effort else "", MUTED)))
+            if session.fell_back and session.exit is Exit.RUNNING:
+                grid.add_row("Fell back", Text(f"{session.fell_back}: /model in its tab picks yours again",
+                                               style=AMBER))
         if session.git_branch:
             grid.add_row("Branch", Text(f"⎇ {session.git_branch}", style=CYAN))
         state = self.git.get(folder_key(session.cwd))
@@ -1941,6 +1957,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if lead is None:
             return
         try:
+            left = handover.work_left(team, members)  # before anyone closes: what git shows still lying about
             others = [team.session_name(m) for m in team.members if not m.lead
                       and (s := members.get(m.name)) is not None and s.exit is Exit.RUNNING]
             if others:
@@ -1951,7 +1968,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 now, open_ones = self.call_from_thread(lambda: (self.sessions.get(lead.session_id, lead),
                                                                 self.open_ones()))
                 handover.close(now, open_ones, again="Close the lead's tab yourself (/exit), then h twice again")
-            written, lineup = handover.write_team(lead, team)
+            written, lineup = handover.write_team(lead, team, left)
         except (handover.HandoverError, summarize.SummaryError, OSError) as error:
             self.call_from_thread(self.notify, f"{team.name} was not handed over: {str(error).rstrip('.')}. Members "
                                                "closed on the way stay closed: s in the team's view starts them again.",
@@ -3298,6 +3315,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.hand_over(fresh, how)
                 continue
             old = self.sessions.get(sid)
+            if fresh.exit is Exit.RUNNING and fresh.fell_back and (old is None or old.fell_back != fresh.fell_back):
+                self.tell_fallback(fresh)
             was = state_of(old)[2] if old and old.exit is Exit.RUNNING else None
             now = state_of(fresh)[2] if fresh.exit is Exit.RUNNING else None
             if was == 2 and at_limit(fresh):
@@ -3337,6 +3356,19 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.sync_rows(changed)
             self.update_dashboard()
             self.check_limits()
+
+    def tell_fallback(self, session: Session) -> None:
+        """Another model took over in an open session by itself (its safeguards stopped a reply, say):
+        it goes on, weaker, unless you pick the model again, so it is said once, loud."""
+        who = session.project
+        if session.session_id in self.member_rows:
+            team, member = self.member_rows[session.session_id]
+            who = f"{team}: {member}"
+        self.notify(f"{who}: {session.fell_back}. It goes on with that model: /model in its tab picks yours again.",
+                    title="Model fell back", severity="warning", timeout=15)
+        if self.live_mode:
+            self.bell()
+        self.mascot.alert(session.project)
 
     def resting_members(self) -> set[str]:
         """The sessions of the teams' members other than their leads: idle, they wait for the lead's

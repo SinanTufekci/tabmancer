@@ -75,7 +75,9 @@ LIVE = {
     "done": ("waiting for you", "your-turn", 1, "waiting"),
     "busy": ("working", "working", 2, "working"),
     "working": ("working", "working", 2, "working"),
-    "shell": ("shell", "aside", 2, "shell"),
+    "shell": ("background command", "aside", 2, "shell"),  # its pid file's word (sessions.mark_live)
+    # Its turn over, it waits for a command it left running in the background (sessions.mark_live).
+    "aside": ("background command", "aside", 2, "shell"),
 }
 AT_LIMIT = ("at the limit", "to-continue", 3, "limit")  # open and idle at a usage limit
 LATEST = 20  # the newest messages of a team the view carries

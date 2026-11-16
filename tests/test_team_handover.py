@@ -223,3 +223,51 @@ async def test_the_new_team_form_picks_the_members_cap(tmp_path):
         await pilot.press("ctrl+s")
         await pilot.pause(0.1)
     assert host.result.cap == "200k"
+
+
+# --- what git shows left in the team's folders -----------------------------------------------------
+
+def git(folder, *args):
+    import subprocess
+
+    subprocess.run(["git", "-C", str(folder), *args], check=True, capture_output=True,
+                   env={**__import__("os").environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+
+
+def test_the_handover_names_what_git_shows_left_in_the_teams_folders(tmp_path):
+    import shutil
+
+    import pytest
+
+    if not shutil.which("git"):
+        pytest.skip("no git")
+    project = tmp_path / "shop"
+    project.mkdir()
+    git(project, "init", "-q", "-b", "main")
+    (project / "a.txt").write_text("a", encoding="utf-8")
+    git(project, "add", "a.txt")
+    git(project, "commit", "-q", "-m", "first")
+    worktree = project / ".claude" / "worktrees" / "shop-api"
+    git(project, "worktree", "add", "-q", "-b", "worktree-shop-api", str(worktree))
+    (worktree / "api.txt").write_text("api", encoding="utf-8")
+    git(worktree, "add", "api.txt")
+    git(worktree, "commit", "-q", "-m", "api")
+    (worktree / "wip.txt").write_text("half done", encoding="utf-8")  # not committed
+    team = teams.new_team("shop", str(project), "A checkout", teams.parse_members("api: endpoints; ui: screens"),
+                          worktrees=True)
+    api = Session(session_id="api-1", path=None, cwd=str(worktree / "src"), title="shop-api")  # in a folder of it
+    left = handover.work_left(team, {"lead": None, "api": api, "ui": None})
+    assert left.splitlines() == [(f"- api ({worktree}, branch worktree-shop-api): 1 file not committed, "
+                                  "1 commit not merged into the project's branch")]  # the project is clean: no line
+    asked = handover.team_request(team, left)
+    assert left in asked and "to commit, to merge or to drop" in asked and "whether it is merged" in asked
+    assert handover.work_left(teams.new_team("x", str(tmp_path / "none"), "g", []), {}) == ""  # not in git
+
+
+def test_what_git_shows_is_added_to_the_handover_as_it_is(monkeypatch):
+    team = teams.new_team("shop", "C:/shop", "A checkout", teams.parse_members("api: x"))
+    monkeypatch.setattr(handover, "write_itself", lambda session, request: ANSWER)
+    text, _ = handover.write_team(lead_session(), team, "- api (C:/shop/w, branch b): 2 files not committed")
+    assert text.endswith(f"## {handover.LEFT_HEADING}\n\n- api (C:/shop/w, branch b): 2 files not committed")
+    assert handover.write_team(lead_session(), team)[0].endswith("Wire the payment page.")  # clean: nothing added

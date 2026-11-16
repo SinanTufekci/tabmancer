@@ -61,10 +61,20 @@ def colours(team: teams.Team, accent: str) -> dict[str, str]:
     return out
 
 
+def card_model(session: Session | None, pick) -> tuple[str, bool]:
+    """The model on a member's card: the one that answers, with its version, where its session says
+    ("opus 5.5/high"), with a ↓ when another took over by itself (and True, for amber); else the one
+    picked for it ("sonnet/high")."""
+    if session is None or not session.model or session.model.startswith("<"):
+        return pick.short(), False
+    fell = bool(session.fell_back) and session.exit is Exit.RUNNING
+    return context.short_model(session.model) + ("↓" if fell else "") + (f"/{pick.effort}" if pick.effort else ""), fell
+
+
 def status_of(session: Session | None) -> tuple[str, str, bool]:
     """(label, style, spinning) for a member's card, in the dashboard's colours: blue works, red
     waits for you, amber is stopped at a usage limit (as in the list); a member done for now is
-    idle, quiet."""
+    idle, quiet; cyan waits for a command it left running in the background."""
     if session is None:
         return "not started", MUTED, False
     if viewmodel.at_limit(session):
@@ -74,13 +84,17 @@ def status_of(session: Session | None) -> tuple[str, str, bool]:
     state = session.live_state.lower()
     if state in ("busy", "working"):
         return "working", BLUE, True
+    if state == "aside":
+        return "background command", CYAN, False
     if state == "permission":
         return "needs your OK", f"bold {RED}", False
     if state in ("blocked", "waiting"):
         return "needs you", f"bold {RED}", False
+    # A member waiting with a keep-warm sleep running: until when an answer finds its cache warm.
+    warm = f" · warm to {session.warm_until:%H:%M}" if session.warm_until is not None and session.turn_over else ""
     if state == "resting":
-        return "idle", MUTED, False
-    return "waiting", RED, False
+        return f"idle{warm}", MUTED, False
+    return f"waiting{warm}", RED, False
 
 
 class Canvas:
@@ -342,7 +356,8 @@ class TeamGraph(Widget):
         canvas.put(x + 2 + inner - len(label), y + 1, label, style)
         used = getattr(self.app, "session_tokens", {}).get(session.session_id) if session is not None else None
         tokens = human(used.total) if used is not None and used.total else ""
-        right = " · ".join(part for part in (member.pick.short(), tokens) if part)
+        picked, fell = card_model(session, member.pick)
+        right = " · ".join(part for part in (picked, tokens) if part)
         left = 0
         if session is not None and session.context:
             share = context.share(session, teams.cap_of(session.session_id, self.team))
@@ -353,7 +368,7 @@ class TeamGraph(Widget):
             canvas.put(x + 3 + METER, y + 2, f"{share:.0%}", bar)
             left = METER + 1 + len(f"{share:.0%}")
         if right and left + 1 + len(right) <= inner:
-            canvas.put(x + 2 + inner - len(right), y + 2, right, MUTED)  # its model and tokens, at the right
+            canvas.put(x + 2 + inner - len(right), y + 2, right, AMBER if fell else MUTED)  # its model and tokens
 
     def draw_focus(self, canvas: Canvas) -> None:
         """What the picked member works on, under the cards."""
@@ -409,7 +424,7 @@ def closing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str |
     open_now = [s for s in sessions.values() if s is not None and s.exit is Exit.RUNNING]
     if not open_now:
         return None
-    busy = sum(s.live_state.lower() in ("busy", "working") for s in open_now)
+    busy = sum(s.live_state.lower() in ("busy", "working", "aside") for s in open_now)
     at_work = f" {busy} of them {'is' if busy == 1 else 'are'} working and would stop." if busy else ""
     return (f"Press x again to close the {len(open_now)} open members' tabs.{at_work} Their sessions stay, and "
             "s starts them again.")
@@ -1210,6 +1225,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         self.background = False  # Ctrl+B: the members run as background sessions, the lead in a tab
         self.asking = False  # Ctrl+R: Claude is being asked for a line-up
         self.improving: str | None = None  # Ctrl+E: the goal being rewritten, as it was sent
+        self.improve_note = newsessions.Improving(self.GOAL_NOTE, f"improving the goal with {improve.MODEL}")
         self.worktrees = False  # Ctrl+O: each member in a git worktree of its own
         self.repositories: dict[str, bool] = {}  # folder -> is a repository's top (is_repository)
 
@@ -1281,10 +1297,10 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         line.update(self.key_line(line.parent.content_size.width if line.parent is not None else 0))
 
     def show_improving(self) -> None:
-        """The Team card's border: what Ctrl+E does, or that it is at it (the goal is rewritten in a thread)."""
-        self.query_one("#team-card").border_subtitle = (
-            Text(f"improving the goal with {improve.MODEL}…", style=f"bold {AMBER}")
-            if self.improving is not None else self.GOAL_NOTE)
+        """The Team card's border: what Ctrl+E does, that it is at it (the goal is rewritten in a
+        thread), or how it went (newsessions.Improving)."""
+        self.query_one("#team-card").border_subtitle = self.improve_note.note(
+            self.query_one("#team-goal", TextArea).text)
 
     def on_mount(self) -> None:
         self.query_one("#team-card").border_title = "Team"
@@ -1684,6 +1700,8 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         self.show_preview()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id == "team-goal":
+            self.show_improving()  # how Ctrl+E went stays only while the goal is what it went for
         self.show_preview()
 
     def read(self) -> tuple[str, str, str, list[teams.Member]]:
@@ -1789,8 +1807,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
                         timeout=5)
             return
         self.improving = box.text
-        self.show_improving()
-        self.notify(f"Improving the goal with {improve.MODEL}…", timeout=4)
+        self.improve_note.start(self, box)
         folder = self.read()[1]
         text = box.text
         self.run_worker(lambda: self.ask_improve(text, folder), thread=True, group="improve", exit_on_error=False)
@@ -1805,10 +1822,8 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
 
     def improved(self, text: str, better: str, why: str) -> None:
         self.improving = None
-        if self.is_mounted:
-            self.show_improving()
-        if self.is_mounted and newsessions.put_improved(self.query_one("#team-goal", TextArea), text, better, why,
-                                                        self.notify):
+        if self.is_mounted and self.improve_note.finish(self, self.query_one("#team-goal", TextArea), "#team-card",
+                                                        text, better, why, self.notify):
             self.notify("Goal improved: Ctrl+Z in the box puts yours back.", timeout=6)
 
     def action_suggest(self) -> None:

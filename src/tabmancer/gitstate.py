@@ -58,14 +58,15 @@ def parse(output: str) -> GitState:
     return GitState(branch, changed, ahead, behind, upstream)
 
 
-def read(folder: str) -> GitState | str | None:
+def read(folder: str, leave_out: tuple[str, ...] = ()) -> GitState | str | None:
     """The folder's state; None if it is not in a git repository (or git is missing), FAILED if
-    git could not answer in time."""
+    git could not answer in time. leave_out: paths in it not to count (".claude/worktrees")."""
     git = shutil.which("git")
     if not git or not folder or not Path(folder).is_dir():
         return None
     try:
-        result = subprocess.run([git, "-C", folder, "status", "--porcelain=v2", "--branch"], capture_output=True,
+        spec = ["--", ".", *(f":(exclude){path}" for path in leave_out)] if leave_out else []
+        result = subprocess.run([git, "-C", folder, "status", "--porcelain=v2", "--branch", *spec], capture_output=True,
                                 text=True, encoding="utf-8", errors="replace", timeout=TIMEOUT, check=False,
                                 env=dict(os.environ, LC_ALL="C", LANGUAGE="C"),  # its messages in English
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

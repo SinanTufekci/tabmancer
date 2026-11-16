@@ -466,6 +466,8 @@ def print_sessions(days: float, include_all: bool, as_json: bool) -> None:
         rows = [dict(asdict(s), path=str(s.path), status=s.status.value, exit=s.exit.value,
                      started=s.started.isoformat() if s.started else None,
                      last_active=s.last_active.isoformat(),
+                     warm_until=s.warm_until.isoformat() if s.warm_until else None,
+                     resets=s.resets.isoformat() if s.resets else None,
                      open_at_shutdown=s.session_id in preselected) for s in sessions]
         json.dump(rows, sys.stdout, ensure_ascii=False, indent=2)
         print()

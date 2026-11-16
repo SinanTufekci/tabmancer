@@ -30,12 +30,13 @@ import re
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from . import focus, picks, router, summarize, teams
+from . import focus, gitstate, picks, router, summarize, teams
 from .launch import Launch, Mode, clean_env
-from .sessions import Session, _registry_sessions, _shorten, sanitize
+from .sessions import Session, _registry_sessions, _shorten, folder_key, sanitize
 
 MODEL = os.environ.get("TABMANCER_HANDOVER_MODEL", "sonnet")
 WRITE_SECONDS = 900  # a crowded session reads its whole context back before it writes
@@ -180,18 +181,25 @@ def fresh(session: Session, handover: str) -> Launch:
 
 # --- a whole team ----------------------------------------------------------------------------------
 
-def team_request(team: teams.Team) -> str:
-    """What a team's lead is asked: the handover for a new lead, and the line-up for the rest of the work."""
+def team_request(team: teams.Team, left: str = "") -> str:
+    """What a team's lead is asked: the handover for a new lead, and the line-up for the rest of the work.
+    With left (work_left), what git shows still lying in the team's folders, for it to say what
+    becomes of each."""
     members = "\n".join(f"- {m.name}: {m.focus or m.name}{f' [{m.owns}]' if m.owns else ''}"
                         f"{picks.tags(m.pick)}" for m in team.members if not m.lead) or "- (none yet)"
+    branches = (" Each member worked on a branch of its own: say for each whether it is merged, and what is "
+                "left on it." if team.worktrees else "")
+    lying = (f"\n\nWhat git shows in the team's folders right now, before anyone closes:\n{left}\nSay in the "
+             "handover what becomes of each: to commit, to merge or to drop, and who does it."
+             if left else "")
     return (
         "We are handing this team's work over to a fresh team: a new lead in your place and fresh members, none of "
         "whom will see this conversation or your members' conversations. Your members now:\n"
-        f"{members}\n\n"
+        f"{members}{lying}\n\n"
         "Write the handover for the new lead, complete enough for it to carry on without asking anything: the "
         "goal; the decisions made and why; what each member did and where its part stands, with the files; what is "
-        "open or broken; the gotchas you ran into; and the exact next steps. At most 1,200 words, in the language "
-        f"we have been using. Put the whole handover between {START} and {END}.\n\n"
+        f"open or broken; the gotchas you ran into; and the exact next steps.{branches} At most 1,200 words, in the "
+        f"language we have been using. Put the whole handover between {START} and {END}.\n\n"
         f"Then, between {LINEUP_START} and {LINEUP_END}, the line-up the rest of the work needs, one member a "
         "line:\nname: what it works on [the folders or files that are its own] @model @effort\n"
         "No lead line: the new lead is there. Names: one short lowercase word, as above; keep a member's name "
@@ -218,12 +226,80 @@ def read_team(answer: str, team: teams.Team | None = None) -> tuple[str, str]:
     return text.strip(), "\n".join(m.line() for m in members)
 
 
-def write_team(lead: Session, team: teams.Team) -> tuple[str, str]:
-    """The lead writes the team's handover and the line-up that goes on: resumed once without a tab."""
-    text, lineup = read_team(write_itself(lead, team_request(team)), team)
+def write_team(lead: Session, team: teams.Team, left: str = "") -> tuple[str, str]:
+    """The lead writes the team's handover and the line-up that goes on: resumed once without a tab.
+    What git shows left in the folders (work_left) is asked about, and added to the handover as it is,
+    so the new lead has it even where the old one left something out."""
+    text, lineup = read_team(write_itself(lead, team_request(team, left)), team)
     if not text:
         raise HandoverError("the lead's answer held no handover")
+    if left:
+        text += f"\n\n## {LEFT_HEADING}\n\n{left}"
     return text, lineup
+
+
+LEFT_HEADING = "Left in the team's folders at the handover (from git)"
+PROJECT = "the project"
+
+
+def team_folders(team: teams.Team, members: dict[str, Session | None]) -> list[tuple[str, str]]:
+    """(who, folder) for each folder the team works in: the project (the lead's), and each member's
+    worktree where it has one. Members working in the project itself share its line."""
+    out = [(PROJECT, team.cwd)]
+    seen = {folder_key(team.cwd)}
+    for member in team.members:
+        if member.lead:
+            continue
+        session = members.get(member.name)
+        if session is not None and session.cwd:
+            folder = teams.home_of(team, session.cwd)
+        elif team.has_worktree(member):
+            folder = str(Path(team.cwd, *teams.WORKTREES, team.session_name(member)))
+        else:
+            continue
+        if folder_key(folder) not in seen and Path(folder).is_dir():
+            seen.add(folder_key(folder))
+            out.append((member.name, folder))
+    return out
+
+
+def unmerged(project: str, branch: str) -> int:
+    """Commits on a member's branch that the project's checked-out branch does not have; 0 if none
+    or git cannot tell."""
+    git = shutil.which("git")
+    if not git or not branch:
+        return 0
+    try:
+        result = subprocess.run([git, "-C", project, "rev-list", "--count", f"HEAD..{branch}"], capture_output=True,
+                                text=True, encoding="utf-8", errors="replace", timeout=gitstate.TIMEOUT, check=False,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    count = result.stdout.strip()
+    return int(count) if result.returncode == 0 and count.isdigit() else 0
+
+
+def work_left(team: teams.Team, members: dict[str, Session | None]) -> str:
+    """What git shows still lying in the team's folders, a line each: files not committed, commits not
+    pushed, a member's branch not merged into the project's. '' when every folder is clean (or none is
+    in git). Read before the tabs close, so a handover cannot leave it behind unnoticed."""
+    folders = team_folders(team, members)
+    # The members' worktrees sit in the project (.claude/worktrees): not the project's own files.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        states = list(pool.map(lambda folder: gitstate.read(folder, ("/".join(teams.WORKTREES),)),
+                               [folder for _, folder in folders]))
+    lines = []
+    for (who, folder), state in zip(folders, states):
+        if not isinstance(state, gitstate.GitState):
+            continue
+        parts = [f"{state.changed} file{'s' * (state.changed != 1)} not committed"] if state.changed else []
+        if state.ahead and state.upstream:
+            parts.append(f"{state.ahead} commit{'s' * (state.ahead != 1)} not pushed")
+        if who != PROJECT and state.branch and (behind := unmerged(team.cwd, state.branch)):
+            parts.append(f"{behind} commit{'s' * (behind != 1)} not merged into the project's branch")
+        if parts:
+            lines.append(f"- {who} ({folder}, branch {state.branch or '?'}): {', '.join(parts)}")
+    return "\n".join(lines)
 
 
 def current_lineup(team: teams.Team) -> str:

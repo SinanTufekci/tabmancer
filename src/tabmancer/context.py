@@ -29,6 +29,17 @@ COLD_WORTH = 150_000  # a context big enough that writing it again is worth a wo
 MODEL = re.compile(r"(opus|sonnet|haiku|fable)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)")
 
 
+
+def short_model(model: str, most: int = 12) -> str:
+    """A model id as a narrow place says it: claude-sonnet-5-5 -> 'sonnet 5.5', claude-opus-4-8[1m] ->
+    'opus 4.8'; an id it cannot read, cut to `most` characters."""
+    found = MODEL.search(model.lower())
+    if found is None:
+        name = model.removeprefix("claude-")
+        return name if len(name) <= most else name[:most - 1] + "…"
+    return f"{found[1]} {found[2]}" + (f".{found[3]}" if found[3] else "")
+
+
 def window(model: str, seen: int = 0) -> int:
     """Context window of a model id such as claude-opus-5-5 or claude-sonnet-4-6[1m]."""
     name = model.lower()

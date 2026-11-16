@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +29,7 @@ from .dialogs import Choice, cards, frame, light_rows, pill, title
 from .launch import Launch, Mode
 from .sessions import Session, folder_key
 from .summarize import SummaryError
-from .theme import AMBER, CYAN, GREEN, MUTED, TEXT, keys
+from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, keys
 
 
 @dataclass
@@ -196,6 +197,7 @@ class NewSessions(ModalScreen[Request | None]):
         self.routing: set[str] = set()
         self.take_route = False
         self.improving: str | None = None  # Ctrl+E: the first message being rewritten, as it was sent
+        self.improve_note = Improving(self.MESSAGE_NOTE, f"improving with {improve.MODEL}")
 
     def compose(self) -> ComposeResult:
         # Ids of their own: the dashboard's stylesheet hides its own #filter box.
@@ -305,6 +307,7 @@ class NewSessions(ModalScreen[Request | None]):
         opens.update(out)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        self.show_improving()  # how Ctrl+E went stays only while the text is what it went for
         self.show_link()
         self.show_route()  # the router is asked only with Ctrl+R: never half-way through a message
 
@@ -607,7 +610,7 @@ class NewSessions(ModalScreen[Request | None]):
                         severity="warning", timeout=5)
             return
         self.improving = text
-        self.show_improving()
+        self.improve_note.start(self, self.message)
         folders = self.chosen_names()
         self.run_worker(lambda: self.ask_improve(text, folders), thread=True, group="improve", exit_on_error=False)
 
@@ -623,14 +626,11 @@ class NewSessions(ModalScreen[Request | None]):
         self.improving = None
         if not self.is_mounted:
             return
-        self.show_improving()
-        if put_improved(self.message, text, better, why, self.notify):
+        if self.improve_note.finish(self, self.message, "#message-card", text, better, why, self.notify):
             self.notify("First message improved: Ctrl+Z in the box puts yours back.", timeout=6)
 
     def show_improving(self) -> None:
-        card = self.query_one("#message-card")
-        card.border_subtitle = (Text(f"improving with {improve.MODEL}…", style=f"bold {AMBER}")
-                                if self.improving is not None else self.MESSAGE_NOTE)
+        self.query_one("#message-card").border_subtitle = self.improve_note.note(self.message.text)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input is self.filter_box:
@@ -686,21 +686,80 @@ class NewSessions(ModalScreen[Request | None]):
         self.dismiss(None)
 
 
-def put_improved(box: TextArea, sent: str, better: str, why: str, notify) -> bool:
+SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+FLASH_SECONDS = 1.5  # the card's frame green, a moment, when a rewrite went in
+
+
+class Improving:
+    """Ctrl+E's word on its card's frame, in the new-session dialog and the new-team form: what the
+    key does; while Claude rewrites, that it is at it and for how long (the box takes no typing
+    meanwhile, so a key pressed then cannot throw the rewrite away); and then how it went, kept
+    until the text changes. The frame used to go back to what it said before Ctrl+E, and the toast
+    that said it was done came and went, so a rewrite done looked like one never started."""
+
+    def __init__(self, idle: str, doing: str) -> None:
+        self.idle, self.doing = idle, doing
+        self.since: float | None = None  # when the rewrite was asked for
+        self.outcome: Text | None = None
+        self.about = ""  # the text the outcome is about: once the box says otherwise, it goes
+        self.ticker = None
+
+    def start(self, screen, box: TextArea) -> None:
+        self.since, self.outcome = time.monotonic(), None
+        box.read_only = True
+        self.ticker = screen.set_interval(0.25, screen.show_improving)
+        screen.show_improving()
+
+    def finish(self, screen, box: TextArea, card: str, sent: str, better: str, why: str, notify) -> bool:
+        """The rewrite into the box (put_improved), and its outcome on the frame. True when put in."""
+        self.since = None
+        if self.ticker is not None:
+            self.ticker.stop()
+            self.ticker = None
+        box.read_only = False
+        put, self.outcome = put_improved(box, sent, better, why, notify)
+        self.about = box.text
+        if put:
+            frame = screen.query_one(card)
+            frame.add_class("-improved")
+            screen.set_timer(FLASH_SECONDS, lambda: frame.remove_class("-improved"))
+        screen.show_improving()
+        return put
+
+    def note(self, text: str) -> Text | str:
+        if self.since is not None:
+            now = time.monotonic()
+            return Text(f"{SPIN[int(now * 8) % len(SPIN)]} {self.doing} · {int(now - self.since)}s",
+                        style=f"bold {AMBER}")
+        if self.outcome is not None and text == self.about:
+            return self.outcome
+        return self.idle
+
+
+def words(text: str) -> int:
+    return len(text.split())
+
+
+def put_improved(box: TextArea, sent: str, better: str, why: str, notify) -> tuple[bool, Text]:
     """The rewrite into its box as one edit (Ctrl+Z puts yours back), unless there is none, it says
-    nothing new, or you changed the text while it was asked for. Says why not; True when put in."""
+    nothing new, or you changed the text while it was asked for. Says why not; (whether it was put
+    in, how it went in a few words for the card's frame)."""
     if why:
         notify(f"Not improved: {why}", severity="warning", timeout=8)
-    elif box.text != sent:
+        return False, Text(f"✗ not improved: {why}", style=f"bold {RED}")
+    if box.text != sent:
         notify("You changed the text meanwhile, so the rewrite was not put in: Ctrl+E asks again.",
                severity="warning", timeout=6)
-    elif " ".join(better.split()) == " ".join(sent.split()):
+        return False, Text("✗ the text changed meanwhile · Ctrl+E asks again", style=f"bold {RED}")
+    if " ".join(better.split()) == " ".join(sent.split()):
         notify("Claude found it clear as it is: nothing changed.", timeout=5)
-    else:
-        box.replace(better, (0, 0), box.document.end)
-        box.focus()
-        return True
-    return False
+        return False, Text("= clear as it was: nothing changed", style=TEXT)
+    box.replace(better, (0, 0), box.document.end)
+    box.move_cursor((0, 0))  # its start in sight, not its end
+    box.scroll_home(animate=False)
+    box.focus()
+    return True, Text(f"✓ improved ({words(sent)} → {words(better)} words) · Ctrl+Z puts yours back",
+                      style=f"bold {GREEN}")
 
 
 TAIL = 20  # the sessions and the last time, right-aligned at a row's end

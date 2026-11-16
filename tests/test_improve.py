@@ -14,6 +14,13 @@ from tabmancer.newsessions import NewSessions
 from tabmancer.teamview import NewTeamDialog
 
 
+def frame_words(card) -> str:
+    """What a card's frame says at its foot, as words (Textual keeps it as markup)."""
+    from rich.text import Text
+
+    return Text.from_markup(str(card.border_subtitle)).plain
+
+
 async def until(pilot, check, tries=120):
     for _ in range(tries):
         await pilot.pause(0.05)
@@ -69,16 +76,22 @@ async def test_ctrl_e_improves_the_first_message_and_ctrl_z_puts_it_back(fake_ho
         await until(pilot, lambda: isinstance(app.screen, NewSessions))
         await box_has_focus(pilot, app)
         dialog = app.screen
-        assert "Ctrl+E" in str(dialog.query_one("#message-card").border_subtitle)
+        assert "Ctrl+E" in frame_words(dialog.query_one("#message-card"))
         await pilot.press("ctrl+e")  # nothing written yet: nothing asked
         await pilot.press("tab")
         dialog.message.insert("fix login form validation")
         await pilot.press("ctrl+e")
         await until(pilot, lambda: dialog.message.text.startswith("Fix the validation"))
-        assert dialog.improving is None and "Ctrl+E" in str(dialog.query_one("#message-card").border_subtitle)
+        card = dialog.query_one("#message-card")
+        await pilot.pause(0.1)  # the box's own word that it changed comes after the rewrite
+        # Done, and the frame says so (not back to what it said before Ctrl+E), until the text changes.
+        assert dialog.improving is None and not dialog.message.read_only
+        assert frame_words(card).startswith("✓ improved (4 → 9 words)")
+        assert card.has_class("-improved")  # a moment in green
         dialog.message.focus()
         await pilot.press("ctrl+z")
         await until(pilot, lambda: dialog.message.text == "fix login form validation")
+        await until(pilot, lambda: frame_words(card) == dialog.MESSAGE_NOTE)
 
 
 async def test_a_rewrite_is_not_put_over_text_changed_meanwhile(fake_home, monkeypatch):
@@ -113,7 +126,7 @@ async def test_the_team_form_shows_that_ctrl_e_improves_the_goal(tmp_path, monke
     async with Host(dialog).run_test(size=(120, 30)) as pilot:
         await pilot.pause(0.2)
         card = dialog.query_one("#team-card")
-        assert str(card.border_subtitle) == "Ctrl+E improves the goal"  # always there, as n's message card has it
+        assert frame_words(card) == "Ctrl+E improves the goal"  # always there, as n's message card has it
         keys = dialog.query_one("#team-keys")
         assert len(keys.render().plain) <= keys.parent.content_size.width  # one line in a 120x30 window...
         assert "Ctrl+E" not in keys.render().plain  # ...which has no room for one more key: the border says it
@@ -122,10 +135,16 @@ async def test_the_team_form_shows_that_ctrl_e_improves_the_goal(tmp_path, monke
         goal.focus()
         await pilot.press("ctrl+e")
         await until(pilot, lambda: dialog.improving is not None)
-        assert "improving the goal with" in str(card.border_subtitle)  # at it, and the card says so
+        assert "improving the goal with" in frame_words(card)  # at it, and the card says so
+        assert frame_words(card).endswith("s")  # ...for how long: "· 0s"
+        assert goal.read_only  # a key pressed meanwhile cannot throw the rewrite away
         release.set()
         await until(pilot, lambda: goal.text == "Better.")
-        await until(pilot, lambda: str(card.border_subtitle) == "Ctrl+E improves the goal")
+        await pilot.pause(0.1)
+        assert frame_words(card).startswith("✓ improved")  # it stays, as the toast did not
+        assert not goal.read_only
+        goal.insert("!")
+        await until(pilot, lambda: frame_words(card) == "Ctrl+E improves the goal")
     async with Host(NewTeamDialog(str(tmp_path), set())).run_test(size=(170, 40)) as pilot:
         await pilot.pause(0.3)
         shown = pilot.app.screen.query_one("#team-keys").render().plain
@@ -145,3 +164,27 @@ async def test_ctrl_e_improves_a_teams_goal(tmp_path, monkeypatch):
         assert goal.text.count("\n") == 2 and str(tmp_path) in asked[0][0]  # a goal keeps its lines
         await pilot.press("ctrl+z")
         await until(pilot, lambda: goal.text == "add stripe checkout with tests")
+
+
+async def test_ctrl_e_says_on_the_frame_when_it_changed_nothing_or_failed(tmp_path, monkeypatch):
+    answers = iter(["add stripe checkout with tests", None])
+
+    def ask(prompt, model, timeout=180, effort=""):
+        answer = next(answers)
+        if answer is None:
+            raise summarize.SummaryError("claude returned nothing")
+        return answer
+
+    monkeypatch.setattr(summarize, "ask", ask)
+    dialog = NewTeamDialog(str(tmp_path), set())
+    async with Host(dialog).run_test(size=(120, 30)) as pilot:
+        card = dialog.query_one("#team-card")
+        goal = dialog.query_one("#team-goal", TextArea)
+        goal.insert("add stripe checkout with tests")
+        goal.focus()
+        await pilot.press("ctrl+e")
+        await until(pilot, lambda: frame_words(card).startswith("= clear as it was"))
+        assert goal.text == "add stripe checkout with tests"
+        await pilot.press("ctrl+e")
+        await until(pilot, lambda: frame_words(card).startswith("✗ not improved: claude returned nothing"))
+        assert not goal.read_only and not card.has_class("-improved")
