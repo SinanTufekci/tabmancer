@@ -3,10 +3,14 @@ transcript, a member started twice, a session missing from the list, a crash, a 
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from tabmancer import (
     background,
@@ -38,7 +42,26 @@ def test_a_background_start_through_npms_claude_cmd_keeps_a_quoted_message_whole
     monkeypatch.setattr(launch.subprocess, "run", lambda argv, **kw: ran.append(argv) or
                         subprocess.CompletedProcess(argv, 0, "Started bg-1\n", ""))
     launch.run_in_background(Launch("x", "C:/w", Mode.RESUME, "id", prompt='rename the "Save & Close" button'))
-    assert ran[0][-1] == "rename the 'Save & Close' button"  # inside one pair of quotes for cmd.exe
+    assert ran[0].endswith(' "rename the \'Save & Close\' button"')  # inside one pair of quotes for cmd.exe
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe runs a .cmd shim on Windows only")
+def test_a_background_start_through_a_cmd_shim_reaches_claude_as_written(tmp_path, monkeypatch):
+    # cmd.exe read the line first: %USERNAME% came out as the name, a word with & in it and no space
+    # went bare and the rest ran as a command, a line break ended the message there.
+    echo = tmp_path / "echo.py"
+    echo.write_text("import json, sys\nprint(json.dumps(sys.argv[1:]))\n", encoding="utf-8")
+    shim = tmp_path / "claude.cmd"
+    shim.write_text(f'@ECHO off\r\n"{sys.executable}" "%~dp0echo.py" %*\r\n', encoding="ascii")
+    monkeypatch.setattr(launch.shutil, "which", lambda name: str(shim))
+    monkeypatch.setattr(launch.claudeupdate, "before_opening", lambda: None)
+    monkeypatch.setattr(launch, "_note", lambda launches: None)
+    for prompt, arrives in (("We hit 100% at %USERNAME%, fix it", "We hit 100% at %USERNAME%, fix it"),
+                            ("tests&calc", "tests&calc"), ("a ^ b | c > d < (e)", "a ^ b | c > d < (e)"),
+                            ("line one\nline two", "line one line two"), ('say "hi"', "say 'hi'"),
+                            ("ends in a folder\\", "ends in a folder\\")):
+        said = json.loads(launch.run_in_background(Launch("x", str(tmp_path), Mode.RESUME, "id", prompt=prompt)))
+        assert said == ["--bg", "--resume", "id", arrives]
 
 
 def test_a_workspace_takes_a_background_session_for_open(tmp_path):
@@ -145,3 +168,54 @@ def test_a_background_rows_enter_attaches_to_it():
                       last_active=datetime.now() - timedelta(minutes=1))
     made = app.launch_for(session)
     assert made.mode is Mode.ATTACH and made.argv == ["claude", "attach", "7f3a"]
+
+
+async def test_hiding_a_row_leaves_the_cursor_where_it_was(tmp_path, monkeypatch):
+    # The list is built again on each change, and its cursor went to the top: on the sixth row, x hid
+    # it and the cursor landed on the newest session, so a second x hid that one, never picked.
+    from conftest import _records
+
+    from tabmancer import app as app_module
+    from tabmancer.app import SessionPicker
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(app_module, "recent_shutdowns", list)
+    monkeypatch.setattr(app_module, "open_at_shutdown", lambda sessions, shutdowns: set())
+    project = tmp_path / "projects" / "C--work-demo"
+    project.mkdir(parents=True)
+    now = datetime.now().timestamp()
+    for i in range(8):
+        path = project / f"s{i}.jsonl"
+        path.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n"
+                                for r in _records(f"do {i}", "done", f"Task {i}")), encoding="utf-8")
+        os.utime(path, (now - i * 600, now - i * 600))
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(140, 40)) as pilot:
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if app.sessions:
+                break
+        await pilot.press("down", "down", "down", "down", "down")
+        row, first = app.table.cursor_row, app.current().session_id
+        await pilot.press("x")
+        await pilot.pause(0.2)
+        assert app.table.cursor_row == row and app.current().session_id not in (first, "s0")
+        second = app.current().session_id
+        await pilot.press("x")
+        await pilot.pause(0.2)
+        assert sorted(app.marks.hidden) == sorted([first, second])
+
+
+def test_days_must_be_a_number_of_days(capsys):
+    # inf, nan and 1e9 ended in a traceback (OverflowError in timedelta), -1 listed "the last -1 days".
+    from tabmancer import cli
+
+    for wrong in ("inf", "nan", "1e9", "-1", "0", "x"):
+        try:
+            cli.main(["list", "--days", wrong])
+        except SystemExit as stop:
+            assert stop.code == 2, wrong
+        else:
+            raise AssertionError(wrong)
+    assert "argument --days" in capsys.readouterr().err
+    assert cli.days_back("2.5") == 2.5 and cli.days_back(str(cli.MOST_DAYS)) == cli.MOST_DAYS

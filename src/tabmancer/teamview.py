@@ -562,12 +562,10 @@ class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
 
     def problems(self) -> list[str]:
         members = self.members()
+        # A name kept from before goes on in its worktree, on its branch (teams.launch): the lead is
+        # asked to keep the name of a member whose part goes on, and every such name was refused.
         return [problem for problem, wrong in (
-            ("a member at least, one a line", not members and not self.team.decide),
-            # A fresh member would start in the old one's worktree, on its branch.
-            *((f"another name for {m.name}: its worktree from before is still in the project",
-               self.team.has_worktree(m) and Path(self.team.cwd, *teams.WORKTREES,
-                                                  self.team.session_name(m)).exists()) for m in members)) if wrong]
+            ("a member at least, one a line", not members and not self.team.decide),) if wrong]
 
     def cap(self) -> str:
         return self.query_one("#handover-cap", Choice).value
@@ -891,8 +889,8 @@ class TeamScreen(Screen):
         """g: the team's goal, changed. Members started from now on get the new one; the lead is told."""
 
         def chosen(goal: str | None) -> None:
-            goal = " ".join((goal or "").split())
-            if not goal or goal == _one_line(self.team.goal):  # a goal of several lines comes back on one
+            goal = teams.tidy(goal or "")
+            if not goal or goal == teams.tidy(self.team.goal):
                 return
             team = teams.set_goal(self.team.name, goal)
             if team is None:
@@ -900,8 +898,9 @@ class TeamScreen(Screen):
             self.adopt(team)
             self.tell_lead(teams.goal_note(team), "The goal is changed.")
 
-        self.app.push_screen(LineDialog("The team's goal", "e.g. Add Stripe checkout with tests",
-                                        value=_one_line(self.team.goal)), chosen)
+        # In a box of several lines, as the new-team form writes it: one line flattened a plan pasted
+        # there for good, the moment it was changed at all.
+        self.app.push_screen(GoalDialog(self.team.goal), chosen)
 
     def tell_lead(self, note: str, done: str) -> None:
         """A change made here, for the lead to hear: nothing can type into its tab, so the note goes
@@ -952,6 +951,37 @@ class LineDialog(ModalScreen[str | None]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
         self.dismiss(event.value.strip() or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class GoalDialog(ModalScreen[str | None]):
+    """g in a team's view: its goal, its lines kept. Ctrl+S saves; Enter is a new line."""
+
+    DEFAULT_CSS = frame("GoalDialog") + "GoalDialog TextArea { margin-top: 1; height: 10; }"
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "save", "Save", priority=True),
+    ]
+
+    def __init__(self, goal: str) -> None:
+        super().__init__()
+        self.goal = goal
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(title("The team's goal"))
+            yield TextArea(self.goal, id="goal", compact=True)
+            yield Label(keys(("Ctrl+S", "save"), ("Enter", "a new line"), ("Esc", "cancel")), classes="hint")
+
+    def on_mount(self) -> None:
+        box = self.query_one("#goal", TextArea)
+        box.focus()
+        box.move_cursor(box.document.end)
+
+    def action_save(self) -> None:
+        self.dismiss(self.query_one("#goal", TextArea).text.strip() or None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)

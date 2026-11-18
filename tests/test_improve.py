@@ -3,6 +3,8 @@ Ctrl+Z takes back; in n, one line for each line, since each line is a session.""
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from conftest import box_has_focus
 from textual.app import App
@@ -92,6 +94,28 @@ async def test_ctrl_e_improves_the_first_message_and_ctrl_z_puts_it_back(fake_ho
         await pilot.press("ctrl+z")
         await until(pilot, lambda: dialog.message.text == "fix login form validation")
         await until(pilot, lambda: frame_words(card) == dialog.MESSAGE_NOTE)
+
+
+async def test_enter_while_ctrl_e_rewrites_does_not_throw_the_rewrite_away(fake_home, monkeypatch):
+    # Enter in the message box writes a new line, read-only or not: the rewrite then found the text
+    # changed and was dropped ("You changed the text meanwhile").
+    gate = threading.Event()
+    monkeypatch.setattr(summarize, "ask", lambda prompt, model, timeout=180, effort="":
+                        gate.wait(5) and "Fix the login redirect in the auth module.")
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(120, 30)) as pilot:
+        await until(pilot, lambda: bool(app.sessions))
+        await pilot.press("n")
+        await until(pilot, lambda: isinstance(app.screen, NewSessions))
+        dialog = app.screen
+        dialog.message.insert("fix the login redirect")
+        dialog.message.focus()
+        await pilot.press("ctrl+e")
+        await until(pilot, lambda: dialog.message.read_only)
+        await pilot.press("enter")
+        assert dialog.message.text == "fix the login redirect"
+        gate.set()
+        await until(pilot, lambda: dialog.message.text == "Fix the login redirect in the auth module.")
 
 
 async def test_a_rewrite_is_not_put_over_text_changed_meanwhile(fake_home, monkeypatch):

@@ -658,7 +658,10 @@ class NewSessions(ModalScreen[Request | None]):
     def action_start(self, now: bool = False) -> None:
         """Enter: start them, but in the message box a new line (a session more); Ctrl+S: start."""
         if self.focused is self.message and not now:
-            self.message.insert("\n")
+            # Not while Ctrl+E rewrites it: insert writes in a read-only box too, and the rewrite,
+            # finding the text changed, was thrown away.
+            if not self.message.read_only:
+                self.message.insert("\n")
             return
         box = self.filter_box
         typed = Path(os.path.expanduser(box.value.strip())) if box.value.strip() else None

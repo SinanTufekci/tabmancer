@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 OLD_NAMES = ("antyard", "ccharbor", "ccrestore")  # tabmancer's names before, newest first
@@ -34,11 +35,25 @@ def _taken_over(new: Path, olds: list[Path]) -> Path:
     return new
 
 
+# On Windows a file being replaced can't be opened, and one open can't be replaced: a read and a
+# write of the same file by two processes (the dashboard's poll and `tabmancer team add`, say)
+# collide for a moment. Both wait it out, as a read that gave up would read as no file, and the
+# load-then-save after it would write the file back with the rest of it gone.
+BUSY_TRIES = 40
+BUSY_WAIT = 0.025
+
+
 def read_json(name: str) -> object:
-    try:
-        return json.loads((config_dir() / name).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    path = config_dir() / name
+    for attempt in range(BUSY_TRIES):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:
+            if attempt + 1 < BUSY_TRIES:
+                time.sleep(BUSY_WAIT)
+        except (OSError, ValueError):
+            return None
+    return None
 
 
 def write_json(name: str, data: object, indent: int | None = 1) -> None:
@@ -47,4 +62,12 @@ def write_json(name: str, data: object, indent: int | None = 1) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=indent), encoding="utf-8")
-    os.replace(tmp, path)
+    for attempt in range(BUSY_TRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt + 1 == BUSY_TRIES:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(BUSY_WAIT)

@@ -268,7 +268,7 @@ def set_goal(name: str, goal: str) -> Team | None:
     team = saved.get(name)
     if team is None:
         return None
-    team.goal = " ".join(goal.split())
+    team.goal = tidy(goal)  # its lines kept, as a new team's (and the "\n\nAdded" marks after it)
     save(saved)
     return team
 
@@ -769,10 +769,22 @@ def launch(team: Team, member: Member, resume: Session | None = None, prompt: st
         prompt = (f"Goal: {goal_line(team)} Your part: {member.focus or member.name}. The others start alongside you: "
                   "say hello to them with SendMessage, agree where your parts meet, then start on yours.")
     # A fresh member with a worktree of its own: Claude Code makes it, .claude/worktrees/<session name>
-    # on the branch worktree-<session name> (tried with 2.1.317), and the session works there.
-    worktree = ("--worktree", team.session_name(member)) if team.has_worktree(member) else ()
-    return Launch(title=f"{team.name}: {member.name}", cwd=team.cwd, mode=Mode.NEW, session_id="",
+    # on the branch worktree-<session name> (tried with 2.1.317), and the session works there. One
+    # there already (a handover keeps the name of a member whose part goes on, and its worktree
+    # stays) is where it goes on, on its branch with what is not merged yet: the session starts in
+    # it, as a resume does, and asks Claude Code for none.
+    cwd, worktree = team.cwd, ()
+    if team.has_worktree(member):
+        kept = existing_worktree(team, member)
+        cwd, worktree = (str(kept), ()) if kept is not None else (team.cwd, ("--worktree", team.session_name(member)))
+    return Launch(title=f"{team.name}: {member.name}", cwd=cwd, mode=Mode.NEW, session_id="",
                   prompt=prompt, options=(*options(team, member), *worktree))
+
+
+def existing_worktree(team: Team, member: Member) -> Path | None:
+    """The member's worktree from before, when git still has it (its .git file is there)."""
+    there = Path(team.cwd, *WORKTREES, team.session_name(member))
+    return there if (there / ".git").exists() else None
 
 
 WORKTREES = (".claude", "worktrees")  # where `claude --worktree <name>` puts a worktree, in the repository

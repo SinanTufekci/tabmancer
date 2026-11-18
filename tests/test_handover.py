@@ -247,6 +247,21 @@ async def test_the_dashboard_warns_once_and_hands_over_both_ways(fake_home, monk
         await until(pilot, lambda: len(opened) == 4)
         await until(pilot, lambda: "still open" in notes[-1])
 
+        # A team member's fresh session takes its name: with the old one left open, a message to
+        # the member had two sessions to go to. So nothing opens, and you are told.
+        class Teams:  # teams as the dashboard sees it, with big a member of one
+            def __getattr__(self, name):
+                return getattr(teams, name)
+
+            def member_of(self, session, saved=None):
+                return ("shop", "api") if session.session_id == "big" else None
+
+        monkeypatch.setattr(app_module, "teams", Teams())
+        app.table.move_cursor(row=app.table.get_row_index("big"))
+        await pilot.press("h", "down", "enter")
+        await until(pilot, lambda: "was not handed over" in notes[-1])
+        assert len(opened) == 4
+
 
 async def test_h_on_a_busy_session_hands_it_over_once_it_finishes(fake_home, monkeypatch):
     from tabmancer.app import SessionPicker

@@ -125,6 +125,25 @@ def test_a_prompt_reaches_claude_whole_through_windows_terminal(shell, prompt, e
     assert heard(result.stdout)["argv"] == expected
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Terminal and PowerShell")
+@pytest.mark.parametrize("shell", [s for s in ("pwsh", "powershell") if shutil.which(s)])
+def test_a_message_after_a_double_dash_reaches_npms_claude_ps1(shell, echo, tmp_path, monkeypatch):
+    # In a tab PowerShell runs npm's claude.ps1, a script: a bare -- ended its parameters and was
+    # dropped, and claude said "unknown option '- fix the login'" again.
+    if shell == "powershell":
+        which = shutil.which
+        monkeypatch.setattr(L.shutil, "which", lambda name: None if name == "pwsh" else which(name))
+    script = tmp_path / "claude.ps1"
+    script.write_text(f"& {L._ps_quote(sys.executable)} {L._ps_quote(echo)} $args\n", encoding="utf-8")
+    launch = Launch(title="t", cwd=str(tmp_path), mode=Mode.NEW, session_id="", prompt="- fix the login")
+    command = L.windows_terminal_command([launch], window="0")[-1].replace("\\;", ";")
+    line = (f'"{shutil.which(shell)}" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass '
+            f'-Command "& {L._ps_quote(str(script))}{command[6:]}"')
+    result = subprocess.run(line, capture_output=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    assert heard(result.stdout)["argv"][-2:] == ["--", "- fix the login"]
+
+
 ENV_ECHO = ("import json, os, sys\nnames = ('BROWSER', 'TABMANCER_OPEN_IN', 'TABMANCER_PYTHON')\n"
             "sys.stdout.write(json.dumps({'argv': sys.argv[1:], 'env': {n: os.environ.get(n) for n in names}}))\n")
 # A sign-in tab's environment (browsers.login_environment), with paths as odd as a profile's can be,

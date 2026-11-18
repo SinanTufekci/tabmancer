@@ -27,6 +27,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
+from textual.timer import Timer
 from textual.widgets import DataTable, Input, Label, OptionList, SelectionList, Sparkline, Static
 from textual.widgets.data_table import ColumnKey, RowKey
 from textual.widgets.option_list import Option
@@ -647,6 +648,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.full_polls = 0  # full live polls come back so far: open_elsewhere asks the CLI itself before the first
         self.marks = marks.Marks.load()  # hidden and pinned sessions
         self.git: dict[str, gitstate.GitState] = {}  # folder key -> where it stands in git
+        self.git_failed: set[str] = set()  # folders git could not answer for, the last time
+        self.git_retry: Timer | None = None  # the one retry pending for them
         self.show_hidden = False  # X: the hidden ones are listed too
         self.session_tokens: dict[str, tokens.Tokens] = {}  # each session over its whole life
         self.team_states: dict[str, teamtree.TeamState] = {}  # the teams with a member open, as last read
@@ -1312,14 +1315,20 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def refresh_rows(self) -> None:
         table = self.table
-        current = self.cursor_key()
-        table.clear()
+        current, row, scrolled = self.cursor_key(), table.cursor_row, table.scroll_y
+        table.clear()  # the cursor goes to the top with it, and the scroll
         for key, session, height in self.rows():
             cells = (self.cells(session) if session is not None else self.team_cells(key)
                      if key.startswith(TEAM_ROW) else self.heading_cells(key))
             table.add_row(*cells, key=key, height=height)
+        table.scroll_to(y=scrolled, animate=False, immediate=True)
         if current is not None and current in table.rows:
             table.move_cursor(row=table.get_row_index(current))
+        elif current is not None and table.row_count:
+            # Its row is gone (hidden, closed, folded into its team): the cursor stays where it was,
+            # on the row that took its place, not on the newest session, where the next x or Enter
+            # acted on a session never picked.
+            table.move_cursor(row=min(row, table.row_count - 1))
         self.off_heading(1)
         self.update_status()
 
@@ -1928,7 +1937,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                     handover.close(now, open_ones)
                     closed = True
                 except handover.HandoverError as error:
-                    if written is None:
+                    # A team member's fresh session takes its name: with the old one still open, a
+                    # message to <team>-<member> had two sessions to go to.
+                    if written is None or teams.member_of(session) is not None:
                         raise
                     left_open = str(error)
             if written is None:
@@ -3267,7 +3278,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if full:
             live = live_sessions()
             self.background_live = {sid: e for sid, e in live.items() if e.get("kind") == "background"}
-            idle = sum(bool(e.get("pid")) and str(e.get("state") or e.get("status")).lower() in background.IDLE
+            idle = sum(bool(e.get("pid")) and background.state_of(e).lower() in background.IDLE
                        for e in self.background_live.values())
             if idle and not self.told_idle:
                 self.told_idle = True
@@ -3399,16 +3410,23 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def send_toast(self, title: str, body: str) -> None:
         toast.show(title, body, dashboard=self.TITLE)
 
+    def retry_git(self) -> None:
+        self.git_retry = None
+        self.refresh_git()
+
     @work(thread=True, exclusive=True, group="git")
     def refresh_git(self) -> None:
         states, failed = gitstate.read_all([s.cwd for s in self.sessions.values()])
         self.call_from_thread(self.show_git, states, failed)
 
     def show_git(self, states: dict[str, gitstate.GitState], failed: set[str] = frozenset()) -> None:
-        # A folder git could not answer for keeps what was known, and is asked again soon.
+        # A folder git could not answer for keeps what was known, and is asked again soon: once, when it
+        # has just begun failing. Each retry that failed set another, and the minute's refresh started
+        # one more chain each time: a folder git always refuses (dubious ownership) ran git without end.
         states = states | {key: state for key, state in self.git.items() if key in failed}
-        if failed:
-            self.set_timer(10, self.refresh_git)
+        newly, self.git_failed = set(failed) - self.git_failed, set(failed)
+        if newly and self.git_retry is None:
+            self.git_retry = self.set_timer(10, self.retry_git)
         if states == self.git:
             return
         self.git = states

@@ -62,6 +62,14 @@ class Job:
         return (not self.running and self.state.lower() not in WORKING) or self.idle
 
 
+def state_of(entry: dict) -> str:
+    """How a background job stands, as sessions.mark_live reads it: a job says how it stands (working,
+    blocked) and how its turn does (busy, idle, waiting). A working job whose turn is over is idle;
+    B showed it at work while the list said idle, and c left it where it sat."""
+    state, turn = str(entry.get("state") or ""), str(entry.get("status") or "")
+    return turn if state in ("", "working") and turn else state
+
+
 def jobs() -> list[Job] | None:
     """Every background session Claude Code knows, running or not; None without the CLI."""
     entries = sessions._agents_json(include_finished=True)
@@ -78,7 +86,7 @@ def jobs() -> list[Job] | None:
             when = None
         found.append(Job(id=str(entry["id"]), session_id=str(entry.get("sessionId") or ""),
                          name=str(entry.get("name") or ""), cwd=str(entry.get("cwd") or ""),
-                         state=str(entry.get("state") or entry.get("status") or ""),
+                         state=state_of(entry),
                          running=bool(entry.get("pid")), started=when))
     order = {"needs": 0, "working": 1, "idle": 2, "stopped": 3}
     found.sort(key=lambda job: (order[kind(job)], -(job.started.timestamp() if job.started else 0)))

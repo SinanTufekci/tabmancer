@@ -188,7 +188,8 @@ def team_request(team: teams.Team, left: str = "") -> str:
     members = "\n".join(f"- {m.name}: {m.focus or m.name}{f' [{m.owns}]' if m.owns else ''}"
                         f"{picks.tags(m.pick)}" for m in team.members if not m.lead) or "- (none yet)"
     branches = (" Each member worked on a branch of its own: say for each whether it is merged, and what is "
-                "left on it." if team.worktrees else "")
+                "left on it. A member whose name you keep goes on in its worktree, on that branch; a new name "
+                "starts on a fresh one." if team.worktrees else "")
     lying = (f"\n\nWhat git shows in the team's folders right now, before anyone closes:\n{left}\nSay in the "
              "handover what becomes of each: to commit, to merge or to drop, and who does it."
              if left else "")

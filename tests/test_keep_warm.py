@@ -63,8 +63,8 @@ def live(path, status="busy"):
 
 @pytest.mark.parametrize("command,seconds", [
     ("sleep 3300", 3300), ("sleep 55m", 3300), ("sleep 1h", 3600), ("Start-Sleep -Seconds 3300", 3300),
-    ("start-sleep 60", 60), ("sleep 3300;", 3300),
-    ("sleep 60 && npm test", None), ("until grep -q done f; do sleep 60; done", None), ("npm test", None)])
+    ("start-sleep 60", 60), ("sleep 3300;", 3300), ("sleep 3300; echo done", 3300), ("sleep 3300 && echo ok", 3300),
+    ("sleep 60 && npm test", None), ("sleep 60; echo $(rm -rf x)", None), ("until grep -q done f; do sleep 60; done", None), ("npm test", None)])
 def test_a_keep_warm_sleep_is_told_from_other_commands(command, seconds):
     assert sessions.keep_warm_seconds(command) == seconds
 
@@ -242,3 +242,67 @@ def test_the_pid_files_shell_for_a_command_out_of_sight(tmp_path):
     its turn is over and something runs, so it waits for that, not for you."""
     path = transcript(tmp_path, prompt("go"), reply())
     assert live(path, status="shell").live_state == "aside"
+
+
+def resumed_notice(*tasks, minutes_ago: float = 3) -> dict:
+    """What a resumed session is told of the commands still running when the one before ended, as
+    Claude Code 2.1.322 writes it: their own ids only, and no reply ever comes to it."""
+    ids = "".join(f"<task-id>{task}</task-id>\n" for task in tasks)
+    return {"type": "user", "timestamp": stamp(minutes_ago), "queueTranscriptOnly": True,
+            "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": (
+                f"<task-notification>\n{ids}<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n"
+                f"<summary>{len(tasks)} background shell command tasks didn't finish before the previous session "
+                "ended.</summary>\n</task-notification>")}}
+
+
+def started_as(call: str, task: str, minutes_ago: float = 5) -> dict:
+    return {"type": "user", "timestamp": stamp(minutes_ago), "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": call, "content": f"Command running in background with ID: {task}."}]}}
+
+
+def test_the_commands_a_resumed_session_is_told_are_stopped_are_gone(tmp_path):
+    # Two dev servers, the session closed, resumed: the notice names them by their own ids. They stayed
+    # "background command" for good, and the member's keep-warm sleep after it read aside, not waiting.
+    path = transcript(tmp_path, prompt("start the servers", 60), background("t1", "npm run dev", 50),
+                      started_as("t1", "bAAA", 50), background("t2", "npm run api", 50), started_as("t2", "bBBB", 50),
+                      reply("up", 49), resumed_notice("bAAA", "bBBB", minutes_ago=10), prompt("now wait", 8),
+                      background("t3", "sleep 3300", 5), started_as("t3", "bCCC", 5), reply("waiting", 4))
+    session = live(path, "shell")
+    assert session.aside == [] and session.live_state == "idle" and session.warm_until is not None
+
+
+def test_a_finished_session_resumed_and_closed_is_still_done(tmp_path):
+    # The notice is the last record, and nothing answers it: it read as cut off, and c sent
+    # "This session was interrupted" to a session that was done.
+    path = transcript(tmp_path, prompt("fix it", 60), reply("fixed", 59), resumed_notice("bAAA", minutes_ago=1))
+    session = read_session(path)
+    assert session.status is sessions.Status.DONE and session.turn_over
+
+
+def test_a_background_command_refused_never_runs(tmp_path):
+    refused = {"type": "user", "timestamp": stamp(5), "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+         "content": "Permission for this command was denied by a built-in Claude Code safeguard."}]}}
+    path = transcript(tmp_path, prompt("serve it"), background("t1", "npm run dev"), refused, reply())
+    assert live(path, "shell").aside == []
+
+
+def test_a_sleep_at_the_very_edge_of_the_tail_window_is_seen(tmp_path, monkeypatch):
+    # The window's first line was dropped as cut even when the window began right on it, and the look
+    # back stopped short of a line the window cut: either way the sleep was in neither read.
+    monkeypatch.setattr(sessions, "TAIL_BYTES", 4096)
+    def line(record: dict) -> bytes:
+        return (json.dumps(record, separators=(",", ":")) + "\n").encode()
+
+    def filler(size: int) -> bytes:
+        return line({"type": "progress", "data": "x" * (size - len(line({"type": "progress", "data": ""})))})
+
+    sleep, after = line(background("t1", "sleep 3300", 5)), line(started("t1", 5)) + line(reply("waiting", 4))
+    edge = sessions.TAIL_BYTES
+    # From the end, where the sleep begins: on the edge, cut by it, ending on it, well inside.
+    for back in (edge, edge + len(sleep) // 2, edge + len(sleep), edge - 300):
+        path = tmp_path / f"edge{back}.jsonl"
+        path.write_bytes(line(prompt("wait for the lead", 30)) + filler(9000) + sleep
+                         + filler(back - len(sleep) - len(after)) + after)
+        session = live(path, "shell")
+        assert session.warm_until is not None and session.live_state == "idle", back

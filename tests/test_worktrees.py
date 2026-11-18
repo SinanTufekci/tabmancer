@@ -60,6 +60,27 @@ def test_a_member_in_its_worktree_is_still_the_teams_and_goes_on_there(tmp_path)
     assert again.mode is Mode.RESUME and again.cwd == there and "--worktree" not in again.argv  # made once
 
 
+def test_a_member_whose_name_a_handover_keeps_goes_on_in_its_worktree(tmp_path):
+    # The lead is asked to keep the name of a member whose part goes on, and the handover dialog
+    # refused every such name while its worktree was still there. Now the fresh member starts in it,
+    # on its branch, with what is not merged yet.
+    project = repository(tmp_path / "shop")
+    git = ["git", "-C", str(project), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "first"], check=True, capture_output=True)
+    there = project / ".claude" / "worktrees" / "shop-api"
+    subprocess.run([*git, "worktree", "add", "-q", "-b", "worktree-shop-api", str(there)], check=True,
+                   capture_output=True)
+    team = teams.new_team("shop", str(project), "Goal", teams.parse_members("api: x\nui: y"), worktrees=True)
+    _, api, ui = team.members
+    kept = teams.launch(team, api, prompt="Carry on.")
+    assert kept.mode is Mode.NEW and kept.cwd == str(there) and "--worktree" not in kept.argv
+    assert "--name" in kept.argv and kept.argv[kept.argv.index("--name") + 1] == "shop-api"
+    fresh = teams.launch(team, ui, prompt="Start.")  # a new name: a worktree of its own, made by Claude Code
+    assert fresh.cwd == str(project) and fresh.argv[fresh.argv.index("--worktree") + 1] == "shop-ui"
+    (project / ".claude" / "worktrees" / "shop-ui").mkdir()  # a folder left behind, not a worktree: made anew
+    assert "--worktree" in teams.launch(team, ui, prompt="Start.").argv
+
+
 def test_only_a_repositorys_top_folder_takes_worktrees(tmp_path):
     top = repository(tmp_path / "repo")
     (top / "src").mkdir()

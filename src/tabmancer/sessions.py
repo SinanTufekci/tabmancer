@@ -25,7 +25,7 @@ from . import __version__
 from .config import read_json, write_json
 
 CACHE_FILE = "index.json"
-CACHE_FORMAT = 8  # bump when Session or the parser changes shape (8: what runs in the background)
+CACHE_FORMAT = 9  # bump when Session or the parser changes shape (9: a resumed session's notices, /login as a system record)
 HEAD_BYTES = 512 * 1024
 TAIL_BYTES = 2 * 1024 * 1024
 MAX_HEAD_BYTES = 8 * 1024 * 1024
@@ -38,13 +38,18 @@ RESETS = re.compile(r"resets\s+(?:(?P<month>[A-Za-z]{3})[a-z]*\s+(?P<day>\d{1,2}
                     r"(?::(?P<minute>\d{2}))?\s*(?P<half>[ap]m)(?:\s*\((?P<zone>[^)]+)\))?", re.IGNORECASE)
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 # A command a session runs in the background to keep its cache warm while it waits (teams.py's roles
-# ask for `sleep 3300`): "sleep 3300", "sleep 55m", "Start-Sleep -Seconds 3300". Its seconds, by group.
+# ask for `sleep 3300`): "sleep 3300", "sleep 55m", "Start-Sleep -Seconds 3300", and with an echo after
+# it ("sleep 3300; echo done", 53 of them in a fortnight). Its seconds, by group.
 KEEP_WARM = re.compile(r"^\s*(?:sleep\s+(?P<n>\d+(?:\.\d+)?)(?P<unit>[smh]?)"
-                       r"|start-sleep\s+(?:-s(?:econds)?\s+)?(?P<ps>\d+))\s*;?\s*$", re.IGNORECASE)
+                       r"|start-sleep\s+(?:-s(?:econds)?\s+)?(?P<ps>\d+))"
+                       r"(?:\s*(?:;|&&)\s*(?:echo|write-output|write-host)\b[^;&|<>`$]*)?\s*;?\s*$", re.IGNORECASE)
 UNITS = {"": 1, "s": 1, "m": 60, "h": 3600}
 # Claude Code tells a session a background command has ended with a <task-notification> naming the
 # tool call that started it (as a user record, or a queued_command attachment when it was mid-turn).
 TASK_DONE = re.compile(r"<task-notification>.*?<tool-use-id>([^<\s]+)</tool-use-id>", re.DOTALL)
+# ...or only the commands' own ids: a resumed session is told those still running when the one before
+# ended are stopped ("__orphan_summary__:shell" marks the notice, not a command).
+TASK_NAMED = re.compile(r"<task-id>(?!__)([^<\s]+)</task-id>")
 SLEEP_GRACE = 120  # seconds past its end a keep-warm sleep still counts, before it is taken for gone
 # The id Claude Code gives a command it runs in the background, in the call's result, and its word when
 # the session stops one itself (TaskStop; KillShell before it), which no <task-notification> follows.
@@ -532,6 +537,9 @@ def _watch_model(record: dict, tail: _Tail) -> None:
     kind = record.get("type")
     if kind == "system":
         said = record.get("content") if isinstance(record.get("content"), str) else ""
+        if record.get("subtype") == "local_command" and MODEL_COMMAND in said:  # /model, written as /login can be
+            tail.before = tail.fell_back = ""
+            return
         found = ANSWERS_INSTEAD.search(said) if record.get("level") in ("notice", "warning") else None
         if found and tail.model:
             why = " (safeguards)" if "safeguard" in said.lower() else " (overloaded)" if "overload" in said.lower() else ""
@@ -593,8 +601,9 @@ def _started_in_background(record: dict) -> list[tuple[str, str]]:
     return out
 
 
-def _reported_done(record: dict) -> list[str]:
-    """The tool call ids of the background commands a record says have ended."""
+def _reported_done(record: dict, tasks: dict[str, str]) -> list[str]:
+    """The tool call ids of the background commands a record says have ended, by their call's id or
+    by their own (tasks maps those to the calls)."""
     kind = record.get("type")
     if kind == "user":
         text = _text((record.get("message") or {}).get("content"))
@@ -604,7 +613,9 @@ def _reported_done(record: dict) -> list[str]:
         text = record.get("content") if isinstance(record.get("content"), str) else ""
     else:
         return []
-    return TASK_DONE.findall(text) if "<task-notification>" in text else []
+    if "<task-notification>" not in text:
+        return []
+    return [*TASK_DONE.findall(text), *(tasks.pop(task) for task in TASK_NAMED.findall(text) if task in tasks)]
 
 
 def _track_shells(record: dict, tail: _Tail) -> None:
@@ -623,12 +634,16 @@ def _track_shells(record: dict, tail: _Tail) -> None:
             if block.get("type") != "tool_result":
                 continue
             said = _text(block.get("content")) if not isinstance(block.get("content"), str) else block["content"]
-            found = TASK_ID.search(said) if block.get("tool_use_id") in tail.shells else None
-            if found:
-                tail.tasks[found[1]] = block["tool_use_id"]
+            call = block.get("tool_use_id")
+            if call in tail.shells:
+                found = TASK_ID.search(said)
+                if found:
+                    tail.tasks[found[1]] = call
+                elif block.get("is_error"):  # it never started: "Permission for this command was denied..."
+                    tail.shells.pop(call)
             for task in TASK_STOPPED.findall(said):
                 tail.shells.pop(tail.tasks.pop(task, ""), None)
-    for call in _reported_done(record):
+    for call in _reported_done(record, tail.tasks):
         tail.shells.pop(call, None)
 
 
@@ -678,7 +693,8 @@ def _read_tail(f, size: int, session: Session) -> tuple[_Tail, int]:
     its last whole line)."""
     span = TAIL_BYTES
     while True:
-        start = max(0, size - span)
+        # From a byte early, so a line that begins right at the window's edge is whole and kept.
+        start = max(0, size - span - 1)
         f.seek(start)
         chunk = f.read()
         records = _parse_lines(chunk, drop_first=start > 0, drop_last=False)
@@ -687,7 +703,8 @@ def _read_tail(f, size: int, session: Session) -> tuple[_Tail, int]:
             break
         span *= 4  # a few huge trailing records pushed the conversation out of view
     tail = _Tail()
-    _shells_before(f, start, tail)
+    # Up to the first line kept, so the one the window cut is read whole there.
+    _shells_before(f, start + chunk.find(b"\n") + 1 if start else 0, tail)
     _scan_tail(records, session, tail)
     _finish_tail(f, size, session, tail)
     return tail, start + chunk.rfind(b"\n") + 1
@@ -709,6 +726,15 @@ def _scan_tail(records: list[dict], session: Session, tail: _Tail) -> None:
             tail.last_cost, tail.cost_state = i, record
         elif kind in ("mode", "permission-mode"):
             tail.last_activity = i
+        elif kind == "system" and record.get("subtype") == "local_command":
+            # /login as Claude Code 2.1.323 writes it at times: a system record, not a user one.
+            said = record.get("content") if isinstance(record.get("content"), str) else ""
+            tail.signed_in = tail.signed_in or "Login successful" in said
+        elif record.get("queueTranscriptOnly"):
+            # Written to the transcript alone, never sent: a resumed session's word that the commands
+            # still running when the one before ended are stopped. Nothing answers it, and a session
+            # that had its answer stays answered, not cut off.
+            continue
         elif kind in ("user", "assistant") and not record.get("isSidechain"):
             tail.last_activity = i
             session.cwd = record.get("cwd") or session.cwd

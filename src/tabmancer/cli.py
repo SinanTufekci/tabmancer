@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import subprocess
 import sys
@@ -18,6 +19,19 @@ from .sessions import find_sessions, nothing_found
 from .shutdowns import open_at_shutdown, recent_shutdowns
 
 PROG = shortcuts.PROG
+MOST_DAYS = 36500
+
+
+def days_back(value: str) -> float:
+    """--days: a number of days above 0. inf, nan and 1e9 ended in a traceback (no date is that far
+    back), and -1 printed "No sessions in the last -1 days"."""
+    try:
+        days = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of days: {value}") from None
+    if not math.isfinite(days) or not 0 < days <= MOST_DAYS:
+        raise argparse.ArgumentTypeError(f"days must be above 0 and at most {MOST_DAYS}: {value}")
+    return days
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -38,7 +52,7 @@ def main(argv: list[str] | None = None) -> None:
     # subcommand from overwriting a value given before it with its own default.
     filters = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
     for target in (parser, filters):
-        target.add_argument("--days", type=float, help="how far back to look (default 14)")
+        target.add_argument("--days", type=days_back, help="how far back to look (default 14; for report, 7)")
         target.add_argument("--all", action="store_true",
                             help="include non-terminal sessions (claude -p, desktop app, IDE)")
     parser.add_argument("--demo", action="store_true",

@@ -146,10 +146,16 @@ def _said(prompt: str | None) -> list[str]:
 
 
 def _for_cmd(arg: str) -> str:
-    """An argument for a claude.cmd (npm's shim): cmd.exe runs it, and takes no backslash for an
-    escape, so a " in a message ended the quotes and a & after it ran as a command of its own. It
-    travels as a single quote, as for Windows PowerShell 5.1."""
-    return arg.replace('"', "'")
+    """An argument for a claude.cmd (npm's shim), quoted for cmd.exe, which runs it and reads the
+    line before claude does. Always in quotes, where & | < > ^ ( ) are plain text (a word with no
+    space went bare, and `tests&calc` ran calc). cmd.exe takes no escape for a ", so it travels as a
+    single quote, as for Windows PowerShell 5.1; a line break would end the command there, so lines
+    go joined by a space. A % goes as %%cd:~,% (an empty piece of %cd%), or %NAME% in a message read
+    as the variable's value. Backslashes before the closing quote are doubled for claude's own
+    reading of the line, or the last would escape the quote."""
+    arg = re.sub(r"\r\n|\r|\n", " ", arg.replace('"', "'"))
+    arg = re.sub(r"(\\+)$", r"\1\1", arg)
+    return '"' + arg.replace("%", "%%cd:~,%") + '"'
 
 
 def run_in_background(launch: Launch) -> str:
@@ -163,12 +169,12 @@ def run_in_background(launch: Launch) -> str:
         raise OSError("The claude CLI is not on PATH.")
     claudeupdate.before_opening()  # today's claude update first, when it is on
     _note([launch])
-    rest = launch.argv[1:]
-    if Path(claude).suffix.lower() in (".cmd", ".bat"):
-        rest = [_for_cmd(arg) for arg in rest]
+    command: str | list[str] = [claude, "--bg", *launch.argv[1:]]
+    if Path(claude).suffix.lower() in (".cmd", ".bat"):  # the line goes to cmd.exe as written here
+        command = subprocess.list2cmdline([claude]) + " " + " ".join(_for_cmd(arg) for arg in command[1:])
     try:
         result = subprocess.run(
-            [claude, "--bg", *rest], cwd=launch.directory, env=clean_env(),
+            command, cwd=launch.directory, env=clean_env(),
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.SubprocessError as error:
@@ -189,8 +195,10 @@ def _ps_quote(arg: str) -> str:
 
     PowerShell ends a '...' string at the curly single quotes as well, so those are doubled
     too. A % goes in as [char]37, because Windows Terminal expands %NAME% from the environment.
+    A bare -- is quoted: PowerShell takes it as the end of a script's parameters and drops it, and
+    npm's claude.ps1 is a script, so a message after it beginning with a dash read as an option.
     """
-    if re.fullmatch(r"[\w\-./:=]+", arg):
+    if arg != "--" and re.fullmatch(r"[\w\-./:=]+", arg):
         return arg
     parts = ["'" + re.sub(r"(['‘’‚‛])", r"\1\1", part) + "'" for part in arg.split("%")]
     return parts[0] if len(parts) == 1 else "(" + "+[char]37+".join(parts) + ")"

@@ -141,11 +141,20 @@ async def test_g_changes_the_goal(fake_home, tmp_path, monkeypatch):
         screen.sessions = {"lead": None, "api": None, "ui": None}  # nobody open: the role says it
         await pilot.press("g")
         await box_has_focus(pilot, pilot.app)
-        box = pilot.app.screen.query_one(Input)
-        assert box.value == "Add a checkout"  # the goal as it is, to change
-        box.value = ""
-        await pilot.press(*"Add PayPal too", "enter")
+        box = pilot.app.screen.query_one("#goal", TextArea)
+        assert box.text == "Add a checkout"  # the goal as it is, to change
+        box.text = ""
+        await pilot.press(*"Add PayPal too", "ctrl+s")
         await pilot.pause(0.1)
         assert teams.load()["shop"].goal == "Add PayPal too" and screen.team.goal == "Add PayPal too"
         assert "Team goal: Add PayPal too." in teams.role(teams.load()["shop"], team.members[1])
         assert not copied  # the lead is closed: nothing to paste
+        # A goal of several lines keeps them: a plan pasted in was put on one line the moment it changed.
+        await pilot.press("g")
+        await box_has_focus(pilot, pilot.app)
+        box = pilot.app.screen.query_one("#goal", TextArea)
+        box.text = "Add PayPal too\n- the checkout page\n- its tests"
+        box.move_cursor(box.document.end)
+        await pilot.press("enter", *"- the docs", "ctrl+s")
+        await pilot.pause(0.1)
+        assert teams.load()["shop"].goal == "Add PayPal too\n- the checkout page\n- its tests\n- the docs"

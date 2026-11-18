@@ -14,10 +14,10 @@ from tabmancer.handoverview import HandoverDialog
 from tabmancer.keysview import KeysScreen
 from tabmancer.newsessions import NewSessions
 from tabmancer.statsview import StatsScreen
-from tabmancer.teamview import LineDialog, NewTeamDialog, TeamsDialog
+from tabmancer.teamview import GoalDialog, LineDialog, NewTeamDialog, TeamsDialog
 
 DIALOGS = [NamePrompt, PromptDialog, WorkspaceList, LimitDialog, BackgroundDialog, Confirm, CliSettings,
-           HandoverDialog, KeysScreen, NewSessions, StatsScreen, LineDialog, TeamsDialog, NewTeamDialog]
+           HandoverDialog, KeysScreen, NewSessions, StatsScreen, LineDialog, GoalDialog, TeamsDialog, NewTeamDialog]
 
 
 def test_every_dialog_is_one_of_three_widths_and_as_tall_at_most():

@@ -56,6 +56,20 @@ def test_jobs_lists_background_sessions_most_urgent_first(cli):
     assert B.ago(found[3].started) == "40d ago"
 
 
+def test_a_working_job_whose_turn_is_over_is_idle_in_b_as_in_the_list(monkeypatch):
+    # Claude Code says state working, status idle for it: the list took the turn's word, B the job's,
+    # so B showed it at work and c did not clear it away.
+    entry = {"kind": "background", "id": "w1", "sessionId": "s-w", "pid": 13, "state": "working", "status": "idle",
+             "cwd": "C:/work/api", "startedAt": NOW_MS}
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [entry])
+    job = B.jobs()[0]
+    session = sessions.Session("s-w", None)
+    sessions.mark_live(session, entry)
+    assert B.kind(job) == "idle" and job.tidy and session.live_state == "idle"
+    assert B.state_of({"state": "working", "status": "waiting"}) == "waiting"
+    assert B.state_of({"state": "blocked", "status": "idle"}) == "blocked"
+
+
 def test_jobs_is_none_without_the_cli(monkeypatch):
     monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: None)
     assert B.jobs() is None
