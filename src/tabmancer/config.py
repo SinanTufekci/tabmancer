@@ -83,3 +83,6 @@ def write_json(name: str, data: object, indent: int | None = 1) -> None:
                 tmp.unlink(missing_ok=True)
                 raise
             time.sleep(BUSY_WAIT)
+        except OSError:  # elsewhere a folder by that name is IsADirectoryError: no half file left
+            tmp.unlink(missing_ok=True)
+            raise

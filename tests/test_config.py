@@ -92,3 +92,17 @@ def test_a_lasting_refusal_is_not_waited_out():
             locked.chmod(stat.S_IREAD | stat.S_IWRITE)
     assert time.monotonic() - began < 0.5
     assert not list(config.config_dir().glob("*.tmp"))
+
+
+def test_a_save_that_fails_otherwise_leaves_no_half_file(monkeypatch):
+    # Linux and macOS refuse to replace a folder with IsADirectoryError, no PermissionError: the
+    # temporary file stayed behind.
+    import pytest
+
+    def replace(src, dst):
+        raise IsADirectoryError(21, "Is a directory")
+
+    monkeypatch.setattr(config.os, "replace", replace)
+    with pytest.raises(IsADirectoryError):
+        config.write_json("teams.json", {"teams": []})
+    assert not list(config.config_dir().glob("*.tmp"))
