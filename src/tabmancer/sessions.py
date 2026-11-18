@@ -42,7 +42,7 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 # it ("sleep 3300; echo done", 53 of them in a fortnight). Its seconds, by group.
 KEEP_WARM = re.compile(r"^\s*(?:sleep\s+(?P<n>\d+(?:\.\d+)?)(?P<unit>[smh]?)"
                        r"|start-sleep\s+(?:-s(?:econds)?\s+)?(?P<ps>\d+))"
-                       r"(?:\s*(?:;|&&)\s*(?:echo|write-output|write-host)\b[^;&|<>`$]*)?\s*;?\s*$", re.IGNORECASE)
+                       r"(?:\s*(?:;|&&)\s*(?:echo|write-output|write-host)\b[^;&|<>`$\r\n]*)?\s*;?\s*$", re.IGNORECASE)
 UNITS = {"": 1, "s": 1, "m": 60, "h": 3600}
 # Claude Code tells a session a background command has ended with a <task-notification> naming the
 # tool call that started it (as a user record, or a queued_command attachment when it was mid-turn).
@@ -56,9 +56,9 @@ SLEEP_GRACE = 120  # seconds past its end a keep-warm sleep still counts, before
 TASK_ID = re.compile(r"Command running in background with ID: (\w+)")
 TASK_STOPPED = re.compile(r"Successfully (?:stopped task|killed shell): (\w+)")
 BACKGROUND_BACK = timedelta(hours=2)  # how far back a first read looks for what still runs in the background
-# Lines worth parsing there: a call that runs in the background, its id, its end.
+# Lines worth parsing there: a call that runs in the background, its id, its end, or its refusal.
 BACKGROUND_MARKS = (b'"run_in_background":true', b"Command running in background", b"<task-notification>",
-                    b"Successfully stopped task", b"Successfully killed shell")
+                    b"Successfully stopped task", b"Successfully killed shell", b'"is_error":true')
 # Claude Code's notice when another model answers in the one asked for (2.1.325, seen once in 340
 # transcripts): "Opus 5.5's safeguards flagged this session. ... Opus 4.8 is answering instead, or you
 # can edit and retry with Opus 5.5." Looser words for the other ways it might say so.
@@ -151,6 +151,9 @@ def claude_dir() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
+MOST_DAYS = 36500  # how far back --days may look: a hundred years
+
+
 def nothing_found(days: float, include_all: bool, dashboard: bool = False) -> str:
     """Why the list is empty and what to do: a first run should not just show nothing."""
     where = claude_dir() / "projects"
@@ -158,7 +161,7 @@ def nothing_found(days: float, include_all: bool, dashboard: bool = False) -> st
         start = "press n" if dashboard else "run `tabmancer --demo` to see made-up ones"
         return (f"No Claude Code sessions yet: there is no {where}. Start one with `claude` in a project "
                 f"folder, or {start}.")
-    more = [f"--days {max(60, round(days * 2))} looks further back"]
+    more = [f"--days {min(MOST_DAYS, max(60, round(days * 2)))} looks further back"]
     if not include_all:
         more.append("--all adds claude -p, desktop app and IDE sessions")
     if dashboard:

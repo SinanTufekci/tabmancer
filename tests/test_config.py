@@ -63,3 +63,32 @@ def test_a_read_and_a_write_that_collide_wait_it_out(monkeypatch):
     assert config.read_json("teams.json") == {"teams": ["a", "b", "c"]}
     assert not list(config.config_dir().glob("*.tmp"))
     assert config.read_json("missing.json") is None  # no file is still no file, at once
+
+
+def test_a_lasting_refusal_is_not_waited_out():
+    # The wait above is for another process: a folder by that name, or a read-only file, never
+    # gives way, and every load and save of it stalled for a second.
+    import stat
+    import sys
+    import time
+
+    import pytest
+
+    folder = config.config_dir() / "teams.json"
+    folder.mkdir(parents=True)
+    began = time.monotonic()
+    assert config.read_json("teams.json") is None
+    with pytest.raises(OSError):
+        config.write_json("teams.json", {"teams": []})
+    if sys.platform == "win32":  # elsewhere a read-only file is replaced all the same
+        locked = config.config_dir() / "marks.json"
+        config.write_json("marks.json", {"hidden": []})
+        locked.chmod(stat.S_IREAD)
+        try:
+            with pytest.raises(PermissionError):
+                config.write_json("marks.json", {"hidden": ["a"]})
+            assert config.read_json("marks.json") == {"hidden": []}
+        finally:
+            locked.chmod(stat.S_IREAD | stat.S_IWRITE)
+    assert time.monotonic() - began < 0.5
+    assert not list(config.config_dir().glob("*.tmp"))

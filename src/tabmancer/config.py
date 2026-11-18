@@ -43,12 +43,24 @@ BUSY_TRIES = 40
 BUSY_WAIT = 0.025
 
 
+def _for_good(path: Path, write: bool = False) -> bool:
+    """A PermissionError that waiting will not end: a folder by that name, a read-only file or folder.
+    Only one another process holds open ends, and only that is worth the wait."""
+    if path.is_dir():
+        return True
+    if write:
+        return (path.exists() and not os.access(path, os.W_OK)) or not os.access(path.parent, os.W_OK)
+    return not os.access(path, os.R_OK)
+
+
 def read_json(name: str) -> object:
     path = config_dir() / name
     for attempt in range(BUSY_TRIES):
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except PermissionError:
+            if _for_good(path):
+                return None
             if attempt + 1 < BUSY_TRIES:
                 time.sleep(BUSY_WAIT)
         except (OSError, ValueError):
@@ -67,7 +79,7 @@ def write_json(name: str, data: object, indent: int | None = 1) -> None:
             os.replace(tmp, path)
             return
         except PermissionError:
-            if attempt + 1 == BUSY_TRIES:
+            if attempt + 1 == BUSY_TRIES or _for_good(path, write=True):
                 tmp.unlink(missing_ok=True)
                 raise
             time.sleep(BUSY_WAIT)

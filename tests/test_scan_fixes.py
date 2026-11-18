@@ -206,6 +206,49 @@ async def test_hiding_a_row_leaves_the_cursor_where_it_was(tmp_path, monkeypatch
         assert sorted(app.marks.hidden) == sorted([first, second])
 
 
+async def test_a_filter_starts_at_its_newest_match(tmp_path, monkeypatch):
+    # Keeping the cursor's place when its row went (above) also kept it for a filter: on the seventh
+    # row, /alpha landed on the third match, not the newest.
+    from conftest import _records
+
+    from tabmancer import app as app_module
+    from tabmancer.app import SessionPicker
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(app_module, "recent_shutdowns", list)
+    monkeypatch.setattr(app_module, "open_at_shutdown", lambda sessions, shutdowns: set())
+    project = tmp_path / "projects" / "C--work-demo"
+    project.mkdir(parents=True)
+    now = datetime.now().timestamp()
+    for i in range(8):
+        word = "alpha" if i < 3 else "beta"
+        path = project / f"s{i}.jsonl"
+        path.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n"
+                                for r in _records(f"do {word} {i}", "done", f"{word} task {i}")), encoding="utf-8")
+        os.utime(path, (now - i * 600, now - i * 600))
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(140, 40)) as pilot:
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if app.sessions:
+                break
+        await pilot.press(*["down"] * 6)
+        assert app.current().session_id.startswith("s") and "beta" in app.current().title
+        await pilot.press("slash", *"alpha")
+        await pilot.pause(0.3)
+        assert app.current().session_id == "s0"
+
+
+def test_the_hint_to_look_further_back_stays_in_range(tmp_path, monkeypatch):
+    # With --days 30000 and nothing found, it suggested --days 60000, which --days refuses.
+    from tabmancer import sessions
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "projects").mkdir()
+    assert "--days 36500 " in sessions.nothing_found(30000, include_all=True)
+    assert "--days 60 " in sessions.nothing_found(14, include_all=True)
+
+
 def test_days_must_be_a_number_of_days(capsys):
     # inf, nan and 1e9 ended in a traceback (OverflowError in timedelta), -1 listed "the last -1 days".
     from tabmancer import cli

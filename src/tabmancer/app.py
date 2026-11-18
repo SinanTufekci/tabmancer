@@ -933,7 +933,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.card_filter = None if self.card_filter == card else card
         for name, (_, card_id, _) in CARDS.items():
             self.cards[card_id].pick(name == self.card_filter)
-        self.refresh_rows()
+        self.refresh_rows(keep_place=False)
         self.update_status()
         if self.card_filter and not self.visible():
             self.notify(f"Nothing for {CARDS[card][2]} right now.", timeout=3)
@@ -1313,7 +1313,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         caption = Text("\nprocess", style=MUTED) if closed else Text("")
         return (Text(""), label, Text(""), Text(""), Text(""), caption, Text(""), Text(""))
 
-    def refresh_rows(self) -> None:
+    def refresh_rows(self, keep_place: bool = True) -> None:
+        """Build the table again. A filter that changed (keep_place False) starts at its newest match."""
         table = self.table
         current, row, scrolled = self.cursor_key(), table.cursor_row, table.scroll_y
         table.clear()  # the cursor goes to the top with it, and the scroll
@@ -1324,7 +1325,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         table.scroll_to(y=scrolled, animate=False, immediate=True)
         if current is not None and current in table.rows:
             table.move_cursor(row=table.get_row_index(current))
-        elif current is not None and table.row_count:
+        elif keep_place and current is not None and table.row_count:
             # Its row is gone (hidden, closed, folded into its team): the cursor stays where it was,
             # on the row that took its place, not on the newest session, where the next x or Enter
             # acted on a session never picked.
@@ -1717,7 +1718,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if event.option_list is not self.projects or event.option.id == self.project_filter:
             return
         self.project_filter = event.option.id or ALL_PROJECTS
-        self.refresh_rows()
+        self.refresh_rows(keep_place=False)
         self.update_chart()
 
 
@@ -2841,7 +2842,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if event.input is not self.filter_box:
             return
         self.filter_text = event.value
-        self.refresh_rows()
+        self.refresh_rows(keep_place=False)
         if len(event.value.strip()) >= search.SHORTEST:
             self.index_search()  # what the open sessions said since: only that is read
 
@@ -2854,7 +2855,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.found = ("", -1, set())
         self.search_version += 1
         if len(self.filter_text.strip()) >= search.SHORTEST:
-            self.refresh_rows()
+            self.refresh_rows(keep_place=False)
 
     def said_in(self) -> set[str]:
         """The sessions in whose conversation the filter's words were said; worked out once

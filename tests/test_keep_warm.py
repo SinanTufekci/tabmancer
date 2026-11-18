@@ -64,7 +64,8 @@ def live(path, status="busy"):
 @pytest.mark.parametrize("command,seconds", [
     ("sleep 3300", 3300), ("sleep 55m", 3300), ("sleep 1h", 3600), ("Start-Sleep -Seconds 3300", 3300),
     ("start-sleep 60", 60), ("sleep 3300;", 3300), ("sleep 3300; echo done", 3300), ("sleep 3300 && echo ok", 3300),
-    ("sleep 60 && npm test", None), ("sleep 60; echo $(rm -rf x)", None), ("until grep -q done f; do sleep 60; done", None), ("npm test", None)])
+    ("sleep 60 && npm test", None), ("sleep 60; echo $(rm -rf x)", None),
+    ("sleep 5; echo starting\nnpm run dev", None), ("sleep 5 && echo up\r\nnpm test", None), ("until grep -q done f; do sleep 60; done", None), ("npm test", None)])
 def test_a_keep_warm_sleep_is_told_from_other_commands(command, seconds):
     assert sessions.keep_warm_seconds(command) == seconds
 
@@ -306,3 +307,17 @@ def test_a_sleep_at_the_very_edge_of_the_tail_window_is_seen(tmp_path, monkeypat
                          + filler(back - len(sleep) - len(after)) + after)
         session = live(path, "shell")
         assert session.warm_until is not None and session.live_state == "idle", back
+
+
+def test_a_background_command_refused_before_the_tail_window_never_runs(tmp_path, monkeypatch):
+    # The look back read the call but not its refusal, which carries none of the marks it looked for.
+    monkeypatch.setattr(sessions, "TAIL_BYTES", 4096)
+    refused = {"type": "user", "timestamp": stamp(25), "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+         "content": "Permission for this command was denied by a built-in Claude Code safeguard."}]}}
+    chatter = [record for n in range(40) for record in (
+        prompt(f"peer note {n} " + "x" * 200, 3), reply("Noted. " + "y" * 200, 3))]
+    path = transcript(tmp_path, prompt("serve it", 30), background("t1", "npm run dev", 25), refused,
+                      reply(minutes_ago=25), *chatter)
+    assert path.stat().st_size > 4 * 4096
+    assert live(path, "shell").aside == []

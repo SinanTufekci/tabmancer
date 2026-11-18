@@ -15,11 +15,10 @@ from . import claudeupdate, clis, shortcuts, workspaces
 from .config import read_json, write_json
 from .launch import Launch, continue_prompt, open_tabs
 from .picks import EFFORTS, NO_CAP, Pick, advisor_ok, cap_tokens
-from .sessions import find_sessions, nothing_found
+from .sessions import MOST_DAYS, find_sessions, nothing_found
 from .shutdowns import open_at_shutdown, recent_shutdowns
 
 PROG = shortcuts.PROG
-MOST_DAYS = 36500
 
 
 def days_back(value: str) -> float:
