@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.1.10
+
+- **A member keeping its cache warm shows as waiting, not at work.** Claude Code calls a session
+  busy while a command it started in the background runs, so every member running its keep-warm
+  `sleep` looked at work. tabmancer reads the transcript: a sleep alone (`sleep 3300; echo done`
+  too) is idle, with "warm to HH:MM" on its card; another command shows as "background command".
+- **The dashboard says when a model falls back.** When another model answers in the one you picked
+  (a safeguard notice, or a weaker model mid-turn), you get one warning and an amber arrow in the
+  Model column, the member's card and the details, until the first model answers again or `/model`
+  picks one. The Model column names the version ("sonnet 5.5·high") and follows the window: one
+  made full screen from a small one no longer leaves it out.
+- **The team handover names what git shows left:** files not committed and commits not merged in
+  the team's folders and worktrees go into the lead's request. A member whose name the handover
+  keeps goes on in its old worktree, on its branch, instead of being refused.
+- **`g` edits a team's goal in a box of several lines** and keeps them. `Ctrl+E` shows a spinner
+  while it runs and says what came of it; `Enter` meanwhile no longer throws the rewrite away.
+- **Fixes.**
+  - Saved files (teams, marks) survive a read and a write that collide on Windows: a read that
+    lost read as no file, and the save after it could write `teams.json` back with teams gone.
+  - A message sent to a background session through npm's `claude.cmd` reaches it as written
+    (`%`, `&` and line breaks no longer go to cmd.exe), and a bare `--` reaches `claude.ps1`.
+  - A finished session that was resumed and closed stays done, not "cut off".
+  - `x` leaves the cursor where it was instead of jumping to the newest session.
+  - `H` on a member whose tab won't close opens no second session with its name.
+  - `B` shows a background job whose turn is over as idle, as the list does.
+  - Bit moves smoothly on a second screen, where the window has no focus.
+  - `--days` takes a number of days (`inf` and `1e9` ended in a traceback); `tabmancer list
+    --json` no longer crashes on usage resets.
+
 ## 0.1.9
 
 - **Wrapped's picture follows what you pick.** `← →`, `f`, `n` and `1 2 3` changed the slide, the
