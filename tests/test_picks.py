@@ -169,3 +169,18 @@ async def test_the_n_dialog_picks_a_model_and_an_effort(fake_home, tmp_path, mon
     launch = opened[0]
     assert (launch.model, launch.effort) == ("sonnet", "high") and launch.argv[1] == "--session-id"
     assert picks.recall(launch.new_id) == Pick("sonnet", "high", picks.NO_CAP)
+
+
+# --- agy: the chain's model, never Claude --------------------------------------------------------
+
+@pytest.mark.parametrize("asked", ["", "auto", "opus", "claude-sonnet-5-5-high", "gpt-oss-120b-medium"])
+def test_a_new_agy_session_gets_the_chains_model_and_no_effort(asked):
+    launch = picks.fresh(Launch("x", "C:/work", Mode.NEW, "", cli="agy"), Pick(asked, "max"))
+    assert (launch.model, launch.effort, launch.new_id) == ("gemini-4-argon-high", "", "")
+    assert launch.argv[:3] == ["agy", "--model", "gemini-4-argon-high"]
+    assert not any("claude" in word.lower() for word in launch.argv)
+
+
+def test_an_agy_resume_is_left_as_it_was():
+    launch = Launch("x", "C:/work", Mode.RESUME, "abc", cli="agy")
+    assert picks.fresh(launch, Pick("opus")) is launch

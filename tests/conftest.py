@@ -63,6 +63,11 @@ def isolated(monkeypatch, tmp_path):
     # as they were before caps (test_router, test_picks: caps).
     monkeypatch.setenv("TABMANCER_CONTEXT_CAP", "auto")
     monkeypatch.setattr(usage, "read_codex", lambda now=None: [])  # never the real ~/.codex
+    from tabmancer import agy
+
+    monkeypatch.setattr(agy, "_run_usage", lambda timeout: None)  # never the real `agy -p /usage`
+    monkeypatch.setattr(agy, "_last_read", None)
+    monkeypatch.setattr(agy, "_version", None)  # no agy version carried from one test to the next
     monkeypatch.setattr(focus, "focus_tab", lambda title: False)  # never switch the real tabs
     monkeypatch.setattr(focus, "close_tab", lambda title: False)  # nor close them
     monkeypatch.setattr(typein, "write_keys", lambda pid, text: False)  # nor type into a real console
@@ -96,8 +101,12 @@ def isolated(monkeypatch, tmp_path):
     # The week's word only where a test asks for it: run on a Friday afternoon, every dashboard said it.
     monkeypatch.setattr(wrapped, "due", lambda now=None: False)
     monkeypatch.setenv("TABMANCER_CONFIG_DIR", str(tmp_path / "tabmancer-config"))
-    # An empty ~/.claude unless a test builds one: never read the real transcripts.
+    monkeypatch.setenv("TABMANCER_BUS_DIR", str(tmp_path / "tabmancer-bus"))
+    # An empty ~/.claude and ~/.gemini/antigravity-cli unless a test builds one.
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-home"))
+    from tabmancer import agy
+
+    monkeypatch.setattr(agy, "home", lambda: tmp_path / "no-agy-home")
     # Bit in block characters, whatever terminal runs the tests: a test that wants real pixels says so.
     from tabmancer import sixel
 

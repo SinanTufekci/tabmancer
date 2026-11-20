@@ -252,7 +252,12 @@ def cap_of(session_id: str, picks: dict[str, dict] | None = None) -> int:
 def fresh(launch: Launch, pick: Pick) -> Launch:
     """A new Claude Code session with this pick, its cap decided (default_cap() where none was
     picked): it gets its id from tabmancer, so the pick can be given back when it is resumed.
-    Other CLIs go as they are."""
+    A new agy session gets the model agy.resolve() gives for the pick's: the chain's by quota,
+    never a Claude one, and no effort (the chain's ids carry theirs). Other CLIs go as they are."""
+    if launch.cli == "agy" and launch.mode is Mode.NEW:
+        from . import agy
+
+        return replace(launch, model=agy.resolve(pick.model)[0], effort="")
     if launch.cli != "claude" or launch.mode is not Mode.NEW:
         return launch
     pick = decided(pick)

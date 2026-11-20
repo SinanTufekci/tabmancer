@@ -12,7 +12,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
@@ -23,6 +22,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import __version__
 from .config import read_json, write_json
+from .teambus import _alive, _windows_process_start  # noqa: F401  (one definition: teambus is stdlib-only)
 
 CACHE_FILE = "index.json"
 CACHE_FORMAT = 9  # bump when Session or the parser changes shape (9: a resumed session's notices, /login as a system record)
@@ -43,6 +43,8 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 KEEP_WARM = re.compile(r"^\s*(?:sleep\s+(?P<n>\d+(?:\.\d+)?)(?P<unit>[smh]?)"
                        r"|start-sleep\s+(?:-s(?:econds)?\s+)?(?P<ps>\d+))"
                        r"(?:\s*(?:;|&&)\s*(?:echo|write-output|write-host)\b[^;&|<>`$\r\n]*)?\s*;?\s*$", re.IGNORECASE)
+BUS_LISTEN = re.compile(r"^\s*(?:\S*tabmancer(?:\.exe)?|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+-m\s+tabmancer)\s+"
+                        r"team\s+listen\b(?:.*?--timeout\s+(?P<t>\d+(?:\.\d+)?))?", re.IGNORECASE)
 UNITS = {"": 1, "s": 1, "m": 60, "h": 3600}
 # Claude Code tells a session a background command has ended with a <task-notification> naming the
 # tool call that started it (as a user record, or a queued_command attachment when it was mid-turn).
@@ -69,13 +71,16 @@ MODEL_COMMAND = "<command-name>/model</command-name>"  # you picked the model: n
 
 
 def keep_warm_seconds(command: str) -> float | None:
-    """How long a keep-warm sleep lasts, or None when the command is anything else."""
+    """How long a keep-warm sleep (or team bus listener) lasts, or None for anything else."""
     found = KEEP_WARM.match(command)
-    if found is None:
-        return None
-    if found["ps"]:
-        return float(found["ps"])
-    return float(found["n"]) * UNITS[found["unit"].lower()]
+    if found is not None:
+        if found["ps"]:
+            return float(found["ps"])
+        return float(found["n"]) * UNITS[found["unit"].lower()]
+    listening = BUS_LISTEN.match(command)
+    if listening is not None:
+        return float(listening["t"]) if listening["t"] else 3300.0
+    return None
 
 
 class Status(str, Enum):
@@ -877,50 +882,6 @@ def _agents_json(include_finished: bool = False) -> list[dict] | None:
     return [entry for entry in data if isinstance(entry, dict) and entry.get("sessionId")]
 
 
-def _windows_process_start(pid: int) -> int | None:
-    import ctypes
-    from ctypes import wintypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-
-    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-    if not handle:
-        return None
-    try:
-        code = wintypes.DWORD()
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:
-            return None  # 259 = STILL_ACTIVE
-        times = [wintypes.FILETIME() for _ in range(4)]
-        if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
-            return None
-        return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
-    finally:
-        kernel32.CloseHandle(handle)
-
-
-def _alive(info: dict) -> bool:
-    try:
-        pid = int(info["pid"])
-    except (KeyError, TypeError, ValueError):
-        return False
-    if sys.platform == "win32":
-        started = _windows_process_start(pid)
-        expected = info.get("procStart")
-        return started is not None and (not expected or str(expected) == str(started))
-    try:
-        os.kill(pid, 0)  # signal 0 only probes on POSIX (on Windows it would kill)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def _registry_sessions() -> list[dict]:
     """Fallback: Claude Code's own pid files in ~/.claude/sessions (internal format)."""
     found = []
@@ -1064,7 +1025,7 @@ def find_sessions(days: float = 14, include_all: bool = False, quick: bool = Fal
                 paths.append(path)
         except OSError:
             continue
-    from . import clis
+    from . import clis, teams
 
     on = clis.enabled()
     sessions: list[Session] = []
@@ -1078,7 +1039,10 @@ def find_sessions(days: float = 14, include_all: bool = False, quick: bool = Fal
                 live_query = pool.submit(live_sessions)  # spawns the CLI; overlap it with parsing
                 sessions = _read_cached(paths)
                 live = live_query.result()
-    sessions += other_sessions(days, [name for name in on if name != "claude"])
+    others = [name for name in on if name != "claude"]
+    if "agy" not in others and teams.has_cli("agy"):
+        others.append("agy")
+    sessions += other_sessions(days, others)
     if not include_all:
         sessions = [s for s in sessions if s.entrypoint in ("", "cli")]
     for session in sessions:

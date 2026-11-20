@@ -522,9 +522,57 @@ def _scan_codex(path: Path, entry: dict) -> None:
     entry["offset"] = offset
 
 
+def _scan_agy(path: Path, entry: dict) -> None:
+    """Scan an Antigravity CLI transcript.jsonl for per-step token counts, tools and edited files."""
+    from .agy import EDIT_TOOLS as AGY_EDIT_TOOLS
+    from .agy import _parse_arg_string
+
+    rows: list[list] = entry["rows"]
+    offset = entry["offset"]
+    with path.open("rb") as f:
+        f.seek(offset)
+        for line in f:
+            if not line.endswith(b"\n"):
+                break
+            offset += len(line)
+            if b'"PLANNER_RESPONSE"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict) or record.get("type") != "PLANNER_RESPONSE":
+                continue
+            at = _moment(record.get("created_at"))
+            if at is None:
+                continue
+            model = str(record.get("model") or "?")
+            inp = _count(record.get("input_tokens"))
+            cached = _count(record.get("cache_read_tokens"))
+            out = _count(record.get("output_tokens"))
+            tools: list[str] = []
+            files: list[str] = []
+            calls = record.get("tool_calls") if isinstance(record.get("tool_calls"), list) else []
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                name = str(call.get("name") or "")
+                if name:
+                    tools.append(name)
+                if name in AGY_EDIT_TOOLS:
+                    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+                    target = _parse_arg_string(args.get("Path") or args.get("TargetFile") or args.get("path"))
+                    if target and target not in files:
+                        files.append(target)
+            if inp or cached or out or tools:
+                key = f"agy:{entry['session']}:{record.get('step_index', offset)}"
+                rows.append([key, at, model, inp, 0, cached, out, tools, files])
+    entry["offset"] = offset
+
+
 def _files(cutoff: float) -> list[tuple[Path, str, str]]:
     """Session files written since cutoff: (path, session id, cli)."""
-    from . import clis
+    from . import clis, teams
 
     on = clis.enabled()
     found: list[tuple[Path, str, str]] = []
@@ -536,6 +584,11 @@ def _files(cutoff: float) -> list[tuple[Path, str, str]]:
         from . import codex
 
         found += [(p, p.stem[-36:], "codex") for p in _glob(codex.home() / "sessions", "*/*/*/rollout-*.jsonl")]
+    if "agy" in on or teams.has_cli("agy"):
+        from . import agy
+
+        found += [(p, p.parents[2].name, "agy")
+                  for p in _glob(agy.home() / "brain", "*/.system_generated/logs/transcript.jsonl")]
     out = []
     for path, sid, cli in found:
         try:
@@ -641,12 +694,13 @@ def _collect(days: float) -> Report:
             fresh[key] = entry
             continue
         if not entry or entry.get("offset", 0) > stat.st_size:  # new, or rewritten shorter
-            entry = {"session": sid, "cli": cli, "main": cli == "codex" or path.stem == sid,
+            entry = {"session": sid, "cli": cli, "main": cli in ("codex", "agy") or path.stem == sid,
                      "rows": [], "offset": 0, "cwd": "",
                      # Created first wins a reply that a fork copied.
                      "born": _born(path, stat)}
         try:
-            (_scan_codex if cli == "codex" else _scan)(path, entry)
+            scanner = _scan_codex if cli == "codex" else _scan_agy if cli == "agy" else _scan
+            scanner(path, entry)
         except OSError:
             continue
         entry.update(size=stat.st_size, mtime=stat.st_mtime_ns)

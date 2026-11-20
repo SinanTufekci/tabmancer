@@ -7,6 +7,7 @@ opens a new session in each, all in one go, optionally with the same first messa
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import time
@@ -24,7 +25,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import clis, improve, picks, router, teams, workspaces
+from . import agy, clis, improve, picks, router, teams, workspaces
 from .dialogs import Choice, cards, frame, light_rows, pill, title
 from .launch import Launch, Mode
 from .sessions import Session, folder_key
@@ -193,11 +194,12 @@ class NewSessions(ModalScreen[Request | None]):
         self.linked = False  # Ctrl+L: the lines as a team of peers in the one folder ticked
         # The router, asked only with Ctrl+R: its answers by the message they were for, the messages
         # it is being asked about, and whether an answer is taken into the rows when it comes.
-        self.routes: dict[str, router.Route | str] = {}  # a string: why there was no answer
-        self.routing: set[str] = set()
+        self.routes: dict[tuple[str, str], router.Route | str] = {}  # by (CLI, message); a string: why none
+        self.routing: set[tuple[str, str]] = set()
         self.take_route = False
         self.improving: str | None = None  # Ctrl+E: the first message being rewritten, as it was sent
         self.improve_note = Improving(self.MESSAGE_NOTE, f"improving with {improve.MODEL}")
+        self.quota_read = False  # agy's quota is read once, when agy is first picked
 
     def compose(self) -> ComposeResult:
         # Ids of their own: the dashboard's stylesheet hides its own #filter box.
@@ -221,6 +223,8 @@ class NewSessions(ModalScreen[Request | None]):
                     with Vertical(id="pick-card", classes="card"):
                         # The card's title names the rows: the model above, the effort under it.
                         yield Choice([picks.DEFAULT, *picks.MODELS], id="new-model", labels=SHORT)
+                        # agy's own: its chain, no Claude model (agy.resolve), shown in its place.
+                        yield Choice([AGY_CHAIN, *agy.CHAIN], id="new-agy-model", labels=AGY_SHORT)
                         yield Choice([picks.DEFAULT, *picks.EFFORTS], id="new-effort", labels=SHORT)
                         yield Choice([*picks.CAPS, picks.NO_CAP], value=picks.default_cap(), id="new-cap",
                                      labels=CAP_SHORT)
@@ -422,12 +426,31 @@ class NewSessions(ModalScreen[Request | None]):
             ("with ", MUTED), (clis.label(self.cli), f"bold {CYAN}"), ("  Ctrl+O" if many else "", MUTED)))
         for choice in self.query(Choice):
             choice.set_class(self.cli != "claude", "-off")
+        on_agy = self.cli == "agy"
+        self.query_one("#new-model").display = not on_agy
+        self.query_one("#new-agy-model", Choice).display = on_agy
+        self.query_one("#new-agy-model", Choice).set_class(False, "-off")
+        if on_agy and not self.quota_read:
+            self.quota_read = True  # once a dialog: what agy has left, for the chain's line
+            self.run_worker(self.read_quota, thread=True, group="agy-quota", exit_on_error=False)
         self.show_pick()
+
+    def read_quota(self) -> None:
+        """In a thread: agy's quota (a few seconds, no quota spent), then the line says it."""
+        if agy.refresh_quota() and self.is_mounted:
+            self.app.call_from_thread(self.show_pick)
+
+    def agy_model(self) -> tuple[str, str]:
+        """The model agy's sessions get from its row, and why (agy.resolve: never a Claude one)."""
+        value = self.query_one("#new-agy-model", Choice).value
+        return agy.resolve("" if value == AGY_CHAIN else value)
 
     # --- model and effort -----------------------------------------------------------
 
     def pick(self) -> picks.Pick:
-        """What the Model, Effort and Context rows say; nothing for other CLIs."""
+        """What the Model, Effort and Context rows say; for agy its model row only; nothing for other CLIs."""
+        if self.cli == "agy":
+            return picks.Pick(self.agy_model()[0])
         if self.cli != "claude":
             return picks.Pick()
         model, effort, cap, advisor = (self.query_one(f"#new-{row}", Choice).value
@@ -445,7 +468,13 @@ class NewSessions(ModalScreen[Request | None]):
     def show_pick(self) -> None:
         """A line on the row in focus, or on what is picked: what it means for the sessions."""
         words = self.query_one("#new-pick-words", Label)
-        if self.cli != "claude":
+        if self.cli == "agy":
+            chosen = self.query_one("#new-agy-model", Choice).value
+            model, why = self.agy_model()
+            about = ("Argon while its quota lasts, then Hydrogen, then Flash; never a Claude model"
+                     if chosen == AGY_CHAIN else f"{AGY_SHORT[chosen]}, {agy.CHAIN_WORDS[chosen]}")
+            words.update(f"{about}. Now: {agy.CHAIN_NAMES[model]}" + (f" ({why})" if why else "") + ".")
+        elif self.cli != "claude":
             words.update(f"Model and effort are for Claude Code sessions; {clis.label(self.cli)} uses its own settings.")
         else:
             model, effort = self.query_one("#new-model", Choice), self.query_one("#new-effort", Choice)
@@ -510,44 +539,60 @@ class NewSessions(ModalScreen[Request | None]):
         """Ask the router about the first message as it is now, unless it was asked already: one
         quick call to a small model, in a thread. With take, its pick goes into the rows when it comes."""
         key = self.route_key()
-        if self.cli != "claude" or not router.worth_routing(key):
+        if self.cli not in router.CLIS or not router.worth_routing(key):
             self.show_route()
             return
-        self.take_route = take or (self.take_route and key in self.routing)
-        found = self.routes.get(key)
-        if isinstance(found, router.Route):
+        slot = (self.cli, key)  # each CLI has picks of its own for the same message
+        self.take_route = take or (self.take_route and slot in self.routing)
+        found = self.routes.get(slot)
+        # A guess made when the router was not reached is asked again.
+        if isinstance(found, router.Route) and not (take and found.guessed):
             if take:
                 self.take(found)
             self.show_route()
             return
-        if key not in self.routing:
-            self.routing.add(key)
-            self.routes.pop(key, None)  # asked again after it failed
+        if slot not in self.routing:
+            self.routing.add(slot)
+            self.routes.pop(slot, None)  # asked again after it failed
             folders = self.chosen_names()
-            self.run_worker(lambda: self.ask_router(key, folders), thread=True, group="route", exit_on_error=False)
+            self.run_worker(lambda: self.ask_router(slot, folders), thread=True, group="route", exit_on_error=False)
         self.show_route()
 
-    def ask_router(self, key: str, folders: list[str]) -> None:
-        """In a thread: the router's answer, or why there is none."""
+    def ask_router(self, slot: tuple[str, str], folders: list[str]) -> None:
+        """In a thread: the router's answer, or why there is none. Whatever goes wrong, the answer
+        comes back, so the line never stays at "asking…" and Ctrl+R can ask again."""
+        cli, key = slot
+        found: router.Route | str = "the router stopped"
         try:
-            found: router.Route | str = router.suggest(key, folders)
-        except (SummaryError, OSError) as problem:
+            found = router.suggest(key, folders, cli)
+        except Exception as problem:  # noqa: BLE001 - any failure is said on the router's line
             found = str(problem) or type(problem).__name__
-        self.app.call_from_thread(self.routed, key, found)
+        finally:
+            with contextlib.suppress(RuntimeError):  # the app has closed meanwhile
+                self.app.call_from_thread(self.routed, slot, found)
 
-    def routed(self, key: str, found: router.Route | str) -> None:
-        self.routing.discard(key)
-        self.routes[key] = found
-        if not self.is_mounted or key != self.route_key():
-            return  # the message has changed since: kept, should it come back
+    def routed(self, slot: tuple[str, str], found: router.Route | str) -> None:
+        self.routing.discard(slot)
+        self.routes[slot] = found
+        if not self.is_mounted or slot != (self.cli, self.route_key()):
+            return  # the message or the CLI has changed since: kept, should it come back
         if isinstance(found, router.Route) and self.take_route:
             self.take(found)
         self.take_route = False
         self.show_route()
 
     def take(self, route: router.Route) -> None:
-        """The router's pick into the rows: what it named, the rest as it was."""
+        """The router's pick into the rows: what it named, the rest as it was. An agy pick goes into
+        agy's row (Claude Code's stay as they were): as "chain" when it is what the chain picks now,
+        so the sessions still follow the quota when they open; another CLI's pick is only said."""
         self.take_route = False
+        if route.cli == "agy":
+            if route.pick.model in agy.CHAIN:
+                chained = route.pick.model == agy.resolve("")[0]
+                self.query_one("#new-agy-model", Choice).pick(AGY_CHAIN if chained else route.pick.model)
+            return
+        if route.cli != "claude":
+            return
         for row, value in (("model", route.pick.model), ("effort", route.pick.effort), ("cap", route.pick.cap)):
             if value:
                 self.query_one(f"#new-{row}", Choice).pick(value)
@@ -561,21 +606,27 @@ class NewSessions(ModalScreen[Request | None]):
         """The router's line, under the rows: what it suggests and why, that it is asking, or why not."""
         label = self.query_one("#new-route", Label)
         key = self.route_key()
-        label.display = self.cli == "claude"
-        if self.cli != "claude":
+        label.display = self.cli in router.CLIS
+        if self.cli not in router.CLIS:
             return
-        found = self.routes.get(key)
+        slot = (self.cli, key)
+        found = self.routes.get(slot)
         if not router.worth_routing(key):
             label.update(Text.assemble(("Router: ", MUTED), ("Ctrl+R", f"bold {MUTED}"),
                                        (" suggests a pick once there is a ", MUTED), ("first message", f"bold {AMBER}"),
                                        (" (3 words or more).", MUTED)))
-        elif key in self.routing:
-            label.update(Text.assemble(("Router: ", MUTED), (f"asking {router.MODEL} what this needs…", MUTED),
+        elif slot in self.routing:
+            asking ="reading agy's quota…" if self.cli == "agy" else f"asking {router.MODEL} what this needs…"
+            label.update(Text.assemble(("Router: ", MUTED), (asking, MUTED),
                                        ("  it goes in when it comes" if self.take_route else "", MUTED)))
         elif isinstance(found, router.Route):
             why = f" — {found.why}" if found.why else ""
-            if self.taken(found):
-                label.update(Text.assemble(("✓ ", f"bold {GREEN}"), ("the router's pick", GREEN), (why, MUTED)))
+            if found.cli != "claude":
+                label.update(Text.assemble(("Router: ", MUTED), (found.words(), f"bold {CYAN}"), (why, MUTED)))
+            elif self.taken(found):
+                label.update(Text.assemble(("✓ ", f"bold {GREEN}"), (found.why, AMBER),
+                                           ("  Ctrl+R asks the router again", MUTED)) if found.guessed else
+                             Text.assemble(("✓ ", f"bold {GREEN}"), ("the router's pick", GREEN), (why, MUTED)))
             else:
                 label.update(Text.assemble(("Router suggests ", MUTED), (found.words(), f"bold {CYAN}"), (why, MUTED),
                                            ("  Ctrl+R", f"bold {AMBER}"), (" takes it", MUTED)))
@@ -588,8 +639,9 @@ class NewSessions(ModalScreen[Request | None]):
 
     def action_route(self) -> None:
         """Ctrl+R: the router's pick into the rows, asked for now if it is not there yet."""
-        if self.cli != "claude":
-            self.notify("The router picks for Claude Code sessions: Ctrl+O to Claude Code first.", severity="warning")
+        if self.cli not in router.CLIS:
+            self.notify(f"The router picks for Claude Code and Antigravity sessions, not {clis.label(self.cli)}: "
+                        "Ctrl+O to another CLI first.", severity="warning")
             return
         if not router.worth_routing(self.route_key()):
             self.notify("Ctrl+R needs the first message: write what the session is to do (3 words or more), "
@@ -769,6 +821,8 @@ TAIL = 20  # the sessions and the last time, right-aligned at a row's end
 SHORT = {picks.DEFAULT: "default"}  # "your default" as the Model and Effort rows show it
 CAP_SHORT = {picks.NO_CAP: "Claude's own"}  # no cap, as the Context row shows it
 ADVISOR_SHORT = {picks.NO_ADVISOR: "no advisor"}  # as the Advisor row shows it
+AGY_CHAIN = "chain"  # agy's Model row: the chain decides by quota (agy.pick_model)
+AGY_SHORT = {AGY_CHAIN: "chain", **{model: name.lower() for model, name in agy.CHAIN_NAMES.items()}}
 
 
 def _seps(text: str) -> str:

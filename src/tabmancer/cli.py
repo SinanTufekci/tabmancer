@@ -109,13 +109,13 @@ def main(argv: list[str] | None = None) -> None:
                           help="open this workspace directly instead of the picker")
     startup = sub.add_parser("startup", help="open the picker at login when sessions were left open")
     startup.add_argument("action", choices=["on", "off", "status"])
-    teaming = sub.add_parser("team", help="add members to a team (what a lead that decides runs), or start the "
-                                          "ones that are closed (what a lead runs to bring one back)")
-    teaming.add_argument("action", choices=["add", "start"])
+    teaming = sub.add_parser("team", help="manage a team: add/start members, or send/listen/who on the cross-CLI bus")
+    teaming.add_argument("action", choices=["add", "start", "send", "listen", "who", "run"])
     teaming.add_argument("team", help="the team's name")
-    teaming.add_argument("members", nargs="?", default="",
-                         help='add: "name: area @model @effort; name: area" (model and effort are optional); '
-                              "start: the members to start, by name (none: every one that is not open)")
+    teaming.add_argument("rest", nargs=argparse.REMAINDER,
+                         help='add: "name: area @agy @model @effort; ..."; start: [member ...]; '
+                              'send: <to> <message> [--from <member>] [--summary <text>]; '
+                              'listen: [member] [--timeout N]; who; run: <member> -- <cmd...>')
     telling = sub.add_parser("notifications", help="desktop notifications when a session wants you back")
     telling.add_argument("action", nargs="?", choices=["on", "off", "test"])
     checking = sub.add_parser("updates", help="say when a newer tabmancer is out (PyPI, once a day): on or off")
@@ -191,8 +191,18 @@ def main(argv: list[str] | None = None) -> None:
         save_wrapped(args.action, args.out, "story" if args.story else "wide", args.share, args.period, args.slide,
                      args.gif, args.names)
     elif args.command == "team":
-        claudeupdate.before_opening(print)  # today's claude update, before the members open
-        sys.exit(start_team(args.team, args.members) if args.action == "start" else add_to_team(args.team, args.members))
+        if args.action in ("add", "start"):
+            claudeupdate.before_opening(print)  # today's claude update, before the members open
+            spec = " ".join(args.rest)
+            sys.exit(start_team(args.team, spec) if args.action == "start" else add_to_team(args.team, spec))
+        elif args.action == "send":
+            sys.exit(team_send(args.team, args.rest))
+        elif args.action == "listen":
+            sys.exit(team_listen(args.team, args.rest))
+        elif args.action == "who":
+            sys.exit(team_who(args.team))
+        elif args.action == "run":
+            sys.exit(team_run(args.team, args.rest))
     elif args.command == "startup-run":
         startup_main()
     else:
@@ -254,29 +264,34 @@ def add_to_team(name: str, spec: str) -> int:
         return 1
     team = teams.load()[team.name]  # with them on it: their roles name everyone
     joining = teams.joining(team, added)
+    quiet = [launch for launch in joining if teams.in_background(team, launch)]
+    tabs = [launch for launch in joining if launch not in quiet]
     leftover: list[str] = []
-    if team.background:  # no tabs: each its own background session
+    if quiet:
         from .launch import run_in_background
 
-        for launch in joining:
+        for launch in quiet:
             try:
                 run_in_background(launch)
             except OSError as error:
                 print(f"{launch.title} did not start in the background: {error}")
-        where = "They are starting in the background, with no tabs,"
-    else:
+    if tabs:
         try:
-            leftover = open_tabs(joining)
+            leftover = open_tabs(tabs)
         except OSError as error:
             print(f"They joined the team {team.name}, but their tabs could not open: {error}. The dashboard's s "
                   "starts them.")
             return 1
-        where = "Their tabs are opening"
-    names = ", ".join(f"{team.session_name(m)} ({m.focus or m.name}{f', {m.pick.words()}' if m.pick else ''})"
-                      for m in added)
+    where = ("They are starting in the background, with no tabs," if quiet and not tabs else
+             "Their tabs are opening" if tabs and not quiet else
+             "They are starting in tabs and the background")
+    names = ", ".join(f"{team.session_name(m)} ({m.cli + ', ' if m.cli != 'claude' else ''}{m.focus or m.name}"
+                      f"{f', {m.pick.words()}' if m.pick else ''})" for m in added)
     told = team.session_name(team.lead) if team.lead is not None else "the others"
+    how_msg = (f'Message them with `tabmancer team send {team.name} <member> "..."`.'
+               if team.uses_bus else "Message them with SendMessage by those names.")
     print(f"Joined the team {team.name}: {names}. {where} and each will introduce itself to "
-          f"{told}. Message them with SendMessage by those names.")
+          f"{told}. {how_msg}")
     if note:
         print(f"Note: {note}.")
     if leftover:  # nothing opened: said in the exit code too, so a lead does not wait for them
@@ -348,13 +363,18 @@ def start_team(name: str, spec: str = "") -> int:
     left_be = set(already) | set(starting) | set(other)
     launches = teams.start(team, found, only={m.name for m in chosen if team.session_name(m) not in left_be})
     if already:
-        print(f"Open already: {', '.join(already)}. Message them with SendMessage.")
+        how = f"`tabmancer team send {team.name} <member> \"...\"`" if team.uses_bus else "SendMessage"
+        print(f"Open already: {', '.join(already)}. Message them with {how}.")
     if starting:
-        print(f"Opening a moment ago, so not opened again: {', '.join(starting)}. Wait for ListAgents to show them.")
+        check = f"`tabmancer team who {team.name}`" if team.uses_bus else "ListAgents"
+        print(f"Opening a moment ago, so not opened again: {', '.join(starting)}. Wait for {check} to show them.")
     if other:
         print(f"A session of the name {', '.join(other)} is open, not this team's: close it, then start the member.")
     if not launches:
         return 0 if not other else 1
+    opening = {teams.session_name_of(team, launch) for launch in launches}
+    for note in teams.agy_notes(team, {m.name for m in chosen if team.session_name(m) in opening}):
+        print(note)  # an agy member asked for a Claude model: what it runs on instead
     quiet = [launch for launch in launches if teams.in_background(team, launch)]
     tabs = [launch for launch in launches if launch not in quiet]
     started, failed = [], []
@@ -383,11 +403,110 @@ def start_team(name: str, spec: str = "") -> int:
     if started:
         where = ("in the background" if all(launch in quiet for launch in started) else
                  "in their tabs" if not any(launch in quiet for launch in started) else "in tabs and the background")
-        print(f"Starting {', '.join(said(launch) for launch in started)} {where}. Each comes back with its name "
-              "and role; message them with SendMessage by those names once ListAgents shows them.")
+        if team.uses_bus:
+            print(f"Starting {', '.join(said(launch) for launch in started)} {where}. Each comes back with its name "
+                  f'and role; message them with `tabmancer team send {team.name} <member> "..."`.')
+        else:
+            print(f"Starting {', '.join(said(launch) for launch in started)} {where}. Each comes back with its name "
+                  "and role; message them with SendMessage by those names once ListAgents shows them.")
     for line in failed:
         print(line)
     return 0 if not failed and not other else 1
+
+
+def team_send(name: str, rest: list[str]) -> int:
+    """Send a message to a team member over tabmancer's cross-CLI bus."""
+    from . import teambus, teams
+
+    p = argparse.ArgumentParser(prog=f"{PROG} team send {name}", add_help=True)
+    p.add_argument("--from", dest="sender", default="", help="sender member name (defaults to TABMANCER_MEMBER)")
+    p.add_argument("--summary", default="", help="optional short one-line summary")
+    p.add_argument("to", help="recipient member name (or session name, or 'all')")
+    p.add_argument("message", nargs="+", help="message text")
+    try:
+        opts = p.parse_args(rest)
+    except SystemExit as exc:
+        return int(exc.code) if isinstance(exc.code, int) else 2
+    team_name = teams.clean(name)
+    team = teams.load().get(team_name)
+    return teambus.send_command(team_name, opts.to, " ".join(opts.message), sender=opts.sender,
+                                summary=opts.summary, members={m.name for m in team.members} if team else None)
+
+
+def team_listen(name: str, rest: list[str]) -> int:
+    """Wait until unread message(s) arrive for this member on the team bus, print them and exit."""
+    import os
+
+    from . import teambus, teams
+
+    p = argparse.ArgumentParser(prog=f"{PROG} team listen {name}", add_help=True)
+    p.add_argument("member", nargs="?", default="", help="member name (defaults to TABMANCER_MEMBER)")
+    p.add_argument("--timeout", type=float, default=teambus.DEFAULT_LISTEN_TIMEOUT,
+                   help="seconds to wait before exiting cleanly (default 3300)")
+    try:
+        opts = p.parse_args(rest)
+    except SystemExit as exc:
+        return int(exc.code) if isinstance(exc.code, int) else 2
+    team_name = teams.clean(name)
+    member = opts.member or os.environ.get("TABMANCER_MEMBER") or ""
+    if not member:
+        print("Name the member to listen for (or set TABMANCER_MEMBER).", file=sys.stderr)
+        return 1
+    team = teams.load().get(team_name)
+    since = teams._made(team.created) if team is not None and team.created else None
+    return teambus.listen_command(team_name, member, timeout=opts.timeout, since=since)
+
+
+def team_who(name: str) -> int:
+    """List a team's members, their CLIs and whether each is online / listening."""
+    from . import teambus, teams
+    from .sessions import Exit
+
+    team_name = teams.clean(name)
+    saved = teams.load()
+    team = saved.get(team_name)
+    if team is None:
+        print(f"There is no team called {name}. Teams: {', '.join(saved) or 'none'}.")
+        return 1
+    live = teams.live_names()
+    presence = teambus.read_presence(team.name)
+    listed = find_sessions(MEMBER_DAYS, include_all=True, quick=True)
+    found = teams.member_sessions(team, listed, live=live)
+    for member in team.ordered:
+        session = found.get(member.name)
+        pinfo = presence.get(member.name)
+        if session is not None and session.exit is Exit.RUNNING:
+            state = "listening" if (pinfo and pinfo.get("listening")) else (session.live_state or "open")
+        elif pinfo and pinfo.get("runner_alive"):
+            state = "listening" if pinfo.get("listening") else "open"
+        else:
+            state = "closed"
+        role_word = "lead" if member.lead else (member.focus or member.name)
+        owns = f" [{member.owns}]" if member.owns else ""
+        print(f"{member.name} ({team.session_name(member)}) · {member.cli} · {state} · {role_word}{owns}")
+    return 0
+
+
+def team_run(name: str, rest: list[str]) -> int:
+    """Run a team member CLI inside its terminal tab while tracking live process presence."""
+    from . import teambus, teams
+
+    if not rest:
+        print(f"Usage: {PROG} team run <team> <member> -- <command...>", file=sys.stderr)
+        return 2
+    member = rest[0]
+    cmd = rest[1:]
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    if not cmd:
+        print(f"Usage: {PROG} team run <team> <member> -- <command...>", file=sys.stderr)
+        return 2
+    team_name = teams.clean(name)
+    saved = teams.load()
+    team = saved.get(team_name)
+    created = team.created if team is not None else ""
+    cli_name = "agy" if cmd[0].lower().startswith("agy") else "claude"
+    return teambus.run_member(team_name, member, cmd, cli=cli_name, created=created)
 
 
 def manage_notifications(action: str | None) -> None:

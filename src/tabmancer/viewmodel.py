@@ -16,7 +16,7 @@ import posixpath
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 
-from . import context, picks, teams
+from . import agy, context, picks, teambus, teams
 from .sessions import INTERRUPTED, Exit, Session, Status, folder_key
 from .teams import TeamState, counts
 from .tokens import duration
@@ -154,6 +154,32 @@ def label_of(session: Session) -> tuple[str, str]:
     return state_of(session)[:2]
 
 
+# A team's members, counted on its row by what each does (state_id), in this order: (glyph, tone).
+# An idle one grey as on its chip, ◐ only for one stopped at a usage limit, as in the list.
+TEAM_GLYPHS = {"needs-you": ("!", "your-turn!"), "waiting": ("●", "your-turn"), "working": ("✶", "working"),
+               "limit": ("◐", "to-continue"), "idle": ("●", "done"), "shell": ("◦", "aside")}
+
+
+def member_words(session: Session | None) -> tuple[str, str]:
+    """What a team member is doing, in the list's words with its team glyph: (words, tone)."""
+    if session is None:
+        return "not started", "done"
+    if session.exit is not Exit.RUNNING:
+        return STATUS[session.status]
+    label, tone, _ = state_of(session)
+    return f"{TEAM_GLYPHS.get(state_id(session), ('●', ''))[0]} {label}", tone
+
+
+def team_key_pairs(started: bool, unfolded: bool) -> tuple[tuple[str, str], ...]:
+    """The keys a team's row offers, (key, what): a team not started yet, or one at work (its
+    members unfolded under it or not)."""
+    if not started:
+        return (("Enter", "team view"), ("s", "start the team"), ("e", "members"), ("E", "all teams"),
+                ("Space", "tick"), ("a", "add"), ("x", "hide"), ("T", "teams"))
+    return (("Enter", "team view"), ("e", "fold" if unfolded else "unfold"), ("E", "all teams"),
+            ("s", "start the rest"), ("a", "add"), ("x", "close"), ("T", "teams"))
+
+
 def by_project(sessions: list[Session]) -> list[str]:
     """'web-app ×2', 'api-server': the projects of these sessions, the busiest first."""
     tally: dict[str, int] = {}
@@ -270,6 +296,14 @@ class SessionView:
 
 
 @dataclass
+class MessageView:
+    at: datetime
+    sender: str
+    receiver: str
+    text: str
+
+
+@dataclass
 class MemberView:
     name: str
     lead: bool
@@ -278,14 +312,21 @@ class MemberView:
     state: str
     label: str
     tone: str
-
-
-@dataclass
-class MessageView:
-    at: datetime
-    sender: str
-    receiver: str
-    text: str
+    cli: str = "claude"
+    model: str = ""  # the model that answers (its session's), else the one it starts with; "" for Claude's default
+    effort: str = ""
+    model_note: str = ""  # why an agy member gets another model than the one written for it
+    fell_back: str = ""  # "opus 5.5 → sonnet 5.5 (overloaded)" while another model took over by itself
+    context: float | None = None  # 0..1 of its cap or window (Claude only)
+    cap: int = 0  # its context cap in tokens; 0: none
+    tokens: int | None = None
+    unread: int = 0  # bus messages to it not yet taken (a team on the bus)
+    last: MessageView | None = None  # the newest message to or from it
+    warm_until: datetime | None = None  # done for now, a keep-warm sleep keeping its cache until then
+    needs_you: bool = False
+    quota: dict | None = None  # an agy member's model: agy.standing() ({"left", "span", "back", ...})
+    git: dict | None = None  # its folder's (its worktree's): {"branch", "changed": files, "ahead": commits}
+    bus: dict | None = None  # {"runner": bool, "listening": bool, "since": datetime | None}; None off the bus
 
 
 @dataclass
@@ -298,6 +339,14 @@ class TeamView:
     members: list[MemberView]
     wires: list[dict]  # {"from", "to", "count"}: every message between two members
     latest: list[MessageView]  # the newest, newest last
+    clis: list[str] = field(default_factory=list)  # claude first, then the others by name
+    uses_bus: bool = False
+    cap: int = 0  # its members' context cap in tokens; 0: none
+    peers: bool = False  # nobody leads
+    background: bool = False
+    worktrees: bool = False
+    lead: str | None = None
+    folder: str = ""
 
 
 @dataclass
@@ -320,6 +369,7 @@ class View:
     projects: list[ProjectView]
     cards: dict
     limits: list[dict] = field(default_factory=list)
+    agy_quota: dict = field(default_factory=dict)  # agy.quota_view(): {} without agy
 
 
 def session_view(session: Session, *, hidden: bool, pinned: bool, member: tuple[str, str] | None,
@@ -340,22 +390,93 @@ def session_view(session: Session, *, hidden: bool, pinned: bool, member: tuple[
         tokens=tokens, armed=armed, queued=queued)
 
 
-def team_view(state: TeamState, tokens: dict, sessions: dict[str, Session]) -> TeamView:
+def team_bus(team: teams.Team) -> tuple[dict[str, dict], dict[str, int]]:
+    """For a team on the bus: (member -> live presence, member -> messages not yet taken); empty
+    for a team without one. Reads the bus's files."""
+    if not team.uses_bus:
+        return {}, {}
+    try:
+        presence = teambus.read_presence(team.name)
+        unread = {m.name: len(teambus.unread(team.name, team.session_name(m))) for m in team.members}
+    except OSError:
+        return {}, {}
+    return presence, unread
+
+
+def _presence_of(presence: dict[str, dict], team: teams.Team, member: teams.Member) -> dict | None:
+    info = presence.get(member.name) or presence.get(team.session_name(member))
+    if info is None:
+        info = presence.get(teambus.normalize_member(team.name, member.name))
+    if info is None:
+        return None
+    since = info.get("started")
+    try:
+        moment = datetime.fromisoformat(str(since)).astimezone().replace(tzinfo=None) if since else None
+    except ValueError:
+        moment = None
+    return {"runner": bool(info.get("runner_alive")), "listening": bool(info.get("listening")), "since": moment}
+
+
+def member_model(member: teams.Member, session: Session | None) -> tuple[str, str]:
+    """(model, note): the model a member answers with, its session's when known; else the one it
+    starts with: for an agy member the picker's (Argon, Hydrogen, Flash by quota, never Claude), with
+    a note when the one written for it is replaced."""
+    if session is not None and session.model and not session.model.startswith("<"):
+        return session.model, ""
+    if member.cli == "agy":
+        return agy.resolve(member.model)
+    return member.model, ""
+
+
+def team_view(state: TeamState, tokens: dict, sessions: dict[str, Session], *,
+              git_of=None, agy_usage: dict | None = None, bus: tuple[dict, dict] | None = None) -> TeamView:
+    """A team as the view carries it. git_of: folder -> its git as MemberView.git has it, or None; agy_usage: the
+    saved agy quota (agy.load_quota()), read here when not given; bus: team_bus(), read here when not
+    given."""
+    team = state.team
+    presence, unread = bus if bus is not None else team_bus(team)
+    team_cap = picks.cap_tokens(team.cap)
     members = []
-    for member in state.team.ordered:
+    for member in team.ordered:
         found = state.sessions.get(member.name)
-        now =sessions.get(found.session_id, found) if found is not None else None
+        now = sessions.get(found.session_id, found) if found is not None else None
         if now is None:
             words, tone, state_name = "not started", "done", "not-started"
         else:
             (words, tone), state_name = label_of(now), state_id(now)
-        members.append(MemberView(member.name, member.lead, member.focus, now.session_id if now else None,
-                                  state_name, words, tone))
+        model, note = member_model(member, now)
+        view = MemberView(member.name, member.lead, member.focus, now.session_id if now else None, state_name,
+                          words, tone, cli=member.cli, model=model,
+                          effort=member.effort if member.cli == "claude" else "", model_note=note, cap=team_cap,
+                          unread=unread.get(member.name, 0),
+                          bus=_presence_of(presence, team, member) if team.uses_bus else None)
+        if member.cli == "agy":
+            if agy_usage is None:
+                agy_usage = agy.load_quota()
+            view.quota = agy.standing(model, agy_usage)
+        said = next((m for m in reversed(state.said) if member.name in (m.sender, m.receiver)), None)
+        if said is not None:
+            view.last = MessageView(said.at, said.sender, said.receiver, " ".join((said.summary or said.text).split()))
+        if now is not None:
+            view.cap = teams.cap_of(now.session_id, team)
+            if now.context and member.cli == "claude":
+                view.context = context.share(now, view.cap)
+            if (use := tokens.get(now.session_id)) is not None:
+                view.tokens = use.total
+            if git_of is not None and now.cwd:
+                view.git = git_of(now.cwd)
+            if now.exit is Exit.RUNNING:
+                view.fell_back = now.fell_back or ""
+                view.warm_until = now.warm_until if now.turn_over else None
+                view.needs_you = not at_limit(now) and state_of(now)[2] < 2
+        members.append(view)
     wires = [{"from": a, "to": b, "count": n} for (a, b), n in sorted(counts(state.between_members()).items())]
     latest = [MessageView(m.at, m.sender, m.receiver, " ".join((m.summary or m.text).split()))
               for m in state.said[-LATEST:]]
-    return TeamView(state.team.name, state.team.project, state.team.goal, state.open_count(),
-                    state.tokens(tokens), members, wires, latest)
+    return TeamView(team.name, team.project, team.goal, state.open_count(), state.tokens(tokens), members, wires,
+                    latest, clis=sorted(team.clis, key=lambda cli: (cli != "claude", cli)), uses_bus=team.uses_bus,
+                    cap=team_cap, peers=team.peers, background=team.background, worktrees=team.worktrees,
+                    lead=team.lead.name if team.lead is not None else None, folder=team.cwd)
 
 
 def build(sessions: dict[str, Session], *, hidden: set[str], pinned: set[str], git: dict, team_states: dict,
@@ -372,6 +493,12 @@ def build(sessions: dict[str, Session], *, hidden: set[str], pinned: set[str], g
     def git_of(folder: str) -> dict | None:
         state = git.get(folder_key(folder))
         return {"changed": bool(state.changed), "ahead": bool(state.ahead)} if state is not None else None
+
+    def git_counts(folder: str) -> dict | None:
+        """A member's folder (its worktree's): its branch and how much is changed and not pushed."""
+        state = git.get(folder_key(folder))
+        return ({"branch": state.branch, "changed": state.changed, "ahead": state.ahead}
+                if state is not None else None)
 
     default_cap = picks.cap_tokens(picks.default_cap())
 
@@ -408,9 +535,12 @@ def build(sessions: dict[str, Session], *, hidden: set[str], pinned: set[str], g
              "need_you": by_project([s for s in open_now if state_of(s)[2] < 2]),
              "to_continue": by_project([s for s in sessions.values() if s.session_id not in hidden
                                         and s.exit is not Exit.RUNNING and s.status in INTERRUPTED])}
-    return View(datetime.now(), views, groups, [team_view(state, tokens, sessions) for state, _ in grouped.blocks],
+    agy_usage = agy.load_quota()
+    team_views = [team_view(state, tokens, sessions, git_of=git_counts, agy_usage=agy_usage) for state, _ in grouped.blocks]
+    return View(datetime.now(), views, groups, team_views,
                 sorted(projects.values(), key=lambda p: p.last_active, reverse=True), cards,
-                [{"label": lim.label, "percent": lim.percent, "resets_at": lim.resets} for lim in limits])
+                [{"label": lim.label, "percent": lim.percent, "resets_at": lim.resets} for lim in limits],
+                agy.quota_view(agy_usage))
 
 
 def to_json(view: View) -> dict:

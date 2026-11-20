@@ -21,6 +21,7 @@ from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from . import (
+    agy,
     background,
     context,
     focus,
@@ -29,6 +30,7 @@ from . import (
     newsessions,
     picks,
     summarize,
+    teambus,
     teams,
     teamtree,
     viewmodel,
@@ -61,14 +63,17 @@ def colours(team: teams.Team, accent: str) -> dict[str, str]:
     return out
 
 
-def card_model(session: Session | None, pick) -> tuple[str, bool]:
+def card_model(session: Session | None, pick, cli: str = "claude") -> tuple[str, bool]:
     """The model on a member's card: the one that answers, with its version, where its session says
     ("opus 5.5/high"), with a ↓ when another took over by itself (and True, for amber); else the one
-    picked for it ("sonnet/high")."""
+    picked for it ("sonnet/high"). Non-Claude members carry their CLI tag ("agy")."""
+    prefix = f"{cli} " if cli != "claude" else ""
     if session is None or not session.model or session.model.startswith("<"):
-        return pick.short(), False
+        short = pick.short()
+        return (f"{prefix}{short}".strip() if prefix else short), False
     fell = bool(session.fell_back) and session.exit is Exit.RUNNING
-    return context.short_model(session.model) + ("↓" if fell else "") + (f"/{pick.effort}" if pick.effort else ""), fell
+    text = context.short_model(session.model) + ("↓" if fell else "") + (f"/{pick.effort}" if pick.effort else "")
+    return (f"{prefix}{text}".strip() if prefix else text), fell
 
 
 def status_of(session: Session | None) -> tuple[str, str, bool]:
@@ -356,7 +361,7 @@ class TeamGraph(Widget):
         canvas.put(x + 2 + inner - len(label), y + 1, label, style)
         used = getattr(self.app, "session_tokens", {}).get(session.session_id) if session is not None else None
         tokens = human(used.total) if used is not None and used.total else ""
-        picked, fell = card_model(session, member.pick)
+        picked, fell = card_model(session, member.pick, member.cli)
         right = " · ".join(part for part in (picked, tokens) if part)
         left = 0
         if session is not None and session.context:
@@ -415,8 +420,8 @@ def _clip_goal(goal: str, most: int = 220) -> str:
     return line if len(line) <= most else line[:most - 1].rstrip() + "…"
 
 
-ADD_QUESTION = "Add members as name: what they work on (several with ;, @sonnet at the end picks a model)"
-ADD_EXAMPLE = "docs: the README and the user guide"
+ADD_QUESTION = "Add members as name: area (several with ;, @agy picks Antigravity, @sonnet picks a model)"
+ADD_EXAMPLE = "docs: the README and the user guide @agy"
 
 
 def closing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:
@@ -581,7 +586,8 @@ class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
         for member in members:
             out.append("\n● ", style=GREEN)
             out.append(member.name, style=f"bold {CYAN}")
-            out.append(f"  {member.pick.short() or 'your default model and effort'}", style=MUTED)
+            cli_part = f"{member.cli} · " if member.cli != "claude" else ""
+            out.append(f"  {cli_part}{member.pick.short() or 'your default model and effort'}", style=MUTED)
         out.append(f"\nEach under a {human(cap)} context cap." if cap else
                    "\nEach on Claude Code's own window, with no cap.", style=MUTED)
         for problem in self.problems():
@@ -676,8 +682,10 @@ class TeamScreen(Screen):
     def show_head(self) -> None:
         open_now = sum(1 for s in self.sessions.values() if s is not None and s.exit is Exit.RUNNING)
         spent = self.spent()
+        cli_badge = (" + ".join(sorted(self.team.clis)) if self.team.uses_bus else "")
         self.query_one("#team-head", Static).update(Text.assemble(
             ("TEAM ", f"bold {MUTED}"), (self.team.name, f"bold {self.accent}"),
+            (f"  ·  {cli_badge}" if cli_badge else "", f"bold {CYAN}"),
             (f"  ·  {self.team.cwd}  ·  {open_now} of {len(self.team.members)} open", MUTED),
             (f"  ·  {human(spent)} tokens" if spent else "", MUTED),
             (f"  ·  the lead picks up to {self.team.decide} members" if self.team.decide else "", MUTED),
@@ -704,9 +712,16 @@ class TeamScreen(Screen):
             self.app.call_from_thread(self.adopt, saved)
             return
         listed = list(getattr(self.app, "sessions", {}).values())
+        if self.team.uses_bus:
+            by_id = {s.session_id: s for s in listed}
+            for found_agy in agy.find(days=2):
+                by_id[found_agy.session_id] = found_agy
+            listed = list(by_id.values())
         live = teams.live_names()
         sessions = teams.member_sessions(self.team, listed, live)
         for member in self.team.members:  # open, but nothing said yet: no transcript to list it by
+            if member.cli != "claude":
+                continue
             info = live.get(self.team.session_name(member))
             if sessions.get(member.name) is None and info:
                 sessions[member.name] = Session(session_id=str(info.get("sessionId")), path=None, cwd=self.team.cwd,
@@ -903,7 +918,7 @@ class TeamScreen(Screen):
         self.app.push_screen(GoalDialog(self.team.goal), chosen)
 
     def tell_lead(self, note: str, done: str) -> None:
-        """A change made here, for the lead to hear: nothing can type into its tab, so the note goes
+        """A change made here, for the lead to hear: over the team bus when this team uses one, else
         to the clipboard and you to its tab, to paste it. A closed lead gets it in its role. Peers
         each started with the old team in their role: the note is for every open one."""
         if self.team.lead is None:
@@ -911,6 +926,12 @@ class TeamScreen(Screen):
                          if s is not None and s.exit is Exit.RUNNING and any(m.name == name for m in self.team.members)]
             if not open_ones:
                 self.notify(f"{done} Nobody is open: each starts with the change in its role.", timeout=6)
+                return
+            if self.team.uses_bus:
+                for name in open_ones:
+                    teambus.send(self.team.name, teams.YOU, name, note, summary="team change")
+                self.notify(f"{done} Sent the update over the team bus to {', '.join(open_ones)}.",
+                            title="Told the team", timeout=8)
                 return
             copy_text(self.app, note)
             go = getattr(self.app, "go_to_tab", None)
@@ -922,6 +943,11 @@ class TeamScreen(Screen):
         lead = self.sessions.get(self.team.lead.name)
         if lead is None or lead.exit is not Exit.RUNNING:
             self.notify(f"{done} The lead is not open: it starts with the change in its role.", timeout=6)
+            return
+        if self.team.uses_bus:
+            teambus.send(self.team.name, teams.YOU, self.team.lead.name, note, summary="team change")
+            self.notify(f"{done} Sent the update to {self.team.lead.name} over the team bus.",
+                        title="Told the lead", timeout=8)
             return
         copy_text(self.app, note)
         go = getattr(self.app, "go_to_tab", None)
@@ -1069,7 +1095,8 @@ class RoleDialog(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         team, member = self.team, self.member
         kind = teams.kind_of(member)
-        about = [f"a {kind}er" if kind in ("review", "research") else f"the {kind}s" if kind else "",
+        about = [member.cli if member.cli != "claude" else "",
+                 f"a {kind}er" if kind in ("review", "research") else f"the {kind}s" if kind else "",
                  member.pick.words(), f"owns {member.owns}" if member.owns else ""]
         first = teams.launch(team, member).prompt
         with Vertical():
@@ -1130,8 +1157,9 @@ class LineupGraph(TeamGraph):
         canvas.put(x, y + 1, "│" + " " * (card - 2) + "│", edge)
         canvas.put(x, y + 2, "╰" + "─" * (card - 2) + "╯", edge)
         inner = card - 4
-        quiet = self.team.background and not member.lead and self.team.lead is not None
-        right = ("◌ " if quiet else "") + member.pick.short()
+        quiet = self.team.background and not member.lead and self.team.lead is not None and member.cli == "claude"
+        tag = f"{member.cli} {member.pick.short()}".strip() if member.cli != "claude" else member.pick.short()
+        right = ("◌ " if quiet else "") + tag
         name = ("★ " if member.lead else "") + member.name
         right = right if len(name) + 1 + len(right) <= inner else ""
         canvas.put(x + 2, y + 1, name[:inner], f"bold {colour}")
@@ -1141,8 +1169,8 @@ class LineupGraph(TeamGraph):
 
 LEAD_LINE = f"{teams.LEAD}: {teams.LEAD_FOCUS}"
 # One line, so the keys stay on screen in a 120x30 window; the examples show how a line is written.
-MEMBERS_HELP = "name: area @model @effort · lead @opus @xhigh · code @opus @high · tests, docs @sonnet @medium"
-LEAD_HELP = ("@opus @xhigh (any model, any effort) at the end: the lead's own; "
+MEMBERS_HELP = "name: area [@agy] @model @effort · lead @opus @xhigh · ui @agy @high · tests @sonnet @medium"
+LEAD_HELP = ("@agy, @opus, @xhigh (CLI, model, effort) at the end: the lead's own; "
              "it picks the members' itself")
 SAID_HERE = 160  # characters of the message to a team at work's lead the form shows: all of it is sent
 TOWARD_HELP = {  # the box's help when Ctrl+R said to add to a team at work, or that it has the goal
@@ -1507,6 +1535,8 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         if not advisor:
             return "←/→ an advisor for the lead (only the lead): a stronger model it asks at the turns that matter."
         lead = next((m for m in self.read()[3] if m.lead), None)
+        if lead is not None and lead.cli != "claude":
+            return "←/→ --advisor is Claude Code only, so it is not given to an Antigravity lead."
         if lead is not None and not picks.advisor_ok(lead.model, advisor):
             return f"{advisor} cannot advise a {picks.family(lead.model)} lead: only a model as strong or stronger can."
         return f"←/→ the lead's advisor, for its session only. {advisor}: {picks.ADVISOR_WORDS[advisor]}."
@@ -1814,7 +1844,12 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
             head = Text.assemble((tabs, f"bold {TEXT}"),
                                  (f". It reads the goal and adds up to {self.most()} members itself, {each}.", MUTED))
         elif self.background:
-            tabs = f"Starts {len(team.members) - 1} in the background in {team.project}"
+            bg = sum(not m.lead and m.cli == "claude" for m in team.members)
+            extra_tabs = sum(not m.lead and m.cli != "claude" for m in team.members)
+            if extra_tabs:
+                tabs = f"Starts {bg} in the background and {extra_tabs + 1} in tabs in {team.project}"
+            else:
+                tabs = f"Starts {bg} in the background in {team.project}"
             head = Text.assemble(((f"{tabs}, then opens a tab for {team.session_name(team.lead)}"), f"bold {TEXT}"),
                                  (", which hands out the work. B lists the background ones.", MUTED))
         else:
@@ -1959,8 +1994,8 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
                               background=self.background and not peers, peers=peers,
                               worktrees=self.worktrees, cap=self.query_one("#team-cap", Choice).value)
         advisor = self.advisor()
-        if advisor:  # the lead's alone, where it can advise the lead's model
-            team.members = [replace(m, advisor=advisor) if m.lead and picks.advisor_ok(m.model, advisor) else m
+        if advisor:  # the lead's alone, where it can advise the lead's model (Claude Code only)
+            team.members = [replace(m, advisor=advisor) if m.lead and m.cli == "claude" and picks.advisor_ok(m.model, advisor) else m
                             for m in team.members]
         self.dismiss(team)
 

@@ -78,6 +78,7 @@ class Launch:
     advisor: str = ""  # --advisor for Claude Code (picks.ADVISORS); empty: none
     new_id: str = ""  # a fresh session's id, given by tabmancer (--session-id) so its pick is kept
     env: tuple[tuple[str, str], ...] = ()  # set in the tab for this command, e.g. a sign-in's BROWSER
+    wrapper: tuple[str, ...] = ()  # optional prefix command (e.g. tabmancer team run <team> <member> --)
 
     @property
     def posix_argv(self) -> list[str]:
@@ -87,9 +88,14 @@ class Launch:
     @property
     def argv(self) -> list[str]:
         if self.cli == "codex":
-            return self._codex_argv()
-        if self.cli == "agy":
-            return self._agy_argv()
+            inner = self._codex_argv()
+        elif self.cli == "agy":
+            inner = self._agy_argv()
+        else:
+            inner = self._claude_argv()
+        return [*self.wrapper, *inner] if self.wrapper else inner
+
+    def _claude_argv(self) -> list[str]:
         capped = self.cap and self.cap != "auto" and "--autocompact" not in self.options
         more = [*(["--model", self.model] if self.model else []), *(["--effort", self.effort] if self.effort else []),
                 *(["--autocompact", self.cap] if capped else []),
@@ -123,14 +129,22 @@ class Launch:
 
     def _agy_argv(self) -> list[str]:
         # -i sends a first prompt and keeps the session open; -p would print and exit.
+        from . import agy
+
+        # Never a Claude or GPT model through agy, on any path: a --model in the options too, and a
+        # resume of a conversation that ran on one (agy.model_flags). No --effort: agy's model ids
+        # carry theirs.
+        resumes = self.mode in (Mode.RESUME, Mode.FORK, Mode.AUTO)
+        model, options, _ = agy.model_flags(self.model, self.options, self.session_id if resumes else "")
+        more = [*model, *options]
         prompt = ["-i", self.prompt] if self.prompt else []
         if self.mode in (Mode.RESUME, Mode.FORK):  # agy cannot fork: the session itself
-            return ["agy", "--conversation", self.session_id, *prompt]
+            return ["agy", "--conversation", self.session_id, *more, *prompt]
         if self.mode is Mode.AUTO:
-            return ["agy", "--conversation", self.session_id, "-i", self.prompt or continue_prompt()]
+            return ["agy", "--conversation", self.session_id, *more, "-i", self.prompt or continue_prompt()]
         if self.mode is Mode.CONTINUE:
-            return ["agy", "--continue"]
-        return ["agy", *prompt]
+            return ["agy", "--continue", *more]
+        return ["agy", *more, *prompt]
 
     @property
     def directory(self) -> str:
@@ -174,7 +188,7 @@ def run_in_background(launch: Launch) -> str:
         command = subprocess.list2cmdline([claude]) + " " + " ".join(_for_cmd(arg) for arg in command[1:])
     try:
         result = subprocess.run(
-            command, cwd=launch.directory, env=clean_env(),
+            command, cwd=launch.directory, env={**clean_env(), **dict(launch.env)},
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.SubprocessError as error:

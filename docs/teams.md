@@ -181,6 +181,27 @@ transcripts to draw the team view:
   beside it. A message still on its way is a dashed arrow, and a new day is named. The
   prompts tabmancer starts members with are drawn as tabmancer's, quieter than yours.
 
+### Mixing Claude Code and Antigravity (`@agy`)
+
+Any member line (the lead, a worker, or a peer) can run on Antigravity (`agy`) instead of Claude Code by adding `@agy`, optionally with an Antigravity model:
+
+```text
+lead: plans the work, hands it out and checks it @opus @xhigh
+api: server endpoints [src/api] @sonnet @medium
+ui: screens and styles [src/ui] @agy
+review: checks changes @agy @gemini-4-hydrogen-high
+```
+
+Without a model, tabmancer picks one by the quota `agy` reports: `gemini-4-argon-high` while its quota lasts, then `gemini-4-hydrogen-high`, then `gemini-3.8-flash-high`. Claude and GPT models never run through `agy`: such a tag on an `@agy` member is replaced by that pick. Effort tags don't apply to `agy` members, since an Antigravity model id carries its effort.
+
+A pure Claude Code team keeps using Claude Code's own `SendMessage`/`ListAgents` cross-session messaging. When a team includes at least one `@agy` member, every member on that team shares tabmancer's local cross-CLI message bus instead:
+
+- `tabmancer team send <team> <member> "<message>" --from <me>` sends a message across CLIs (Claude ↔ Antigravity or Antigravity ↔ Antigravity);
+- `tabmancer team listen <team> <me>` runs as a background command (`run_in_background` in Claude Code, `WaitMsBeforeAsync` in `agy`) and exits the instant a message arrives, automatically waking the idle session with no polling;
+- `tabmancer team who <team>` shows every member's CLI and whether it is open, listening or closed.
+
+Each `@agy` member opens in its own tab with `agy --mode auto --add-dir <bus>`, tracks live open/idle/working state, reads its `transcript.jsonl` for models and tokens, supports `Ctrl+O` git worktrees, resumes with `agy --conversation <id>`, and supports team handovers (`h`).
+
 `Enter` on a team's row opens that team's view. `T` lists the teams anywhere, to open one
 or start a new one (on a team's row or a member, with that team picked). `←` `→` pick
 a member: its card, its lane and its arrows stay lit and the rest go quiet; past the last

@@ -36,6 +36,7 @@ from textual.widgets.selection_list import Selection
 from . import (
     __version__,
     accounts,
+    agy,
     background,
     browsers,
     claudeupdate,
@@ -51,6 +52,7 @@ from . import (
     search,
     sixel,
     summarize,
+    teambus,
     teams,
     teamtree,
     toast,
@@ -147,10 +149,8 @@ MODE_LABEL = {Mode.RESUME: "resume", Mode.AUTO: "▶ auto", Mode.FORK: "fork", M
 # Raw states from `claude agents --json` -> label, style, sort rank (lowest first).
 LIVE_STATES = {raw: (label, TONE[tone], rank) for raw, (label, tone, rank, _) in VM.LIVE.items()}
 SPINNING = {"busy", "working"}
-# A team's members, counted on its row by what each does (VM.state_id), in this order: an idle one
-# grey as on its chip, ◐ only for one stopped at a usage limit, as in the list.
-TEAM_GLYPHS = {"needs-you": ("!", f"bold {RED}"), "waiting": ("●", RED), "working": ("✶", BLUE),
-               "limit": ("◐", AMBER), "idle": ("●", MUTED), "shell": ("◦", CYAN)}
+# A team's members, counted on its row by what each does (VM.state_id), in this order (VM.TEAM_GLYPHS).
+TEAM_GLYPHS = {state: (glyph, TONE[tone]) for state, (glyph, tone) in VM.TEAM_GLYPHS.items()}
 TEAM_MESSAGES_FROM = 150  # columns from which a team's preview lists its messages beside the tree
 # The sidebar's marks, said once under its projects (two lines of the sidebar's width).
 LEGEND = Text.assemble(("● ", RED), ("your turn  ", MUTED), ("● ", GREEN), ("open\n", MUTED),
@@ -1223,6 +1223,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.kept_back = True
             tokens.collect(KEEP_BACK_DAYS)
         others = [name for name in clis.enabled() if name != "claude"]
+        if "agy" not in others and teams.has_cli("agy"):
+            others.append("agy")
         if others:  # Codex and agy have no live feed: their sessions are re-read every minute
             fresh = [s for s in other_sessions(self.days, others)
                      if self.include_all or s.entrypoint in ("", "cli")]
@@ -1877,8 +1879,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.notify("Background sessions cannot be handed over from here: attach to it first.",
                         severity="warning")
             return
-        if session.cli == "agy":
-            self.notify("Antigravity's conversations cannot be read, so there is nothing to hand over.",
+        if session.cli == "agy" and not (session.path and session.path.suffix == ".jsonl" and session.path.is_file()) and not clis.installed("agy"):
+            self.notify("Antigravity has no readable transcript for this session and agy is not on PATH.",
                         severity="warning")
             return
         if session.session_id in self.queued:  # h again: not after all
@@ -2192,6 +2194,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.notify(f"{who} runs in the background: the message is on the clipboard. Enter on its row "
                         "attaches to it.", timeout=14)
             return
+        if team.uses_bus:
+            teambus.send(team.name, teams.YOU, member.name, message)
+            self.notify(f"Sent to {who} over the team bus.", timeout=5)
+            self.poll_teams()
+            return
         self.notes[session.session_id] = (who, message)
         if session.live_state not in handover.IDLE:
             self.notify(f"{who} is at work: the message goes into its tab once it waits for you.", timeout=8)
@@ -2286,15 +2293,31 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """The teams with a member in the list, open or not, each member's session and what was said:
         only what the transcripts gained since is read. A team whose sessions are all older than the
         list is not read at all."""
+        saved = teams.load()
+        if any(team.uses_bus for team in saved.values()):
+            by_id = {s.session_id: s for s in listed}
+            for found_agy in agy.find(days=min(self.days, 14)):
+                by_id[found_agy.session_id] = found_agy
+            listed = list(by_id.values())
         live = teams.live_names()
         states = {}
-        for name, team in teams.load().items():
+        agy_updates: dict[str, Session] = {}
+        for name, team in saved.items():
             found = teams.member_sessions(team, listed, live)
             if any(s is not None for s in found.values()):
                 states[name] = teamtree.TeamState(team, found, teams.conversation(team, found, live))
-        self.call_from_thread(self.show_teams, states)
+                for s in found.values():
+                    if s is not None and s.cli == "agy" and not s.session_id.startswith("agy:"):
+                        agy_updates[s.session_id] = s
+        self.call_from_thread(self.show_teams, states, agy_updates)
 
-    def show_teams(self, states: dict[str, teamtree.TeamState]) -> None:
+    def show_teams(self, states: dict[str, teamtree.TeamState], agy_updates: dict[str, Session] | None = None) -> None:
+        if agy_updates:
+            changed_agy = {sid for sid, s in agy_updates.items() if self.sessions.get(sid) != s}
+            if changed_agy:
+                self.sessions.update(agy_updates)
+                self.sync_rows(changed_agy)
+                self.update_dashboard()
         now = time.monotonic()
         for name, state in states.items():
             said = {(m.sender, m.receiver, m.text) for m in state.said}
@@ -2323,13 +2346,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def member_look(self, session: Session | None) -> tuple[str, str]:
         """What a member is doing, in the list's words and colours."""
         session = self.sessions.get(session.session_id, session) if session is not None else None
-        if session is None:
-            return "not started", MUTED
-        if session.exit is not Exit.RUNNING:
-            return STATUS_LABEL[session.status]
-        label, style, _ = state_of(session)
-        glyph = TEAM_GLYPHS.get(VM.state_id(session), ("●", ""))[0]
-        return f"{glyph} {label}", style
+        words, tone = VM.member_words(session)
+        return words, TONE[tone]
 
     def show_team(self, state: teamtree.TeamState) -> None:
         """The preview of a team's row: the lead and each member on its wire, with the messages along
@@ -2368,12 +2386,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def team_key_pairs(self, state: teamtree.TeamState) -> tuple[tuple[str, str], ...]:
         name = state.team.name
-        if not self.team_open(name):
-            return (("Enter", "team view"), ("s", "start the team"), ("e", "members"), ("E", "all teams"),
-                    ("Space", "tick"), ("a", "add"), ("x", "hide"), ("T", "teams"))
-        unfolded = name in self.unfolded
-        return (("Enter", "team view"), ("e", "fold" if unfolded else "unfold"), ("E", "all teams"),
-                ("s", "start the rest"), ("a", "add"), ("x", "close"), ("T", "teams"))
+        return VM.team_key_pairs(self.team_open(name), name in self.unfolded)
 
     def member_messages(self, session: Session, room: int) -> Text:
         """'3 in · 2 out · ← lead 2m: Heads-up…' for a member's own preview."""
@@ -2473,7 +2486,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         as background sessions first and then the lead's tab, once they are up. A member opened a
         moment ago, here or by `tabmancer team start`, is not opened again: s twice, while the first
         claude --bg calls were still running, started every member twice."""
-        if self.after_update(f"{team.name} starts", lambda: self.open_team(team, launches)):
+        if any(launch.cli == "claude" for launch in launches) and self.after_update(
+                f"{team.name} starts", lambda: self.open_team(team, launches)):
             return
         coming = teams.opening()
         launches = [launch for launch in launches if teams.session_name_of(team, launch) not in coming]
@@ -3292,6 +3306,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         updates: dict[str, Session] = {}
         for sid in watched:
             old = known.get(sid)
+            if old is not None and old.cli != "claude":
+                continue
             path = old.path if old else transcript_path(sid)
             if path is None:
                 continue

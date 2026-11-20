@@ -22,19 +22,22 @@ import functools
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import time
 import unicodedata
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import picks, router
+from . import picks, router, teambus
 from .config import config_dir, read_json, write_json
 from .launch import Launch, Mode
 from .sessions import (
     Exit,
     Session,
+    Status,
     _is_real_prompt,
     _registry_sessions,
     _shorten,
@@ -45,6 +48,7 @@ from .sessions import (
 
 FILE = "teams.json"
 SETTINGS_FILE = "team-settings.json"
+TEAM_CLIS = ("claude", "agy")
 LEAD = "lead"
 LEAD_FOCUS = "plans the work, hands it out and checks it"
 YOU = "you"
@@ -67,6 +71,7 @@ DECIDE = "lead decides"  # the line-up the lead makes itself, with `tabmancer te
 DECIDE_MOST = 4  # members it may add unless told otherwise
 ADD = "tabmancer team add"  # the one command a deciding lead may run without asking
 START = "tabmancer team start"  # what a lead runs, without asking, to bring a closed member back
+BUS_CMD = "tabmancer team"  # send / listen / who / start / add for mixed-CLI teams
 
 
 @dataclass
@@ -78,12 +83,14 @@ class Member:
     effort: str = ""  # its session's --effort (picks.EFFORTS); empty: the default
     owns: str = ""   # the folders or files that are its own ("src/api, docs/api.md"), written [...] in its line
     advisor: str = ""  # its session's --advisor (picks.ADVISORS): the lead's, picked in the new-team form
+    cli: str = "claude"  # which coding CLI runs this member: "claude" or "agy"
 
     def line(self) -> str:
         """The member as a line of the members box: 'api: endpoints [src/api] @sonnet @high'."""
         owns = f" [{self.owns}]" if self.owns else ""
-        return f"{self.name}: {self.focus}{owns}{picks.tags(self.pick)}" if self.focus else \
-            f"{self.name}{owns}{picks.tags(self.pick)}"
+        cli_tag = f" @{self.cli}" if self.cli != "claude" else ""
+        return f"{self.name}: {self.focus}{owns}{cli_tag}{picks.tags(self.pick)}" if self.focus else \
+            f"{self.name}{owns}{cli_tag}{picks.tags(self.pick)}"
 
     @property
     def pick(self) -> picks.Pick:
@@ -101,6 +108,15 @@ class Team:
     background: bool = False  # the members run as background sessions (claude --bg), the lead in a tab
     worktrees: bool = False  # each member (not the lead) in a git worktree of its own (claude --worktree)
     cap: str = ""  # its members' context cap (--autocompact, see picks); empty: none, as in teams made before caps
+
+    @property
+    def uses_bus(self) -> bool:
+        """Whether this team uses tabmancer's cross-CLI message bus (any non-Claude member)."""
+        return any(m.cli != "claude" for m in self.members)
+
+    @property
+    def clis(self) -> set[str]:
+        return {m.cli for m in self.members}
 
     def has_worktree(self, member: Member) -> bool:
         """Whether this member works in a worktree of its own: every member but the lead, when the
@@ -153,14 +169,32 @@ def clean(name: str) -> str:
     return text[:24].strip("-")
 
 
+def _split_tags(text: str) -> tuple[str, picks.Pick, str]:
+    """Strip trailing @cli, @model and @effort tags in any order."""
+    model = effort = cli = ""
+    while found := picks.TAG.search(text):
+        word = found[1]
+        low = word.lower()
+        if low in TEAM_CLIS:
+            cli = cli or low
+        elif low in picks.EFFORTS:
+            effort = effort or low
+        else:
+            model = model or word
+        text = text[:found.start()]
+    if not cli and model.lower().startswith("gemini"):
+        cli = "agy"
+    return text, picks.Pick(model, effort), cli or "claude"
+
+
 def parse_members(text: str, lead_ok: bool = False) -> list[Member]:
-    """"api: endpoints @sonnet @high; ui: screens" (or one per line) to members. A name without a
-    focus is fine, and so is one without a model or an effort (picks.split). With lead_ok, a "lead"
-    line is the orchestrator's: its focus, model and effort; otherwise it is left out, as a team has
-    one lead."""
+    """"api: endpoints @sonnet @high; ui: screens @agy @high" (or one per line) to members. A name
+    without a focus is fine, and so is one without a CLI, model or effort. With lead_ok, a "lead"
+    line is the orchestrator's: its focus, CLI, model and effort; otherwise it is left out, as a
+    team has one lead."""
     members, seen = [], set()
     for part in (piece for line in text.split("\n") for piece in NEXT_MEMBER.split(line)):
-        part, pick = picks.split(part)
+        part, pick, cli = _split_tags(part)
         part = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", part)  # a list's bullet or number, as a model may write
         owned = OWNS.search(part)
         owns = " ".join(owned[1].split()) if owned else ""
@@ -172,7 +206,7 @@ def parse_members(text: str, lead_ok: bool = False) -> list[Member]:
             continue
         seen.add(name)
         members.append(Member(name, focus or (LEAD_FOCUS if name == LEAD else ""), lead=name == LEAD,
-                              model=pick.model, effort=pick.effort, owns=owns))
+                              model=pick.model, effort=pick.effort, owns=owns, cli=cli))
     return members
 
 
@@ -296,6 +330,21 @@ def joining(team: Team, members: list[Member], adds: str = "") -> list[Launch]:
     """Tabs for members who join a team already at work: each introduces itself to the lead, or in a
     team of peers to the others. adds: what the goal grew by, that they join for."""
     why = f" for what its goal now adds: {cut(adds, GOAL_IN_PROMPT)}" if adds else ""
+    if team.uses_bus:
+        if team.lead is None:
+            def hello_bus(member: Member) -> str:
+                others = [m.name for m in team.members if m is not member]
+                send_hint = (f'tabmancer team send {team.name} {others[0]} "..." --from {member.name}'
+                             if others else f'tabmancer team send {team.name} <member> "..." --from {member.name}')
+                return (f"You just joined the team {team.name}{why}. Introduce yourself to the others ("
+                        f"{', '.join(others) or 'nobody yet'}) with `{send_hint}`, start "
+                        f"`tabmancer team listen {team.name} {member.name}` in the background, then start on your part.")
+            return [launch(team, m, prompt=hello_bus(m)) for m in members]
+        return [launch(team, m, prompt=(
+            f"You just joined the team {team.name}{why}. Introduce yourself to {team.lead.name} with "
+            f'`tabmancer team send {team.name} {team.lead.name} "Joined and ready for work." --from {m.name}` '
+            f"and start `tabmancer team listen {team.name} {m.name}` in the background to wait for your first task."))
+            for m in members]
     if team.lead is None:
         def hello(member: Member) -> str:
             return (f"You just joined the team {team.name}{why}. Introduce yourself to the others ("
@@ -307,19 +356,33 @@ def joining(team: Team, members: list[Member], adds: str = "") -> list[Launch]:
             for m in members]
 
 
+def _strip_team_tag(text: str) -> str:
+    return re.sub(r"^\[tabmancer:[a-z0-9-]+\]\s*", "", text.strip(), flags=re.IGNORECASE)
+
+
 def from_tabmancer(team: Team, text: str) -> bool:
     """Whether a prompt is one tabmancer started a member with (joining(), launch(), in_background()),
     not yours. A goal grown since (add_to_goal) still starts with the one its first members were given."""
+    clean_text = _strip_team_tag(text)
     first = replace(team, goal=team.goal.split(ADDED)[0])
-    return text.startswith((f"You just joined the team {team.name}.", f"You just joined the team {team.name} for ",
-                            f"Goal: {goal_line(team)} ", f"Goal: {goal_line(first)} ",
-                            f"You are on the team {team.name}, in the background."))
+    prefixes = (
+        f"You just joined the team {team.name}.",
+        f"You just joined the team {team.name} for ",
+        f"Goal: {goal_line(team)} ",
+        f"Goal: {goal_line(first)} ",
+        f"You are on the team {team.name}, in the background.",
+        f"You are {team.name}-",
+        "Read your full team role in ",
+        f"You are resuming your role on team {team.name}.",
+    )
+    return clean_text.startswith(prefixes)
 
 
 def in_background(team: Team, launch: Launch) -> bool:
-    """Whether this member's session starts in the background: a team's members do when it says so,
-    its lead never (it is where you talk to the team), and peers never (you talk to each)."""
-    return team.background and team.lead is not None and launch.title != f"{team.name}: {team.lead.name}"
+    """Whether this member's session starts in the background: a team's Claude members do when it says so,
+    its lead never (it is where you talk to the team), peers never, and non-Claude CLIs never."""
+    return (launch.cli == "claude" and team.background and team.lead is not None
+            and launch.title != f"{team.name}: {team.lead.name}")
 
 
 def background_start(team: Team, launch: Launch) -> Launch:
@@ -331,6 +394,11 @@ def background_start(team: Team, launch: Launch) -> Launch:
                                    f"{team.session_name(team.lead)} sends your first task as a message: wait for it."))
 
 
+def has_cli(cli: str) -> bool:
+    """Whether any saved team includes a member using this CLI."""
+    return any(m.cli == cli for team in load().values() for m in team.members)
+
+
 def load() -> dict[str, Team]:
     data = read_json(FILE)
     teams = {}
@@ -339,7 +407,8 @@ def load() -> dict[str, Team]:
             members = [Member(m["name"], m.get("focus", ""), bool(m.get("lead")), str(m.get("model") or ""),
                               str(m.get("effort") or "") if m.get("effort") in picks.EFFORTS else "",
                               str(m.get("owns") or ""),
-                              str(m.get("advisor") or "") if picks.family(str(m.get("advisor") or "")) else "")
+                              str(m.get("advisor") or "") if picks.family(str(m.get("advisor") or "")) else "",
+                              str(m.get("cli") or "claude") if m.get("cli") in TEAM_CLIS else "claude")
                        for m in item["members"]]
             teams[item["name"]] = Team(item["name"], item["cwd"], item.get("goal", ""), members,
                                        item.get("created", ""), int(item.get("decide") or 0),
@@ -389,8 +458,16 @@ def settings_file() -> Path:
 
 
 def roster(team: Team, skip: Member | None = None) -> str:
-    return ", ".join(f"{team.session_name(m)} ({'orchestrator' if m.lead else m.focus or m.name}"
-                     f"{f'; owns {m.owns}' if m.owns else ''})" for m in team.members if m is not skip)
+    def _desc(m: Member) -> str:
+        parts = []
+        if team.uses_bus:
+            parts.append(m.cli)
+        parts.append("orchestrator" if m.lead else m.focus or m.name)
+        if m.owns:
+            parts.append(f"owns {m.owns}")
+        return "; ".join(parts) if team.uses_bus else (
+            f"{'orchestrator' if m.lead else m.focus or m.name}{f'; owns {m.owns}' if m.owns else ''}")
+    return ", ".join(f"{team.session_name(m)} ({_desc(m)})" for m in team.members if m is not skip)
 
 
 # Rules for the kinds of member most teams have, by the start of its name: what it does and what
@@ -424,15 +501,105 @@ def duties(member: Member) -> str:
     return " ".join(out)
 
 
-def reopen(team: Team) -> str:
+def bus_cmd(team: Team, member: Member) -> str:
+    """The command a member runs the team bus with: `tabmancer team` for Claude Code; for agy, whose
+    sandbox cannot read the tabmancer package, the team's stdlib copy of the bus (teambus.install
+    writes it when the member starts) run by the plain interpreter."""
+    return teambus.command(team.name) if member.cli == "agy" else BUS_CMD
+
+
+def reopen(team: Team, bus: str = BUS_CMD) -> str:
     """What a lead is told about a member that has closed: how to bring it back itself."""
+    if team.uses_bus:
+        return (f"Check who is online with `{bus} who {team.name}`. A member that has closed comes back as "
+                f"itself, where it left off, with `{START} {team.name} <member>`; with no member named, every "
+                "closed one does.")
     return (f"A member that has closed (ListAgents no longer shows it, and it is not just starting) comes back as "
             f"itself, where it left off, with the shell command {START} {team.name} <member>; with no member "
             "named, every closed one does.")
 
 
+def _bus_role(team: Team, member: Member) -> str:
+    """Role prompt for a member of a mixed-CLI (Claude + Antigravity) or Antigravity team."""
+    others = roster(team, member)
+    goal = f"Team goal:\n\n{team.goal}\n\n" if "\n" in team.goal else f"Team goal: {team.goal}. "
+    bus = bus_cmd(team, member)
+    send_cmd = f'{bus} send {team.name} <member> "<message>" --from {member.name}'
+    listen_cmd = f"{bus} listen {team.name} {member.name}"
+    if member.cli == "agy":
+        listen_how = (
+            f"To receive messages without polling, run `{listen_cmd}` via run_command with "
+            "WaitMsBeforeAsync: 500 (and IsDaemon: false) so it runs in the background as a task, then end your "
+            "turn (call no more tools). The system automatically wakes you with the message the instant one arrives. "
+            "Never poll in a loop or use timers. After handling a message and replying, start "
+            f"`{listen_cmd}` in the background again before ending your turn."
+        )
+    else:
+        listen_how = (
+            f"To receive messages without polling, run `{listen_cmd}` in the background (run_in_background: true) "
+            "whenever you wait with nothing else to do. It exits automatically the instant a message arrives for "
+            "you, printing it to stdout and waking you up. If it times out after 55 minutes with no messages "
+            "(which also keeps your prompt cache warm), run it again up to three times if still waiting. Never "
+            "poll in a loop."
+        )
+    common = (
+        f"Team: {team.name}, working in {team.cwd}. You run on {member.cli}. {goal}"
+        + (f"The other members (address by member name or session name): {others}. " if others else
+           "There are no other members yet. ")
+        + f"This team communicates through tabmancer's cross-CLI team bus (Claude and Antigravity members share it). "
+        f"Send a message with `{send_cmd}` (optional `--summary \"short gist\"`). "
+        f"See who is online with `{bus} who {team.name}`. {listen_how} "
+        "Keep messages short and concrete: what you did, which files you changed, what you need. "
+        "Coordinate before you touch another member's area."
+    )
+    if member.lead and team.decide:
+        return (
+            f"You are {team.session_name(member)}, the orchestrator of this team, and you decide who is on it. "
+            f"{common} First read the goal and look at the project, then decide which members the work needs: "
+            f"at most {team.decide}, fewer when the work is small, none if you can do it well alone. "
+            "Give each a short name (a word) and an area, and optionally @agy (for Antigravity) or @claude, "
+            "a model and an effort. "
+            f'Add them all with one shell command: {ADD} {team.name} "name: area @model @effort; name: area @agy". '
+            "Each opens and introduces itself on the team bus. Then send each its first task with "
+            f"`{bus} send`, start `{listen_cmd}` in the background while waiting for reports, keep track of "
+            "who does what, answer their questions, sort out overlaps and check the results. Do small glue work "
+            "yourself. Tell the user here when the goal is met or a decision is theirs. " + reopen(team, bus)
+        )
+    if member.lead:
+        return (
+            f"You are {team.session_name(member)}, the orchestrator of this team. {common} Split the goal into "
+            f"tasks, send each member its first task with `{bus} send {team.name} <member> \"...\" "
+            f"--from {member.name}` (messages queue safely even if a member is still starting), then start "
+            f"`{listen_cmd}` in the background while waiting for their reports. Keep track of who does what, "
+            "answer their questions, sort out overlaps and check the results. Do small glue work yourself and "
+            "leave the members' areas to them. Tell the user here when the goal is met or a decision is theirs. "
+            + reopen(team, bus)
+        )
+    if team.lead is None:
+        text = (
+            f"You are {team.session_name(member)}, one of the peers on this team. Your part: "
+            f"{member.focus or member.name}. {common} Nobody leads this team: your part is yours to plan and "
+            "decide, and the user talks to each of you in your own tab. Before you change something another "
+            f"member's work depends on (a shared file, an interface, a schema, the build), tell that member with "
+            f"`{bus} send` and agree on it first; when you finish something the others need, tell them. "
+            "Tell the user here when your part is done or a decision is theirs."
+        )
+    else:
+        text = (
+            f"You are {team.session_name(member)}, a member of this team. Your area: "
+            f"{member.focus or member.name}. {common} {team.session_name(team.lead)} ({team.lead.name}) is the "
+            f"orchestrator: it hands out the work, and you report to it with `{bus} send {team.name} "
+            f"{team.lead.name} \"...\" --from {member.name}` when you finish something or get stuck. "
+            "Ask another member directly when you need something from their area."
+        )
+    extra = duties(member)
+    return f"{text} {extra}" if extra else text
+
+
 def _role(team: Team, member: Member) -> str:
     """A member's role without the worktree note (role adds it)."""
+    if team.uses_bus:
+        return _bus_role(team, member)
     others = roster(team, member)
     goal = f"Team goal:\n\n{team.goal}\n\n" if "\n" in team.goal else f"Team goal: {team.goal}. "
     common = (f"Team: {team.name}, working in {team.cwd}. {goal}"
@@ -610,6 +777,8 @@ def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST,
         "depend on each other so much that someone must hand out and check the work. Leave it out when they "
         "are separate topics that only need to tell each other what touches the other: they then work as peers.\n"
         f"- {router.GUIDE}\n"
+        "- If the goal asks to use Antigravity (agy) or mix CLIs, put @agy on those members (with an optional "
+        "model and effort, e.g. 'ui: screens [src/ui] @agy @high'); otherwise leave the CLI out (Claude Code).\n"
         "- Name a member who reviews review, one who writes tests tests, one who writes documentation docs, one "
         "who finds things out research.")
 
@@ -739,12 +908,54 @@ def role_file(team: Team, member: Member) -> Path | None:
     return path
 
 
+def _tabmancer_cmd() -> tuple[str, ...]:
+    """How a tab invokes tabmancer itself (e.g. `tabmancer team run`)."""
+    return ("tabmancer",) if shutil.which("tabmancer") else (sys.executable, "-m", "tabmancer")
+
+
+def bus_env(team: Team, member: Member) -> tuple[tuple[str, str], ...]:
+    """Environment variables passed to members of a mixed/agy team."""
+    if not team.uses_bus:
+        return ()
+    return (("TABMANCER_TEAM", team.name), ("TABMANCER_MEMBER", member.name),
+            (teambus.BUS_ENV, str(teambus.bus_root())))
+
+
+def agy_notes(team: Team, only: set[str] | None = None) -> list[str]:
+    """'ui: opus never runs through agy: Argon instead (...)', for each agy member (of only, by name,
+    when given) whose model was asked for and is not the one it gets: said where the team starts."""
+    from . import agy
+
+    notes = []
+    for member in team.members:
+        if member.cli != "agy" or not member.model or (only is not None and member.name not in only):
+            continue
+        model, note = agy.resolve(member.model)
+        if note and model != member.model:
+            notes.append(f"{member.name}: {note}")
+    return notes
+
+
 def options(team: Team, member: Member) -> tuple[str, ...]:
+    if member.cli == "agy":
+        bdir = teambus.team_dir(team.name)
+        # The bus copy and team.json it runs from (in the folder --add-dir lets agy read): the
+        # role text names its command (bus_cmd).
+        teambus.install(team.name, team.created, [m.name for m in team.members])
+        from . import agy
+
+        # Always a model, from agy's chain by quota and never a Claude one (agy.resolve): with
+        # none, agy runs its own default, which may be neither. No --effort: agy's model ids
+        # carry theirs (gemini-4-argon-high).
+        return ("--mode", "auto", "--add-dir", str(bdir), "--model", agy.resolve(member.model)[0])
     # --allowedTools=... in one piece: written apart it takes every word after it as a tool.
     # A deciding lead may add members without asking: that one command, and only it.
     # A lead may bring its closed members back without asking: that one command, and only it.
-    tools = "SendMessage,ListAgents" + (f",Bash({START}:*)" if member.lead else "") + (
-        f",Bash({ADD}:*)" if member.lead and team.decide else "")
+    if team.uses_bus:
+        tools = f"Bash({BUS_CMD}:*)"
+    else:
+        tools = "SendMessage,ListAgents" + (f",Bash({START}:*)" if member.lead else "") + (
+            f",Bash({ADD}:*)" if member.lead and team.decide else "")
     path = role_file(team, member)
     told = (("--append-system-prompt-file", str(path)) if path is not None else
             ("--append-system-prompt", " ".join(role(team, member).split())))
@@ -753,11 +964,109 @@ def options(team: Team, member: Member) -> tuple[str, ...]:
             f"--allowedTools={tools}", *told)
 
 
+def ensure_worktree(team: Team, member: Member) -> Path | None:
+    """Create a git worktree for a non-Claude member when the team uses worktrees."""
+    kept = existing_worktree(team, member)
+    if kept is not None:
+        return kept
+    target = Path(team.cwd, *WORKTREES, team.session_name(member))
+    branch = team.branch(member)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Reuse existing branch if a previous generation left it, otherwise create it.
+        check = subprocess.run(["git", "-C", team.cwd, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+                               capture_output=True, timeout=10, check=False,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        cmd = (["git", "-C", team.cwd, "worktree", "add", str(target), branch] if check.returncode == 0 else
+               ["git", "-C", team.cwd, "worktree", "add", "-b", branch, str(target)])
+        made = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=30, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if made.returncode == 0 and (target / ".git").exists():
+            return target
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def _agy_first_prompt(team: Team, member: Member, bus_role: Path | None, prompt: str | None,
+                      resuming: bool = False) -> str:
+    """Initial -i prompt for an agy team member: embeds its team tag and points to its role file."""
+    tag = f"[tabmancer:{team.session_name(member)}]"
+    bus = bus_cmd(team, member)
+    role_hint = (f"Read your full team role in {bus_role} and follow it strictly." if bus_role is not None
+                 else " ".join(role(team, member).split()))
+    if resuming:
+        if prompt:
+            return f"{tag} You are resuming your role on team {team.name}. {role_hint} {prompt}"
+        return (f"{tag} You are resuming your role on team {team.name}. {role_hint} "
+                f"Start `{bus} listen {team.name} {member.name}` in the background (WaitMsBeforeAsync: 500) "
+                "and continue your work.")
+    if prompt:
+        return f"{tag} {role_hint} {prompt}"
+    if member.lead and team.decide and not any(not m.lead for m in team.members):
+        body = (f"Goal: {goal_line(team)} The team is yours to make: decide the members the work needs (at most "
+                f'{team.decide}), add them with {ADD} {team.name} "name: area; ...", send each its first task with '
+                f'`{bus} send`, then start `{bus} listen {team.name} {member.name}` in the background.')
+    elif member.lead:
+        body = (f"Goal: {goal_line(team)} Your team is starting now. Plan the work, send each member its first task "
+                f"with `{bus} send {team.name} <member> \"...\" --from {member.name}`, then start "
+                f"`{bus} listen {team.name} {member.name}` in the background.")
+    elif team.lead is None:
+        body = (f"Goal: {goal_line(team)} Your part: {member.focus or member.name}. The others start alongside you: "
+                f"say hello to them with `{bus} send`, start `{bus} listen {team.name} {member.name}` in the "
+                "background, agree where your parts meet, then start on yours.")
+    else:
+        body = (f"Goal: {goal_line(team)} Your area: {member.focus or member.name}. Wait for your first task from "
+                f"{team.lead.name} by running `{bus} listen {team.name} {member.name}` in the background "
+                "(WaitMsBeforeAsync: 500) now, then end your turn.")
+    return f"{tag} {role_hint} {body}"
+
+
+def _agy_wrapper(team: Team, member: Member) -> tuple[str, ...]:
+    return (*_tabmancer_cmd(), "team", "run", team.name, member.name, "--")
+
+
 def launch(team: Team, member: Member, resume: Session | None = None, prompt: str | None = None) -> Launch:
     """A member's tab: a fresh session, or its last one resumed with the same name and role."""
+    env = bus_env(team, member)
+    if member.cli == "agy":
+        role_file(team, member)
+        bus_role = teambus.write_role_file(team.name, team.session_name(member), role(team, member))
+        if resume is not None:
+            return Launch(
+                title=f"{team.name}: {member.name}",
+                cwd=home_of(team, resume.cwd),
+                mode=Mode.RESUME,
+                session_id=resume.session_id,
+                prompt=_agy_first_prompt(team, member, bus_role, prompt, resuming=True),
+                cli="agy",
+                options=options(team, member),
+                env=env,
+                wrapper=_agy_wrapper(team, member),
+            )
+        cwd = team.cwd
+        if team.has_worktree(member):
+            made = ensure_worktree(team, member)
+            if made is not None:
+                cwd = str(made)
+        return Launch(
+            title=f"{team.name}: {member.name}",
+            cwd=cwd,
+            mode=Mode.NEW,
+            session_id="",
+            prompt=_agy_first_prompt(team, member, bus_role, prompt, resuming=False),
+            cli="agy",
+            options=options(team, member),
+            env=env,
+            wrapper=_agy_wrapper(team, member),
+        )
+
     if resume is not None:  # in its own folder: a member with a worktree goes on there
+        if team.uses_bus and prompt is None and not member.lead and team.lead is not None:
+            prompt = (f"You are resuming your role on team {team.name}. Start `{BUS_CMD} listen {team.name} "
+                      f"{member.name}` in the background (run_in_background: true) and continue waiting for messages.")
         return Launch(title=f"{team.name}: {member.name}", cwd=home_of(team, resume.cwd), mode=Mode.RESUME,
-                      session_id=resume.session_id, prompt=prompt, options=options(team, member))
+                      session_id=resume.session_id, prompt=prompt, options=options(team, member), env=env)
     if prompt is None and member.lead and team.decide and not any(not m.lead for m in team.members):
         prompt = (f"Goal: {goal_line(team)} The team is yours to make: decide the members the work needs (at most "
                   f'{team.decide}), add them with {ADD} {team.name} "name: area; ...", then send each its first '
@@ -766,8 +1075,18 @@ def launch(team: Team, member: Member, resume: Session | None = None, prompt: st
         prompt = (f"Goal: {goal_line(team)} Your team is starting now. Plan the work and send each member its "
                   "first task.")
     elif prompt is None and team.lead is None:  # peers: nobody hands out work, so each starts on its own part
-        prompt = (f"Goal: {goal_line(team)} Your part: {member.focus or member.name}. The others start alongside you: "
-                  "say hello to them with SendMessage, agree where your parts meet, then start on yours.")
+        if team.uses_bus:
+            prompt = (f"Goal: {goal_line(team)} Your part: {member.focus or member.name}. The others start alongside "
+                      f"you: say hello to them with `{BUS_CMD} send`, start `{BUS_CMD} listen {team.name} "
+                      f"{member.name}` in the background, agree where your parts meet, then start on yours.")
+        else:
+            prompt = (f"Goal: {goal_line(team)} Your part: {member.focus or member.name}. The others start alongside "
+                      "you: say hello to them with SendMessage, agree where your parts meet, then start on yours.")
+    elif prompt is None and team.uses_bus and team.lead is not None:
+        # In a bus team, Claude workers start a background bus listener so they wake up on agy/Claude messages.
+        prompt = (f"You are {team.session_name(member)} on team {team.name}. Start listening for your first task from "
+                  f"{team.lead.name} by running `{BUS_CMD} listen {team.name} {member.name}` in the background "
+                  "(run_in_background: true), then wait for it.")
     # A fresh member with a worktree of its own: Claude Code makes it, .claude/worktrees/<session name>
     # on the branch worktree-<session name> (tried with 2.1.317), and the session works there. One
     # there already (a handover keeps the name of a member whose part goes on, and its worktree
@@ -778,7 +1097,7 @@ def launch(team: Team, member: Member, resume: Session | None = None, prompt: st
         kept = existing_worktree(team, member)
         cwd, worktree = (str(kept), ()) if kept is not None else (team.cwd, ("--worktree", team.session_name(member)))
     return Launch(title=f"{team.name}: {member.name}", cwd=cwd, mode=Mode.NEW, session_id="",
-                  prompt=prompt, options=(*options(team, member), *worktree))
+                  prompt=prompt, options=(*options(team, member), *worktree), env=env)
 
 
 def existing_worktree(team: Team, member: Member) -> Path | None:
@@ -878,8 +1197,11 @@ def member_of(session: Session, saved: dict[str, Team] | None = None) -> tuple[T
     for team in (load() if saved is None else saved).values():
         if not in_team_folder(team, session.cwd) or not since_made(team, session):
             continue
+        bindings = teambus.read_bindings(team.name) if session.cli != "claude" else {}
         for member in team.members:
             if session.title == team.session_name(member):
+                return team, member
+            if member.cli == session.cli and bindings.get(member.name, {}).get("session_id") == session.session_id:
                 return team, member
     return None
 
@@ -892,7 +1214,14 @@ def as_member(session: Session, plain: Launch, saved: dict[str, Team] | None = N
     if found is None:
         return plain
     team, member = found
-    return replace(plain, title=f"{team.name}: {member.name}", options=options(team, member))
+    if member.cli == "agy":
+        role_file(team, member)
+        bus_role = teambus.write_role_file(team.name, team.session_name(member), role(team, member))
+        return replace(plain, title=f"{team.name}: {member.name}", options=options(team, member),
+                       env=bus_env(team, member), wrapper=_agy_wrapper(team, member),
+                       prompt=_agy_first_prompt(team, member, bus_role, plain.prompt, resuming=True))
+    return replace(plain, title=f"{team.name}: {member.name}", options=options(team, member),
+                   env=bus_env(team, member))
 
 
 def lead_last(sessions: list[Session], saved: dict[str, Team] | None = None) -> list[Session]:
@@ -925,13 +1254,59 @@ def live_names() -> dict[str, dict]:
     return {str(info["name"]): info for info in _registry_sessions() if info.get("name")}
 
 
+def _agy_live_state(session: Session | None, presence: dict) -> str:
+    """Live state for a running agy team member: resting when listening, busy when active, else idle."""
+    if presence.get("listening"):
+        return "resting"
+    if session is not None and session.path is not None and session.path.suffix == ".jsonl":
+        from . import agy
+
+        meta = agy._read_transcript(session.path)
+        if meta.get("busy"):
+            return "busy"
+    if session is not None and session.status is Status.CUT_OFF:
+        return "busy"
+    return "idle"
+
+
 def member_sessions(team: Team, sessions: list[Session], live: dict[str, dict] | None = None) -> dict[str, Session | None]:
     """Each member's session: the open one with its name, else the newest one that had it."""
     live = live_names() if live is None else live
     by_id = {s.session_id: s for s in sessions}
+    presence = teambus.read_presence(team.name) if team.uses_bus else {}
+    bindings = teambus.read_bindings(team.name) if team.uses_bus else {}
     out: dict[str, Session | None] = {}
     for member in team.members:
         name = team.session_name(member)
+        if member.cli == "agy":
+            pinfo = presence.get(member.name)
+            binfo = bindings.get(member.name)
+            found: Session | None = None
+            for sid in (pinfo.get("session_id") if pinfo else "", binfo.get("session_id") if binfo else ""):
+                cand = by_id.get(str(sid)) if sid else None
+                if cand is not None and since_made(team, cand):
+                    found = cand
+                    break
+            if found is None:
+                tag = f"[tabmancer:{name}]".lower()
+                named = [s for s in sessions if s.cli == "agy" and in_team_folder(team, s.cwd) and since_made(team, s)
+                         and (s.title.lower() == name.lower() or tag in (s.first_prompt or "").lower())]
+                found = max(named, key=lambda s: s.last_active, default=None)
+                if found is not None and (not binfo or binfo.get("session_id") != found.session_id):
+                    teambus.save_binding(team.name, member.name, found.session_id, cli="agy", created=team.created)
+            if pinfo and pinfo.get("runner_alive"):
+                state = _agy_live_state(found, pinfo)
+                if found is not None:
+                    found = replace(found, title=name, exit=Exit.RUNNING, status=Status.RUNNING, live_state=state)
+                else:
+                    found = Session(session_id=str(pinfo.get("session_id") or f"agy:{name}"), path=None,
+                                    cwd=team.cwd, title=name, cli="agy", exit=Exit.RUNNING,
+                                    status=Status.RUNNING, live_state=state)
+            elif found is not None and found.title != name:
+                found = replace(found, title=name)
+            out[member.name] = found
+            continue
+
         info = live.get(name)
         found = by_id.get(str(info.get("sessionId"))) if info else None
         if found is not None and not since_made(team, found):
@@ -939,6 +1314,9 @@ def member_sessions(team: Team, sessions: list[Session], live: dict[str, dict] |
         if found is None:
             named = [s for s in sessions if s.title == name and in_team_folder(team, s.cwd) and since_made(team, s)]
             found = max(named, key=lambda s: s.last_active, default=None)
+        if (found is not None and team.uses_bus and presence.get(member.name, {}).get("listening")
+                and found.exit is Exit.RUNNING and found.live_state.lower() in ("idle", "done", "busy", "shell")):
+            found = replace(found, live_state="resting")
         out[member.name] = found
     return out
 
@@ -1032,6 +1410,13 @@ def conversation(team: Team, sessions: dict[str, Session | None], live: dict[str
     for member, session in sessions.items():
         if session is None or session.path is None:
             continue
+        if session.cli == "agy":
+            from . import agy
+
+            for event in agy.user_events(session.path):
+                sender = TABMANCER if from_tabmancer(team, event["text"]) else YOU
+                received.append(Message(event["at"], sender, member, _shorten(_strip_team_tag(event["text"]), 400)))
+            continue
         for event in _events(session.path):
             if event["kind"] == "in":
                 received.append(Message(event["at"], team.member_of(event["from"]), member, event["text"]))
@@ -1050,7 +1435,18 @@ def conversation(team: Team, sessions: dict[str, Session | None], live: dict[str
         original = said.get((message.sender, message.receiver, message.text))
         if original is not None:
             message.summary, message.at = original.summary, original.at
-    return sorted(received + pending, key=lambda m: m.at)
+    combined = received + pending
+    if team.uses_bus or (teambus.team_dir(team.name) / "messages.jsonl").is_file():
+        seen = {(m.sender, m.receiver, m.text) for m in combined}
+        for row in teambus.messages(team.name, since=_made(team.created)):
+            sender = team.member_of(row["from"])
+            receiver = team.member_of(row["to"])
+            if (sender, receiver, row["text"]) in seen:
+                continue
+            seen.add((sender, receiver, row["text"]))
+            combined.append(Message(row["at"], sender, receiver, row["text"], row["summary"],
+                                    delivered=bool(row["delivered"])))
+    return sorted(combined, key=lambda m: m.at)
 
 
 def cap_of(session_id: str, team: Team | None = None) -> int:

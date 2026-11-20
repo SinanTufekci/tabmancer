@@ -117,7 +117,7 @@ def cannot_close(session: Session, open_sessions: list[Session], again: str = AG
     """Why this open session cannot be closed now; None if it can. `again` says what to do instead."""
     if session.live_state not in IDLE:
         return "it is working. Hand it over once it waits for you"
-    if not session.title or sum(s.title == session.title for s in open_sessions if s.cli == "claude") > 1:
+    if not session.title or sum(s.title == session.title for s in open_sessions if s.cli == session.cli) > 1:
         return f"another open session has the same title, so its tab cannot be told apart. {again}"
     return None
 
@@ -129,27 +129,42 @@ def close(session: Session, open_sessions: list[Session], again: str = AGAIN) ->
         raise HandoverError(reason)
     if not focus.close_tab(session.title):
         raise HandoverError(f"its tab was not found in Windows Terminal. {again}")
+    role = teams.member_of(session) if session.cli == "agy" else None
     deadline = time.monotonic() + CLOSE_SECONDS
     while time.monotonic() < deadline:
-        if not any(info.get("sessionId") == session.session_id for info in _registry_sessions()):
+        if session.cli == "agy":
+            from . import teambus
+
+            if role is None or not teambus.is_alive(role[0].name, role[1].name):
+                return
+        elif not any(info.get("sessionId") == session.session_id for info in _registry_sessions()):
             return
         time.sleep(0.5)
-    raise HandoverError("its tab closed, but Claude did not exit")
+    who = "Antigravity" if session.cli == "agy" else "Claude"
+    raise HandoverError(f"its tab closed, but {who} did not exit")
 
 
 def write_itself(session: Session, request: str = REQUEST) -> str:
     """The session writes its own handover: resumed once without a tab, it answers and exits. With a
     request of another kind (a lead's, for its team: team_request), the whole answer comes back."""
-    claude = shutil.which("claude")
-    if not claude:
-        raise HandoverError("the claude CLI is not on PATH")
     if not session.cwd or not Path(session.cwd).is_dir():
         raise HandoverError(f"its folder is gone ({session.cwd})")
-    model = ["--model", session.model] if session.model else []
+    if session.cli == "agy":
+        agy_bin = shutil.which("agy")
+        if not agy_bin:
+            raise HandoverError("the agy CLI is not on PATH")
+        model = ["--model", session.model] if session.model else []
+        cmd = [agy_bin, "-p", "--conversation", session.session_id, *model]
+    else:
+        claude = shutil.which("claude")
+        if not claude:
+            raise HandoverError("the claude CLI is not on PATH")
+        model = ["--model", session.model] if session.model else []
+        cmd = [claude, "-p", "--resume", session.session_id, *model]
     try:
-        # The request goes in on stdin: through a claude.cmd shim, cmd.exe would take < and > for redirects.
+        # The request goes in on stdin: through a .cmd shim, cmd.exe would take < and > for redirects.
         result = subprocess.run(
-            [claude, "-p", "--resume", session.session_id, *model], input=request, cwd=session.cwd,
+            cmd, input=request, cwd=session.cwd,
             env=clean_env(), capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=WRITE_SECONDS, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except subprocess.TimeoutExpired as error:
@@ -158,7 +173,7 @@ def write_itself(session: Session, request: str = REQUEST) -> str:
         raise HandoverError(str(error)) from error
     answer = result.stdout.strip()
     if result.returncode != 0 or not answer:
-        raise HandoverError(result.stderr.strip()[:300] or "claude returned nothing")
+        raise HandoverError(result.stderr.strip()[:300] or f"{session.cli} returned nothing")
     if START in answer and request == REQUEST:
         answer = answer.split(START, 1)[1].split(END, 1)[0].strip()
     return answer
@@ -185,14 +200,14 @@ def team_request(team: teams.Team, left: str = "") -> str:
     """What a team's lead is asked: the handover for a new lead, and the line-up for the rest of the work.
     With left (work_left), what git shows still lying in the team's folders, for it to say what
     becomes of each."""
-    members = "\n".join(f"- {m.name}: {m.focus or m.name}{f' [{m.owns}]' if m.owns else ''}"
-                        f"{picks.tags(m.pick)}" for m in team.members if not m.lead) or "- (none yet)"
+    members = "\n".join(f"- {m.line()}" for m in team.members if not m.lead) or "- (none yet)"
     branches = (" Each member worked on a branch of its own: say for each whether it is merged, and what is "
                 "left on it. A member whose name you keep goes on in its worktree, on that branch; a new name "
                 "starts on a fresh one." if team.worktrees else "")
     lying = (f"\n\nWhat git shows in the team's folders right now, before anyone closes:\n{left}\nSay in the "
              "handover what becomes of each: to commit, to merge or to drop, and who does it."
              if left else "")
+    cli_hint = " Keep @agy on members that should run on Antigravity." if team.uses_bus else ""
     return (
         "We are handing this team's work over to a fresh team: a new lead in your place and fresh members, none of "
         "whom will see this conversation or your members' conversations. Your members now:\n"
@@ -205,8 +220,8 @@ def team_request(team: teams.Team, left: str = "") -> str:
         "line:\nname: what it works on [the folders or files that are its own] @model @effort\n"
         "No lead line: the new lead is there. Names: one short lowercase word, as above; keep a member's name "
         "where its part goes on. As few members as the work left needs, each with a part that can go on at the "
-        "same time as the others. Inside a line, use commas, "
-        f"not semicolons. {router.GUIDE}\nWrite nothing after the line-up.")
+        f"same time as the others. Inside a line, use commas, not semicolons.{cli_hint} {router.GUIDE}\n"
+        "Write nothing after the line-up.")
 
 
 def read_team(answer: str, team: teams.Team | None = None) -> tuple[str, str]:

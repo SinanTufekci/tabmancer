@@ -32,7 +32,7 @@ CLIS: dict[str, Cli] = {cli.name: cli for cli in (
     Cli("codex", "Codex", "codex", can_fork=True, can_background=False,
         reads="endings, last prompt and reply, edited files, tokens, summaries"),
     Cli("agy", "Antigravity", "agy", can_fork=False, can_background=False,
-        reads="titles, folders and times (its conversations are stored in a binary format)"),
+        reads="titles, folders, times, transcripts, models, tokens and mixed teams"),
 )}
 
 

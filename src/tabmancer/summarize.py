@@ -97,10 +97,14 @@ def forget(session_ids: list[str]) -> None:
 
 
 def session_digest(session: Session) -> str:
-    """What an AI is shown of a session. Antigravity's conversations cannot be read."""
+    """What an AI is shown of a session."""
     if session.cli == "agy":
-        raise SummaryError("Antigravity stores its conversations in a binary format, so there is "
-                           "nothing to read.")
+        from .agy import digest as agy_digest
+
+        try:
+            return agy_digest(session)
+        except OSError:
+            raise SummaryError("Antigravity has no readable JSONL transcript for this session.") from None
     if session.cli == "codex":
         from .codex import digest as codex_digest
 
