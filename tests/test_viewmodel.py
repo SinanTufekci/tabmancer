@@ -112,3 +112,30 @@ async def test_actions_by_id_go_the_way_of_the_keys(fake_home, tmp_path, monkeyp
         with pytest.raises(KeyError):
             app.act("open", "nobody")
         assert f"{TEAM_ROW}shop" in app.table.rows  # nothing changed the list's shape
+
+
+def test_the_info_line_says_what_the_list_holds():
+    assert VM.info_words(2, 0, 14) == ("2 sessions, last 14 days",) * 2  # no "0 selected", no "0 hidden"
+    bar, info = VM.info_words(5, 2, 7.5, card=("3", "TO CONTINUE"), selected=1, preselected=2)
+    assert bar == "3 sessions, last 7.5 days · 2 hidden (X shows them)"  # the top bar leaves the rest out
+    assert info == (bar + " · only TO CONTINUE (3 or Esc shows all) · 1 selected (Enter opens them)"
+                    " · 2 looked open at the last shutdown")
+    assert VM.info_words(5, 2, 14, show_hidden=True)[1] == "5 sessions, last 14 days · showing 2 hidden (x brings one back)"
+    busy = [session(Status.RUNNING, Exit.RUNNING, live) for live in ("busy", "idle", "blocked")] + [session()]
+    assert VM.live_words(busy, 2) == "Live · 3 open · 2 waiting for you · refreshes every 2s · l returns to the list"
+
+
+async def test_the_dashboards_info_line_is_the_view_models(fake_home):
+    app = SessionPicker(days=14)
+    async with app.run_test() as pilot:
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if app.sessions:
+                break
+        app.card_filter, app.selected = "continue", {"two"}
+        app.update_status()
+        assert (app.bar_info, app.sub_title) == VM.info_words(2, 0, 14, card=("3", "TO CONTINUE"), selected=1)
+        await pilot.press("l")
+        await pilot.pause(0.1)
+        assert app.live_mode and app.bar_info == ""
+        assert app.sub_title == VM.live_words(list(app.sessions.values()), app_module.LIVE_REFRESH_SECONDS)

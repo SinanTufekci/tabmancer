@@ -554,6 +554,34 @@ def build(sessions: dict[str, Session], *, hidden: set[str], pinned: set[str], g
                 agy.quota_view(agy_usage))
 
 
+def info_words(listed: int, hidden: int, days: float, *, show_hidden: bool = False,
+               card: tuple[str, str] | None = None, selected: int = 0, preselected: int = 0) -> tuple[str, str]:
+    """The list's info line: (what the top bar shows, the whole line under it). listed: every session
+    known; hidden: how many of them are hidden; card: the key and title of the card the list is
+    narrowed to; selected: the rows ticked; preselected: those ticked for having looked open at the
+    last shutdown."""
+    info = f"{listed - (0 if show_hidden else hidden)} sessions, last {days:g} days"
+    if hidden:
+        info += f" · showing {hidden} hidden (x brings one back)" if show_hidden else f" · {hidden} hidden (X shows them)"
+    bar = info
+    if card:
+        key, title = card
+        info += f" · only {title} ({key} or Esc shows all)"
+    if selected:
+        info += f" · {selected} selected (Enter opens them)"
+    if preselected:
+        info += f" · {preselected} looked open at the last shutdown"
+    return bar, info
+
+
+def live_words(sessions: list[Session], every: float) -> str:
+    """The info line in the l mode: how many are open, and how many of them wait for you."""
+    open_now = [s for s in sessions if s.exit is Exit.RUNNING]
+    waiting = sum(state_of(s)[2] < 2 for s in open_now)
+    return (f"Live · {len(open_now)} open · {waiting} waiting for you · "
+            f"refreshes every {every:g}s · l returns to the list")
+
+
 def to_json(view: View) -> dict:
     """The view as JSON-ready data: datetimes as ISO text."""
 

@@ -69,6 +69,11 @@ assert "api" in handover.team_request(teams.load()["shop"])
 assert router.guess("rename the design doc").pick.model == "haiku"
 assert json.loads(agyplugin.files()["plugin.json"])["name"]
 assert store.TeamStore("shop").name == "shop"
+from tabmancer import sessions, usage
+sessions._agents_json = lambda include_finished=False: []  # never the real `claude agents`
+usage.read_all = list  # nor `claude -p /usage`
+snap = store.DashboardStore().poll()
+assert snap.view.sessions == [] and snap.view.teams == [] and snap.acting is None
 print(sorted(m for m in sys.modules if m.split(".")[0] in BLOCKED))
 """
 CORE = ("keys", "store", "viewmodel", "actions", "actor", "marks", "search", "teams", "teambus", "codexbus",

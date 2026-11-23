@@ -11,9 +11,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from test_team_tree import peer, send, shop, transcript
 
-from tabmancer import actor, agy, gitstate, sessions, store, teams, tokens, usage
+from tabmancer import accounts, actor, agy, gitstate, marks, sessions, store, teams, tokens, usage
+from tabmancer import viewmodel as VM
 from tabmancer.sessions import Exit, Session
-from tabmancer.store import Snapshot, TeamStore
+from tabmancer.store import DashboardStore, Snapshot, TeamStore
 
 
 class Clock:
@@ -306,3 +307,165 @@ async def test_the_store_and_the_terminal_monitor_show_the_same_team(fake_home, 
 
     assert facts(ours) == facts(tui)
     assert (ours.open, ours.wires, [m.text for m in ours.latest]) == (tui.open, tui.wires, [m.text for m in tui.latest])
+
+
+# --- the whole dashboard (DashboardStore) ------------------------------------------------------
+
+
+def test_a_full_poll_keeps_the_background_sessions_for_the_quick_ones(monkeypatch):
+    """The edge of the dashboard's live read (app.read_live): a full poll asks `claude agents --json`
+    and keeps its background sessions; a quick one reads the pid files, blind to those, and carries
+    the kept ones over, their record winning over a pid file of the same session."""
+    agents = [{"sessionId": "fg", "kind": "interactive", "status": "busy"},
+              {"sessionId": "bg", "kind": "background", "status": "idle", "pid": 7}]
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: agents)
+    monkeypatch.setattr(store, "_registry_sessions", lambda: [{"sessionId": "fg", "pid": 3}, {"sessionId": "bg", "pid": 9}])
+    live, kept = store.live_entries(True, {})
+    assert set(live) == {"fg", "bg"} and kept == {"bg": agents[1]}
+    live, again = store.live_entries(False, kept)
+    assert again is kept
+    assert live == {"fg": {"sessionId": "fg", "pid": 3}, "bg": agents[1]}
+
+
+async def test_the_dashboards_live_read_tells_of_idle_background_sessions_once(fake_home, monkeypatch):
+    """What stayed in app.read_live around the store's read: the background sessions are kept before
+    the transcripts are read, and Bit says once that some sit idle."""
+    from tabmancer import app as app_module
+    from tabmancer.app import SessionPicker
+
+    idle = {"sessionId": "bg", "kind": "background", "status": "idle", "pid": 7}
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [idle])
+    said: list[str] = []
+    monkeypatch.setattr(app_module.Mascot, "react", lambda self, mood, words, *args, **kwargs: said.append(words))
+    app = SessionPicker(days=14)
+    async with app.run_test() as pilot:
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if app.full_polls:
+                break
+        assert app.background_live == {"bg": idle}
+        app.poll_live(full=True)
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if app.full_polls > 1:
+                break
+        assert app.full_polls > 1
+    assert said == ["1 background session sits idle. B tidies up."]
+
+
+def comparable(view) -> dict:
+    """A view as JSON, its sessions by id; the moment it was built left out."""
+    data = VM.to_json(view)
+    data.pop("at")
+    data["sessions"] = sorted(data["sessions"], key=lambda s: s["id"])
+    return data
+
+
+async def test_the_dashboard_store_and_the_terminal_dashboard_show_the_same(fake_home, tmp_path, monkeypatch, quiet):
+    """The seam: what the desktop main window will draw is what the terminal dashboard holds."""
+    import time as clock
+
+    from test_team_tree import ready
+
+    from tabmancer.app import SessionPicker
+
+    shop(fake_home, tmp_path, monkeypatch)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await ready(pilot, app)
+        end = clock.monotonic() + 20
+        while clock.monotonic() < end and not (app.token_report is not None and app.full_polls):
+            await pilot.pause(0.05)
+        tui = comparable(app.view())
+    assert {"lead-1", "api-1", "ui-1", "one", "two"} <= {s["id"] for s in tui["sessions"]}
+    assert tui["teams"] and tui["cards"]["open"]  # the live poll landed: not two empty views alike
+    snap = DashboardStore().poll()
+    assert comparable(snap.view) == tui
+    assert set(snap.sessions) == {s["id"] for s in tui["sessions"]} and set(snap.team_states) == {"shop"}
+
+
+def test_the_dashboard_store_only_watches(fake_home, tmp_path, monkeypatch, quiet):
+    shop(fake_home, tmp_path, monkeypatch)
+
+    def no(*args, **kwargs):
+        raise AssertionError("not from a watcher")
+
+    for owner, name in ((actor, "claim"), (actor, "first_to"), (actor, "release"), (usage, "record"),
+                        (accounts, "remember"), (agy, "_run_usage"), (agy, "refresh_quota"), (marks.Marks, "save")):
+        monkeypatch.setattr(owner, name, no)
+    clock = Clock()
+    dash = DashboardStore(clock=clock)
+    for _ in range(store.FULL_EVERY + 1):
+        snap = dash.poll()
+        clock.now += store.USAGE_SECONDS
+    assert snap.acting is None  # no dashboard runs here
+    assert {"lead-1", "api-1", "one"} <= {s.session_id for s in snap.sessions.values() if s.exit is Exit.RUNNING}
+
+
+def test_the_dashboard_store_shows_who_acts_and_the_marks_of_any_dashboard(fake_home, tmp_path, monkeypatch, quiet):
+    shop(fake_home, tmp_path, monkeypatch)
+    clock = Clock()
+    dash = DashboardStore(clock=clock)
+    assert dash.poll().pinned == set()
+    marks.Marks(hidden={"two"}, pinned={"one"}).save()  # pinned and hidden in the terminal dashboard
+    held = {"pid": 4242, "started": "then", "command": "tabmancer"}
+    monkeypatch.setattr(actor, "holder", lambda: held)
+    monkeypatch.setattr(actor, "running", lambda record: record is held)
+    clock.now += store.ACTOR_SECONDS
+    snap = dash.poll()
+    assert (snap.pinned, snap.hidden, snap.acting) == ({"one"}, {"two"}, held)
+    by_id = {s.id: s for s in snap.view.sessions}
+    assert by_id["one"].pinned and by_id["two"].hidden
+
+
+def test_the_dashboard_store_reads_as_often_as_the_dashboard(fake_home, tmp_path, monkeypatch, quiet):
+    shop(fake_home, tmp_path, monkeypatch)
+    clock = Clock()
+    dash = DashboardStore(clock=clock)
+    read: list[str] = []
+
+    def counted(name: str):
+        then = getattr(dash, name)
+        return lambda: read.append(name[5:]) or then()
+
+    for name in ("read_others", "read_tokens", "read_git", "read_limits", "read_accounts", "read_acting"):
+        monkeypatch.setattr(dash, name, counted(name))
+    full: list[int] = []
+    asked = sessions.live_sessions
+    monkeypatch.setattr(store, "live_sessions", lambda: full.append(1) or asked())
+
+    def poll_at(moment: float) -> list[str]:
+        clock.now, read[:] = moment, []
+        dash.poll()
+        return list(read)
+
+    assert poll_at(1000) == ["tokens", "git", "limits", "accounts", "acting"]  # Codex's and agy's came with the list
+    assert poll_at(1002) == []
+    assert poll_at(1005) == ["accounts"]
+    assert poll_at(1010) == ["accounts", "acting"]
+    for moment in range(1012, 1022, 2):
+        poll_at(moment)
+    assert len(full) == 2 and dash.polls == store.FULL_EVERY + 1  # the first poll and the ninth ask the CLI
+    assert poll_at(1060) == ["others", "tokens", "git", "accounts", "acting"]
+    assert poll_at(1300) == ["others", "tokens", "git", "limits", "accounts", "acting"]
+
+
+def test_the_dashboard_store_asks_git_again_soon_once_when_it_begins_failing(fake_home, tmp_path, monkeypatch, quiet):
+    shop(fake_home, tmp_path, monkeypatch)
+    asked: list[float] = []
+    clock = Clock()
+    monkeypatch.setattr(gitstate, "read_all", lambda folders: asked.append(clock.now) or ({}, {"refuses"}))
+    dash = DashboardStore(clock=clock)
+    for _ in range(40):
+        dash.poll()
+        clock.now += 2
+    assert asked == [1000, 1010, 1070]  # once more after 10 s, then each minute: never a chain
+
+
+def test_the_dashboard_store_keeps_the_dashboards_timings():
+    from tabmancer import app as app_module
+
+    assert store.CHART_DAYS == app_module.CHART_DAYS
+    assert (store.FULL_EVERY, store.USAGE_SECONDS, store.TOKENS_SECONDS, store.GIT_SECONDS, store.ACCOUNTS_SECONDS,
+            store.ACTOR_SECONDS) == (app_module.FULL_POLL_EVERY, app_module.USAGE_SECONDS, app_module.TOKENS_SECONDS,
+                                     app_module.GIT_SECONDS, app_module.ACCOUNTS_SECONDS, app_module.ACTOR_SECONDS)

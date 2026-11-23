@@ -5,6 +5,7 @@ import pytest
 from conftest import box_has_focus
 
 from tabmancer import app as app_module
+from tabmancer import store
 from tabmancer.app import SessionPicker
 from tabmancer.launch import Launch, Mode
 
@@ -89,7 +90,7 @@ async def test_a_session_that_comes_up_is_not_named(fake_home, opened, monkeypat
         await loaded(pilot, app)
         app.table.move_cursor(row=app.table.get_row_index("one"))
         await pilot.press("enter")
-        monkeypatch.setattr(app_module, "_registry_sessions", lambda: [{"sessionId": "one", "pid": 1}])
+        monkeypatch.setattr(store, "_registry_sessions", lambda: [{"sessionId": "one", "pid": 1}])  # the poll's read
         app.poll_live(full=False)  # its pid file is there: it came up
         await pilot.pause(1.5)
         assert "one" in app.came_up

@@ -53,6 +53,7 @@ from . import (
     rename,
     search,
     sixel,
+    store,
     summarize,
     teambus,
     teams,
@@ -93,12 +94,9 @@ from .sessions import (
     _registry_sessions,
     find_sessions,
     live_sessions,
-    mark_live,
     nothing_found,
-    other_sessions,
     read_session,
     sensitive_calls,
-    transcript_path,
 )
 from .shortcuts import DASHBOARD_WINDOW
 from .shutdowns import open_at_shutdown, recent_shutdowns
@@ -946,7 +944,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if actor.claim():
             self.call_from_thread(self.took_over)
             return
-        self.call_from_thread(self.show_armed, read_armed())
+        self.call_from_thread(self.show_armed, store.read_armed())
 
     def took_over(self) -> None:
         if self.acts:
@@ -1569,24 +1567,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if not self.kept_back:  # once: the days whose files Claude Code deletes next go into the history
             self.kept_back = True
             tokens.collect(KEEP_BACK_DAYS)
-        others = [name for name in clis.enabled() if name != "claude"]
-        if "agy" not in others and teams.has_cli("agy"):
-            others.append("agy")
-        if others:  # Codex and agy have no live feed: their sessions are re-read every minute
-            fresh = [s for s in other_sessions(self.days, others)
-                     if self.include_all or s.entrypoint in ("", "cli")]
+        fresh = store.listed_others(self.days, self.include_all)
+        if fresh is not None:  # Codex and agy have no live feed: their sessions are re-read every minute
             self.call_from_thread(self.apply_other_sessions, fresh)
 
     def apply_other_sessions(self, fresh: list[Session]) -> None:
-        current = {sid: s for sid, s in self.sessions.items() if s.cli != "claude"}
-        wanted = {s.session_id: s for s in fresh}
-        if current == wanted:
+        changed = store.take_others(self.sessions, fresh)
+        if not changed:
             return
-        gone = current.keys() - wanted.keys()
-        for sid in gone:
-            del self.sessions[sid]
-        self.sessions.update(wanted)
-        self.sync_rows({sid for sid in wanted if current.get(sid) != wanted[sid]} | gone)
+        self.sync_rows(changed)
         self.update_dashboard()
 
     def show_tokens(self, report: tokens.Report) -> None:
@@ -1864,25 +1853,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def update_status(self) -> None:
         if self.live_mode:
-            open_now = [s for s in self.sessions.values() if s.exit is Exit.RUNNING]
-            waiting = sum(state_of(s)[2] < 2 for s in open_now)
             self.bar_info = ""
-            self.sub_title = (f"Live · {len(open_now)} open · {waiting} waiting for you · "
-                              f"refreshes every {LIVE_REFRESH_SECONDS}s · l returns to the list")
+            self.sub_title = VM.live_words(list(self.sessions.values()), LIVE_REFRESH_SECONDS)
             self.update_detail()
             return
         hidden = sum(self.marks.is_hidden(s) for s in self.sessions.values())
-        info = f"{len(self.sessions) - (0 if self.show_hidden else hidden)} sessions, last {self.days:g} days"
-        if hidden:
-            info += f" · showing {hidden} hidden (x brings one back)" if self.show_hidden else                 f" · {hidden} hidden (X shows them)"
-        self.bar_info = info
-        if self.card_filter:
-            key, _, title = CARDS[self.card_filter]
-            info += f" · only {title} ({key} or Esc shows all)"
-        if self.selected:
-            info += f" · {len(self.selected)} selected (Enter opens them)"
-        if self.preselected:
-            info += f" · {len(self.preselected)} looked open at the last shutdown"
+        card = (CARDS[self.card_filter][0], CARDS[self.card_filter][2]) if self.card_filter else None
+        self.bar_info, info = VM.info_words(len(self.sessions), hidden, self.days, show_hidden=self.show_hidden,
+                                            card=card, selected=len(self.selected),
+                                            preselected=len(self.preselected))
         if self.sub_title == info:  # the same words, other ticks: the pills still change
             self.watch_sub_title(info)
         self.sub_title = info
@@ -2632,22 +2611,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """The teams with a member in the list, open or not, each member's session and what was said:
         only what the transcripts gained since is read. A team whose sessions are all older than the
         list is not read at all."""
-        saved = teams.load()
-        if any(team.uses_bus for team in saved.values()):
-            by_id = {s.session_id: s for s in listed}
-            for found_agy in agy.find(days=min(self.days, 14)):
-                by_id[found_agy.session_id] = found_agy
-            listed = list(by_id.values())
-        live = teams.live_names()
-        states = {}
-        agy_updates: dict[str, Session] = {}
-        for name, team in saved.items():
-            found = teams.member_sessions(team, listed, live)
-            if any(s is not None for s in found.values()):
-                states[name] = teamtree.TeamState(team, found, teams.conversation(team, found, live))
-                for s in found.values():
-                    if s is not None and s.cli == "agy" and not s.session_id.startswith("agy:"):
-                        agy_updates[s.session_id] = s
+        states, agy_updates = store.read_team_states(listed, self.days)
         self.call_from_thread(self.show_teams, states, agy_updates)
 
     def show_teams(self, states: dict[str, teamtree.TeamState], agy_updates: dict[str, Session] | None = None) -> None:
@@ -3007,8 +2971,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def uses_agy(self) -> bool:
         """An agy session in the list, or an agy member in a team: then agy's quota is shown."""
-        return (any(s.cli == "agy" for s in self.sessions.values())
-                or any(m.cli == "agy" for state in self.team_states.values() for m in state.team.members))
+        return store.uses_agy(self.sessions.values(), self.team_states)
 
     @work(thread=True, exclusive=True, group="usage")
     def refresh_usage(self) -> None:
@@ -3016,8 +2979,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         # agy's quota as saved (no agy is run for it), only while agy is in use: read with the plan limits.
         self.agy_bar = agy.bar_view() if self.call_from_thread(self.uses_agy) else {}
         if not self.acts:  # a monitor: the dashboard's last reading, if it is fresh (one claude -p, not two)
-            shared = usage.latest(account=before.key if before else None)
-            self.call_from_thread(self.show_usage, shared if shared is not None else usage.read_all())
+            self.call_from_thread(self.show_usage, store.watched_limits(before))
             return  # recorded by the dashboard alone: a monitor's readings would count twice
         limits = usage.read_all()  # Codex's too, when it is turned on
         after = accounts.claude()
@@ -3573,7 +3535,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def load_armed(self) -> None:
         """The sessions to continue at their reset, as saved: the dashboard that acts saves them as it
         continues them, and one that watches shows them."""
-        self.armed = read_armed()
+        self.armed = store.read_armed()
 
     def save_armed(self) -> None:
         """The sessions to continue at their reset, saved: only by the dashboard that acts. A monitor
@@ -3774,41 +3736,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     @work(thread=True, exclusive=True, group="live")
     def read_live(self, full: bool) -> None:
         known = dict(self.sessions)
+        live, self.background_live = store.live_entries(full, self.background_live)
         if full:
-            live = live_sessions()
-            self.background_live = {sid: e for sid, e in live.items() if e.get("kind") == "background"}
             idle = sum(bool(e.get("pid")) and background.state_of(e).lower() in background.IDLE
                        for e in self.background_live.values())
             if idle and not self.told_idle:
                 self.told_idle = True
                 self.call_from_thread(self.mascot.react, "idle", f"{idle} background session{'s sit' if idle > 1 else ' sits'}"
                                       " idle. B tidies up.", seconds=6)
-            watched = set(live) | {sid for sid, s in known.items() if s.exit is Exit.RUNNING}
-        else:
-            live = {e["sessionId"]: e for e in _registry_sessions()} | self.background_live
-            watched = set(live)
-        updates: dict[str, Session] = {}
-        for sid in watched:
-            old = known.get(sid)
-            if old is not None and old.cli != "claude":
-                continue
-            path = old.path if old else transcript_path(sid)
-            if path is None:
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            if old is not None and old.size == size and sid in live:
-                fresh = replace(old)  # transcript unchanged: only the live state can differ
-            else:
-                fresh = read_session(path, follow=True)  # new activity (read on from the last read), a new session, or one that closed
-            if fresh is None:
-                continue
-            mark_live(fresh, live.get(sid))
-            updates[sid] = fresh
-        # agy keeps no record of what is open: its own db says.
-        updates |= agy.live_updates({sid: s for sid, s in known.items() if sid not in updates})
+        updates = store.fresh_sessions(known, live, full)
         self.call_from_thread(self.apply_live_updates, updates, full)
 
     def apply_live_updates(self, updates: dict[str, Session], full: bool = False) -> None:
@@ -3816,10 +3752,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.full_poll_due = False
             self.full_polls += 1
         self.warn_crowded(updates.values())
-        resting = self.resting_members()
-        for fresh in updates.values():  # a member done for now waits for its lead, not for you
-            if fresh.session_id in resting and fresh.live_state.lower() in ("idle", "done"):
-                fresh.live_state = "resting"
+        store.rest(updates.values(), self.resting_members())  # a member done for now waits for its lead, not for you
         turned: list[Session] = []  # were working and now wait for you, or stopped at a limit
         for sid, fresh in updates.items():
             if sid in self.queued and (fresh.exit is not Exit.RUNNING or fresh.live_state in handover.IDLE):
@@ -3897,8 +3830,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def resting_members(self) -> set[str]:
         """The sessions of the teams' members other than their leads: idle, they wait for the lead's
         next message, not for you. A team of peers has none: each one, idle, waits for you."""
-        return {s.session_id for state in self.team_states.values() for name, s in state.sessions.items()
-                if s is not None and state.team.lead is not None and name != state.team.lead.name}
+        return store.resting_ids(self.team_states)
 
     def tell_desktop(self, turned: list[Session]) -> None:
         """A desktop notification too, for when the dashboard is not in front: Windows asks what
@@ -3935,18 +3867,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     @work(thread=True, exclusive=True, group="git")
     def refresh_git(self) -> None:
-        folders = [s.cwd for s in self.sessions.values()]
-        if self.watch is not None:  # a monitor shows one team: its folder and worktrees, not every session's
-            team = teams.load().get(self.watch or "")
-            folders = [f for f in folders if team is not None and teams.in_team_folder(team, f)]
-        states, failed = gitstate.read_all(folders)
+        # A monitor shows one team: its folder and worktrees, not every session's.
+        states, failed = gitstate.read_all(store.git_folders(self.sessions.values(), self.watch))
         self.call_from_thread(self.show_git, states, failed)
 
     def show_git(self, states: dict[str, gitstate.GitState], failed: set[str] = frozenset()) -> None:
         # A folder git could not answer for keeps what was known, and is asked again soon: once, when it
         # has just begun failing. Each retry that failed set another, and the minute's refresh started
         # one more chain each time: a folder git always refuses (dubious ownership) ran git without end.
-        states = states | {key: state for key, state in self.git.items() if key in failed}
+        states = store.kept_git(self.git, states, failed)
         newly, self.git_failed = set(failed) - self.git_failed, set(failed)
         if newly and self.git_retry is None:
             self.git_retry = self.set_timer(10, self.retry_git)
@@ -4085,19 +4014,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """Switch to the Windows Terminal tab where this session is open (actions.go_to_tab)."""
         note = actions.go_to_tab(session)
         self.call_from_thread(self.notify, note.words, severity=note.severity, timeout=note.seconds)
-
-
-def read_armed() -> dict[str, datetime]:
-    """The sessions to continue at their reset, as config.json keeps them."""
-    saved = read_json("config.json")
-    armed = saved.get("continue_at_reset") if isinstance(saved, dict) else None
-    found = {}
-    for sid, moment in (armed.items() if isinstance(armed, dict) else ()):
-        try:
-            found[sid] = datetime.fromisoformat(moment)
-        except (TypeError, ValueError):
-            pass
-    return found
 
 
 # The dashboard's own keys, which a dialog or the team view on top keeps for itself.
