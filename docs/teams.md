@@ -298,6 +298,8 @@ codex -c "mcp_servers.tabmancer.command='tabmancer'" \
 
 Codex has no background command that wakes an idle session. Instead, the member's `tabmancer team run` wrapper watches the bus and puts each message into the member's thread with `codex queue --thread <id> --message <text> --resume`. The thread is the Codex session whose first prompt carries the member's `[tabmancer:<team>-<member>]` tag. A batch too long for one command line goes as a note to read the messages with `team_inbox`. A message counts as read only once `codex queue` has taken it. What happened last (`delivery: queued`, `codex queue failed ...`) shows after the member in `tabmancer team who` and in the `team_who` and `team_status` tools, while its wrapper runs.
 
+A Codex member's role names only the tools, never a `tabmancer team` command: those may not reach the bus or tabmancer from Codex's sandbox. A Codex member sends with `team_send`. A Codex lead also brings closed members back, and adds members when the team is its to make, with `team_request`. Codex may ask you to approve that call in the lead's tab.
+
 To use the tools in a Codex session you started yourself, `codex mcp add tabmancer -- tabmancer mcp --team shop --member qa` keeps the server for every session instead. Set `tool_timeout_sec` under `[mcp_servers.tabmancer]` in Codex's config then.
 
 `Enter` on a team's row opens that team's view. `T` lists the teams anywhere, to open one

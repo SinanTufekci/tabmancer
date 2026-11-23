@@ -369,3 +369,44 @@ def test_a_thread_found_by_its_tag_is_bound_by_the_deliverer(tmp_path, monkeypat
     assert codexbus.thread_of("shop", "rev") == "019a-rev"
     assert teambus.read_bindings("shop")["rev"]["session_id"] == "019a-rev"
     assert codexbus.thread_of("shop", "rev") == "019a-rev" and found == [1]  # the binding, not ~/.codex again
+
+
+# --- a Codex lead's role: the MCP tools, never the shell commands ---------------------------------
+
+SHELL = ("tabmancer team start", "tabmancer team add", "tabmancer team send", "tabmancer team listen",
+         "tabmancer team who")
+
+
+@pytest.mark.parametrize("decide", [0, 3])
+def test_a_codex_lead_is_told_the_tools_not_the_shell_commands(tmp_path, decide):
+    team = _team(tmp_path, "lead: orchestrate @codex\napi: endpoints @sonnet\nrev: reviews @codex")
+    team.decide = decide
+    said = teams.role(team, team.lead)
+    assert 'the team_send tool' in said and 'team_request tool (action: "start"' in said
+    assert ('team_request tool (action: "add"' in said) == bool(decide)
+    assert "their reports arrive here as new turns" in said and "Codex may ask the user to approve" in said
+    assert not any(command in said for command in SHELL), said
+
+
+def test_a_codex_member_reports_with_team_send_to_its_lead(tmp_path):
+    team = _team(tmp_path)
+    said = teams.role(team, team.members[1])
+    assert 'report to it with the team_send tool (to: "lead", message: "...")' in said
+    assert not any(command in said for command in SHELL), said
+
+
+def test_a_codex_lead_making_its_team_is_first_told_team_request(tmp_path):
+    team = _team(tmp_path, "lead: orchestrate @codex")
+    team.decide = 3
+    prompt = teams._first_prompt(team, team.lead, Path("ROLE"), None)
+    assert 'team_request tool (action: "add"' in prompt and "at most 3" in prompt and "team_send" in prompt
+    assert "tabmancer team add" not in prompt
+
+
+def test_claude_and_agy_leads_keep_their_shell_lines(tmp_path, monkeypatch):
+    monkeypatch.setattr(teams, "_agy_plugin_installed", lambda: False)
+    for lead in ("@opus", "@agy"):
+        team = _team(tmp_path, f"lead: orchestrate {lead}\nrev: reviews @codex")
+        said = teams.role(team, team.lead)
+        assert "tabmancer team start shop <member>" in said and "listen shop lead" in said
+        assert "Codex may ask" not in said

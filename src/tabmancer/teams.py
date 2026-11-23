@@ -517,14 +517,16 @@ def bus_cmd(team: Team, member: Member) -> str:
     return teambus.command(team.name) if member.cli == "agy" else BUS_CMD
 
 
-def reopen(team: Team, bus: str = BUS_CMD, tools: bool = False) -> str:
+def reopen(team: Team, bus: str = BUS_CMD, tools: bool = False, codex: bool = False) -> str:
     """What a lead is told about a member that has closed: how to bring it back itself. With tools
-    (an agy lead with tabmancer's plugin): the team_request tool, as a shell command from agy's
-    sandbox may not reach tabmancer."""
+    (a Codex lead, or an agy lead with tabmancer's plugin): the team_request tool, as a shell command
+    from their sandbox may not reach tabmancer."""
     if tools:
         return ("Check who is online with the team_who tool. A member that has closed comes back as itself, "
                 'where it left off, with the team_request tool (action: "start", members: ["<member>"]); with '
-                "no member named, every closed one does. The user approves each team_request in your tab.")
+                "no member named, every closed one does. "
+                + ("Codex may ask the user to approve it in your tab." if codex else
+                   "The user approves each team_request in your tab."))
     if team.uses_bus:
         return (f"Check who is online with `{bus} who {team.name}`. A member that has closed comes back as "
                 f"itself, where it left off, with `{START} {team.name} <member>`; with no member named, every "
@@ -573,9 +575,11 @@ def _bus_role(team: Team, member: Member) -> str:
     goal = f"Team goal:\n\n{team.goal}\n\n" if "\n" in team.goal else f"Team goal: {sentence(team.goal)} "
     bus = bus_cmd(team, member)
     listen_cmd = f"{bus} listen {team.name} {member.name}"
-    tools = member.cli == "agy" and _agy_plugin_installed()  # the bus and team_request as agy's MCP tools
-    by_tool = _sends_by_tool(member)
-    if member.cli == "codex":
+    # The bus and team_request as MCP tools: Codex always, agy with tabmancer's plugin. Their shell
+    # commands may not reach the bus or tabmancer from either one's sandbox.
+    tools = _sends_by_tool(member)
+    codex = member.cli == "codex"
+    if codex:
         listen_how = (
             "Nothing to run to receive messages: tabmancer queues each message for you into this conversation, "
             "where it arrives as a new turn. When you have nothing else to do, end your turn. team_inbox "
@@ -617,7 +621,7 @@ def _bus_role(team: Team, member: Member) -> str:
            "There are no other members yet. ")
         + "This team communicates through tabmancer's cross-CLI team bus (Claude and Antigravity members share it). "
         + (f'Send a message with {send_how(team, member)}, and optionally summary: "short gist". '
-           "See who is online with the team_who tool. " if by_tool else
+           "See who is online with the team_who tool. " if tools else
            f"Send a message with {send_how(team, member)} (optional `--summary \"short gist\"`). "
            f"See who is online with `{bus} who {team.name}`. ")
         + f"{listen_how} "
@@ -636,23 +640,29 @@ def _bus_role(team: Team, member: Member) -> str:
             "a model and an effort. "
             + (f'Add them all with one shell command: {ADD} {team.name} "name: area @model @effort; name: area @agy". '
                if not tools else 'Add them all with one call of the team_request tool (action: "add", lineup: '
-               '"name: area @model @effort; name: area @agy"), which the user approves in your tab. ')
+               '"name: area @model @effort; name: area @agy"), '
+               + ("which Codex may ask the user to approve in your tab. " if codex else
+                  "which the user approves in your tab. "))
             + "Each opens and introduces itself on the team bus. Then send each its first task with "
             + ("the team_send tool" if tools else f"`{bus} send`")
-            + f", start `{listen_cmd}` in the background while waiting for reports, keep track of "
-            "who does what, answer their questions, sort out overlaps and check the results. Do small glue work "
-            "yourself. Tell the user here when the goal is met or a decision is theirs. " + reopen(team, bus, tools)
+            + ("; their reports arrive here as new turns. Keep track of " if codex else
+               f", start `{listen_cmd}` in the background while waiting for reports, keep track of ")
+            + "who does what, answer their questions, sort out overlaps and check the results. Do small glue work "
+            "yourself. Tell the user here when the goal is met or a decision is theirs. "
+            + reopen(team, bus, tools, codex)
         )
     if member.lead:
         return (
             f"You are {team.session_name(member)}, the orchestrator of this team. {common} Split the goal into "
             "tasks, send each member its first task with "
             + ("the team_send tool" if tools else f"`{bus} send {team.name} <member> \"...\" --from {member.name}`")
-            + " (messages queue safely even if a member is still starting), then start "
-            f"`{listen_cmd}` in the background while waiting for their reports. Keep track of who does what, "
+            + " (messages queue safely even if a member is still starting)"
+            + ("; their reports arrive here as new turns. " if codex else
+               f", then start `{listen_cmd}` in the background while waiting for their reports. ")
+            + "Keep track of who does what, "
             "answer their questions, sort out overlaps and check the results. Do small glue work yourself and "
             "leave the members' areas to them. Tell the user here when the goal is met or a decision is theirs. "
-            + reopen(team, bus, tools)
+            + reopen(team, bus, tools, codex)
         )
     if team.lead is None:
         text = (
@@ -660,7 +670,7 @@ def _bus_role(team: Team, member: Member) -> str:
             f"{member.focus or member.name}. {common} Nobody leads this team: your part is yours to plan and "
             "decide, and the user talks to each of you in your own tab. Before you change something another "
             f"member's work depends on (a shared file, an interface, a schema, the build), tell that member with "
-            f"{'the team_send tool' if by_tool else f'`{bus} send`'} and agree on it first; when you finish "
+            f"{'the team_send tool' if tools else f'`{bus} send`'} and agree on it first; when you finish "
             "something the others need, tell them. "
             "Tell the user here when your part is done or a decision is theirs."
         )
@@ -1190,7 +1200,11 @@ def _codex_first_prompt(team: Team, member: Member, bus_role: Path | None, promp
         return f"{tag} You are resuming your role on team {team.name}. {role_hint} {prompt or 'Continue your work.'}"
     if prompt:
         return f"{tag} {role_hint} {prompt}"
-    if member.lead:
+    if member.lead and team.decide and not any(not m.lead for m in team.members):
+        body = (f"Goal: {goal_line(team)} The team is yours to make: decide the members the work needs (at most "
+                f'{team.decide}), add them with the team_request tool (action: "add", lineup: "name: area; ..."), '
+                "send each its first task with the team_send tool; their reports arrive here as new turns.")
+    elif member.lead:
         body = (f"Goal: {goal_line(team)} Your team is starting now. Plan the work and send each member its first "
                 "task with the team_send tool; their reports arrive here as new turns.")
     elif team.lead is None:

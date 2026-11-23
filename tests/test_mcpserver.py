@@ -546,3 +546,14 @@ def test_who_and_status_say_how_a_codex_members_last_delivery_went(tmp_path, cap
     assert teambus.delivery_words({"delivery": "a\nb"}) == "delivery: a b"
     assert len(teambus.delivery_words({"delivery": "x" * 500})) == teambus.DELIVERY_MOST
     assert teambus.delivery_words(None) == teambus.delivery_words({}) == ""
+
+
+def test_a_codex_lead_may_request_and_adds_codex_only_where_there_is_one(tmp_path):
+    _team(tmp_path, decide=3, lineup="lead: plans @codex")  # Codex is on the team already: the lead
+    run = Recorder()
+    server, out = _server("lead", run=run)
+    added = _call(server, out, "team_request", {"action": "add", "lineup": "rev: reviews @codex; ui: screens @agy"})
+    assert not added["isError"] and run.calls[0][-5:] == ["team", "add", "shop", "--",
+                                                          "rev: reviews @codex; ui: screens @agy"]
+    back = _call(server, out, "team_request", {"action": "start", "members": ["lead"]}, msg_id=8)
+    assert not back["isError"] and run.calls[1][-3:] == ["start", "shop", "lead"]
