@@ -151,8 +151,12 @@ tabmancer runs on your machine and talks to no server of its own. It reads the t
 the agents already keep (`~/.claude`, `~/.codex`, `~/.gemini`) and asks the `claude` CLI
 which sessions are open and how full your plan limits are (`/usage`, a local command). It
 reads which account you are signed in with (its email and plan) from `~/.claude.json` and
-Codex's `auth.json`, to show it in the top bar, and remembers the emails of the Claude accounts it
-has seen, in its own folder, to offer them when you switch (`A`), with the browser profile each
+Codex's `auth.json`, to show it in the top bar, and remembers the Claude accounts it has seen, in
+its own folder (`accounts.json`: each one's email, plan, account and organisation ids, and the
+organisation's name and type), to offer them when you switch (`A`). Each line of its limit history
+names the account it was read on, so `A` can say how another account stood. All of it stays on
+your machine and is never sent; the stats export calls the accounts "account 1", "account 2". It
+keeps, with each account, the browser profile each
 one's sign-in page opens in: for that it reads your browsers' list of profiles (each one's name
 and the Google account it syncs with), never their cookies or passwords; and the ids of the sessions it
 opened again, to count them on your week's card (`W`). It keeps a summary of each day's work

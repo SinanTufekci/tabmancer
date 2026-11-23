@@ -182,6 +182,9 @@ def test_a_limits_note_names_the_other_account_with_room():
     lifted = ("c@example.com", NOW - timedelta(hours=6), [Limit("session", 100, NOW - timedelta(hours=1), "")])
     assert usage.other_accounts("a@example.com", opens, [lifted], clock, NOW)[1] == \
         "c@example.com has room (session probably open, 6h00m ago): A to switch"  # its reset has passed
+    stale = ("c@example.com", NOW - timedelta(hours=6), [Limit("session", 30, NOW - timedelta(hours=1), "")])
+    assert usage.other_accounts("a@example.com", opens, [stale], clock, NOW)[1] == \
+        "c@example.com has room (session reset since, 6h00m ago): A to switch"  # as A says it (last_words)
 
 
 def test_a_limits_note_says_when_all_are_full_and_nothing_with_no_reading():

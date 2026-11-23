@@ -392,8 +392,10 @@ def other_accounts(this: str, opens: datetime | None, others: list[tuple[str, da
     if room:
         name, at, limits = min(room, key=lambda o: next((lim.percent for lim in o[2] if lim.label == "session"), 0))
         session = next((lim for lim in limits if lim.label == "session"), None)
-        left = ("session probably open" if session.resets and session.resets <= now and session.percent >= 100
-                else f"session {session.percent}%") if session else ""
+        passed = session is not None and session.resets is not None and session.resets <= now
+        left = ("" if session is None else  # as last_words says it: a reading from before a reset is stale
+                ("session probably open" if session.percent >= 100 else "session reset since") if passed
+                else f"session {session.percent}%")
         ago = until(now, at) if at <= now else ""
         said = ", ".join(part for part in (left, f"{ago} ago" if ago and ago != "0m" else "just now") if part)
         part = f"{name} has room ({said}): A to switch"

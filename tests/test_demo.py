@@ -131,3 +131,44 @@ def test_demo_with_a_command_says_to_leave_it_out(capsys):
     with pytest.raises(SystemExit):
         cli.main(["--demo", "list"])
     assert "leave out the command" in capsys.readouterr().err
+
+
+async def test_the_demo_shows_a_second_account_and_a_session_from_another_organisation(in_demo):
+    """The work account (a Team seat) it was signed in with this morning: its last limits in A, Bit's
+    note at the limit, and c's word on the session that ran on its organisation."""
+    from textual.widgets import Label, OptionList
+
+    from tabmancer.accountsview import AccountsDialog
+    from tabmancer.app import LimitDialog
+
+    app = in_demo
+    work = demo._account(demo.WORK)
+    async with app.run_test(size=(160, 44)) as pilot:
+        for _ in range(200):
+            await pilot.pause(0.05)
+            if {"ml", "wiki"} <= app.told_limit:
+                break
+        assert app.ran_elsewhere([app.sessions["wiki"]]) and not app.ran_elsewhere([app.sessions["ml"]])
+        assert app.sessions["wiki"].sensitive == ["browser"]
+        said = " ".join(saying.text for saying in app.mascot.bubbles)
+        assert "you@work.example.com has room (session reset since, 5h" in said and said.endswith("ago): A to switch")
+        await pilot.press("c")
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if isinstance(app.screen, LimitDialog):
+                break
+        assert str(app.screen.query_one(".away", Label).render()) == (
+            "One of the ticked ran on another organisation: its conversation goes to your personal account "
+            "if it goes on (browser content in it).")
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        await pilot.press("A")
+        for _ in range(100):
+            await pilot.pause(0.05)
+            if isinstance(app.screen, AccountsDialog):
+                break
+        options = app.screen.query_one(OptionList)
+        line = next(str(options.get_option_at_index(i).prompt) for i in range(options.option_count)
+                    if options.get_option_at_index(i).id == work.key)
+        assert "session reset since · week 47% · read 5h" in line  # as Bit says it
+        await pilot.press("escape")

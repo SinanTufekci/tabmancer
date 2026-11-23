@@ -92,7 +92,9 @@ def test_the_demo_is_signed_in_as_no_one_real(tmp_path, monkeypatch):
 
     monkeypatch.setenv("TABMANCER_CONFIG_DIR", str(tmp_path / "config"))
     demo.prepare(tmp_path)
-    assert accounts.claude() == Account("claude", "you@example.com", "Max 5x", org_type="claude_max")
+    assert accounts.claude() == Account("claude", "you@example.com", "Max 5x", "demo-account-you", "demo-org-personal",
+                                        "you@example.com's Organization", "claude_max")
+    assert [a.email for a, _ in accounts.known()] == ["you@work.example.com"]  # made up too
     assert accounts.codex_account() is None
 
 

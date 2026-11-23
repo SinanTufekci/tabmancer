@@ -15,6 +15,9 @@
   read from the CLIs' own files: after a `/login` with another account, the bar says so
   within seconds. `A` switches to another of your accounts through Claude Code's own sign-in,
   its page opening in the browser profile signed in to that account, or a private window.
+  An account is one email in one organisation (personal and a Team seat are two), and each
+  keeps its own limits: `A` shows how the others stood when last read, and at a limit Bit
+  says whether another account has room.
   Antigravity keeps its sign-in in the system's credential store, which tabmancer does not read.
 - **Stats.** Where the tokens went, when you work (a map of the hours of the week), which
   tools and files, and how fast your plan limits fill, with a forecast of when they run
@@ -43,6 +46,8 @@
 - **No more typing "continue".** A session that was cut off mid-task reopens and is
   told to carry on right away. Sessions stopped at a usage limit show when it lifts;
   `c` continues them then, or right away once you have signed in with another account.
+  When that account is in another organisation, `c`, `h` and `s` say the conversation goes
+  there, and what its tools read in it; a handover sends only a digest.
 - **Resume, fork or start fresh.** Choose per session.
 - **Fresh sessions in several projects at once.** `n` lists the projects you worked in
   lately: tick a few, add a first message if you like, pick a model and an effort if your

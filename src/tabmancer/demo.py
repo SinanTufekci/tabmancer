@@ -54,6 +54,19 @@ def cost(added, removed):
     return {"type": "cost-state", "totalLinesAdded": added, "totalLinesRemoved": removed}
 
 
+def hit_limit():
+    """The reply a session limit stops a session with: it lifts in two hours."""
+    return {"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit",
+            "message": {"content": [{"type": "text", "text": f"You've hit your session limit · resets {clock(NOW + 2 * 3600)}"}],
+                        "stop_reason": "stop_sequence"}}
+
+
+def browse(url):
+    return {"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t", "name": "mcp__claude-in-chrome__navigate", "input": {"url": url}}],
+        "stop_reason": "tool_use"}}
+
+
 MODELS = {"nightly": "claude-haiku-5-5", "ml": "claude-sonnet-5-5"}  # the rest: Opus
 EFFORTS = {"nightly": "low", "ml": "high", "docs-site": "medium"}  # as Claude Code writes on each reply; the rest: xhigh
 
@@ -113,11 +126,13 @@ SESSIONS = [
       user([{"type": "text", "text": "[Request interrupted by user for tool use]"}]), cost(80, 95)],
      NOW - 2 * 86400, "main"),
     ("ml", "ml-experiments", "Compare three tokenizer settings",
-     [user("compare the three tokenizer configs on the eval set"),
-      {"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit",
-       "message": {"content": [{"type": "text", "text": f"You've hit your session limit · resets {clock(NOW + 2 * 3600)}"}],
-                   "stop_reason": "stop_sequence"}}, cost(30, 4)],
+     [user("compare the three tokenizer configs on the eval set"), hit_limit(), cost(30, 4)],
      NOW - 2 * 3600, "tokenizers"),
+    # Run on the work account's organisation, with the browser: c says where its conversation goes now.
+    ("wiki", "release-notes", "Gather the release checklist from the team wiki",
+     [user("collect the release checklist from our wiki pages"), browse("https://wiki.example.com/release"),
+      tool_result(), hit_limit(), cost(22, 0)],
+     NOW - 3 * 3600, "main"),
     ("mobile", "mobile-app", "Ask for notification permission at the right moment",
      [user("when should we ask for push permission?"), reply("After the first saved item. Implemented."),
       cost(96, 20)], NOW - 5 * 86400, "main"),
@@ -149,8 +164,21 @@ SUMMARY = ("Routed the 3V3 plane on layer 3 and added ground stitching around th
            "Claude was updating the design rules when the PC shut down; DRC has not run yet.")
 
 
+# Who the demo is signed in as (a personal Max plan), and the work account it was signed in with
+# this morning: a seat in a Team organisation. All made up, ids too.
 ACCOUNT = {"emailAddress": "you@example.com", "displayName": "You", "organizationType": "claude_max",
-           "organizationRateLimitTier": "default_claude_max_5x"}  # who the demo is signed in as
+           "organizationRateLimitTier": "default_claude_max_5x", "accountUuid": "demo-account-you",
+           "organizationUuid": "demo-org-personal", "organizationName": "you@example.com's Organization"}
+WORK = {"emailAddress": "you@work.example.com", "organizationType": "claude_team", "accountUuid": "demo-account-work",
+        "organizationUuid": "demo-org-example-labs", "organizationName": "Example Labs"}
+ORGS = {"ml": ACCOUNT, "wiki": WORK}  # the organisation each of these sessions ran on
+
+
+def _account(saved: dict):
+    from .accounts import PLANS, Account
+
+    return Account("claude", saved["emailAddress"], PLANS.get(saved["organizationType"], ""), saved["accountUuid"],
+                   saved["organizationUuid"], saved["organizationName"], saved["organizationType"])
 
 
 def build_home(home: Path) -> None:
@@ -161,8 +189,11 @@ def build_home(home: Path) -> None:
         folder = home / "projects" / cwd.replace(":", "-").replace(os.sep, "-")
         folder.mkdir(parents=True, exist_ok=True)
         lines = []
+        org = ORGS.get(sid)
+        owner = [{"type": "session-owner", "accountUuid": org["accountUuid"],  # as Claude Code starts one
+                  "organizationUuid": org["organizationUuid"], "sessionId": sid}] if org else []
         # The made-up turns sit before the session's last records, which decide how it ended.
-        for record in [records[0], *turns(sid, project, ended), {"type": "ai-title", "aiTitle": title},
+        for record in [*owner, records[0], *turns(sid, project, ended), {"type": "ai-title", "aiTitle": title},
                        *records[1:]]:
             record = json.loads(json.dumps(record).replace("ROOT", ROOT.replace("\\", "\\\\")))
             if record["type"] in ("user", "assistant"):
@@ -177,20 +208,27 @@ def build_home(home: Path) -> None:
 
 def made_up_limits() -> None:
     """Four days of plan-limit readings, as the dashboard would have taken them: the week
-    fills during working hours, the five-hour session limit rises and resets."""
-    from . import usage
+    fills during working hours, the five-hour session limit rises and resets. This morning, from
+    nine to five hours ago, it was signed in with the work account: those readings are that one's."""
+    from . import accounts, usage
 
     now = datetime.now().replace(second=0, microsecond=0)
+    work = _account(WORK)
+    accounts.remember(work, (now - timedelta(hours=5)).isoformat(timespec="seconds"))
     week_resets = now + timedelta(days=2, hours=5)
     week = 18.0
     for step in range(4 * 48):
         moment = now - timedelta(days=4) + timedelta(minutes=30 * step)
-        if not 8 <= moment.hour < 20:
-            continue  # the dashboard was closed at night
+        if not 8 <= moment.hour < 20 or timedelta(hours=5) <= now - moment <= timedelta(hours=9):
+            continue  # the dashboard was closed at night; on the work account this morning
         week += 0.75
         session = (moment.hour * 60 + moment.minute) % 300 * 100 // 300
         usage.record([usage.Limit("session", session, moment + timedelta(minutes=300 - session * 3), ""),
-                      usage.Limit("week", min(99, round(week)), week_resets, "")], now=moment)
+                      usage.Limit("week", min(99, round(week)), week_resets, "")], now=moment, account=_account(ACCOUNT).key)
+    for hours in range(9, 4, -1):
+        moment = now - timedelta(hours=hours)
+        usage.record([usage.Limit("session", 4 + (9 - hours) * 2, now - timedelta(hours=4), ""),
+                      usage.Limit("week", 43 + 9 - hours, now + timedelta(days=4), "")], now=moment, account=work.key)
 
 
 TEAM = [  # (member, focus, live state, context tokens)

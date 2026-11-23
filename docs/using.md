@@ -74,6 +74,25 @@ Sign in with another account in a session stopped at a limit (`/login` in it) an
 `◐ signed in again`: `c` continues it now, and if it was waiting for its limit to lift it goes
 on right away.
 
+An account is a Claude account in one organisation: the same email in your personal plan and
+in a Team is two accounts, listed with the organisation's name. Limits are per account, and
+each reading is kept with the account it was read on. Under an account you are not signed in
+with now, `A` says how its limits stood when last read (`session 100% · opens 16:00 · week
+40% · read 2h ago`), and `c` lists the same for the other accounts. At a limit, Bit and the
+desktop note say whether another account has room (`… has room (session 12%, 45m ago): A to
+switch`) or all are full, and which opens first. Nothing switches by itself.
+
+A session's conversation belongs to the organisation it ran on. Go on with it signed in to
+another one (personal and a Team, or two Teams; two seats in one Team are the same
+organisation) and its conversation goes there. `c` says so above its choices and offers the
+handover first; `h` and `s` say it in a line. Each names what the session's tool calls read
+(mail, files, calendar, browser content, another connector's), and none of them stops you.
+Continuing sends the whole conversation, tool output included. A handover or a summary sends
+a digest: your prompts, its last replies and its commits, not what its tools read.
+
+The Claude in Chrome extension is signed in to one claude.ai account. After a switch, a
+session's Chrome tools may fail until the extension is signed in with the new account too.
+
 Either way a closed session opens in a new tab, and an open one gets the prompt in its own
 tab, as if you had typed it there: on Windows it goes into that tab's console, and no window
 comes to the front. Only the process Claude Code lists for that session gets it, and its tab

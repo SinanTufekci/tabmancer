@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- **An account is an account in an organisation.** The same email in your personal plan and in a
+  Team is two accounts: the top bar and `A` name the organisation when an email has more than
+  one, and a seat in a Team is told apart by its ids, not its email. Accounts kept from before are
+  taken over on the first sign-in.
+- **Limits per account.** Each limit reading is kept with the account it was read on, and one
+  taken across a switch is dropped and read again. `A` shows how each other account stood when
+  last read, `c` lists them beside your plan, and at a limit Bit and the desktop note say whether
+  another account has room (`A to switch`) or all are full and which opens first. The forecast,
+  the monitor and the stats chart are the signed-in account's. The stats export calls the
+  accounts "account 1", "account 2".
+- **Another organisation, said before it goes there.** A session remembers the organisation its
+  conversation last went to. Going on with it on another one (personal and a Team, or two Teams)
+  sends its conversation there: `c` says so and offers the handover first, `h` and `s` say it in
+  a line, naming what its tool calls read (mail, files, calendar, browser content, a connector's).
+  Nothing is stopped. A handover sends a digest, not what its tools read.
+- **The demo** has a second, work account in a made-up Team organisation and a session that ran
+  on it, to show the above.
+
 ## 0.1.10
 
 - **A member keeping its cache warm shows as waiting, not at work.** Claude Code calls a session
