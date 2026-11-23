@@ -778,6 +778,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         # Teams whose lead wrote a handover not taken yet (Esc in its dialog): h shows it again, unwritten.
         self.kept_handovers: dict[str, tuple[Session, str, str, bool]] = {}
         self.limits: list[usage.Limit] = []  # the plan limits as last read
+        self.agy_bar: dict = {}  # agy's chain as last read from its saved quota (agy.bar_view); {} with no agy
+        self.told_agy_out: datetime | None = None  # Bit said every agy model is out, until this time
         self.card_filter: str | None = None  # 1 2 3: the list shows only what that card counts
         self.bar_info = ""  # the top bar's counts, apart from its pills (watch_sub_title)
         self.focused_at = float("-inf")  # when the terminal last said the window took the focus
@@ -3087,9 +3089,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
         self.push_screen(background.BackgroundDialog(found), attach)
 
+    def uses_agy(self) -> bool:
+        """An agy session in the list, or an agy member in a team: then agy's quota is shown."""
+        return (any(s.cli == "agy" for s in self.sessions.values())
+                or any(m.cli == "agy" for state in self.team_states.values() for m in state.team.members))
+
     @work(thread=True, exclusive=True, group="usage")
     def refresh_usage(self) -> None:
         before = accounts.claude()
+        # agy's quota as saved (no agy is run for it), only while agy is in use: read with the plan limits.
+        self.agy_bar = agy.bar_view() if self.call_from_thread(self.uses_agy) else {}
         if not self.acts:  # a monitor: the dashboard's last reading, if it is fresh (one claude -p, not two)
             shared = usage.latest(account=before.key if before else None)
             self.call_from_thread(self.show_usage, shared if shared is not None else usage.read_all())
@@ -3274,11 +3283,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def show_usage(self, limits: list[usage.Limit]) -> None:
         self.limits = limits
-        self.topbar.show_usage(limits)
+        bar = self.agy_bar
+        self.topbar.show_usage(limits, bar.get("parts", []), agy_first=bar != {} and clis.main_cli() == "agy")
         full = [lim for lim in limits if lim.percent >= 85]
         if full:  # Bit mentions it once per reading
             worst = max(full, key=lambda lim: lim.percent)
             self.mascot.worry(f"Careful: {worst.label} limit at {worst.percent}%", RED)
+        back = bar.get("all_out")
+        if back is not None and back != self.told_agy_out:  # every agy model out: said once until it is back
+            self.mascot.say(bar["said"], AMBER, seconds=12)
+        self.told_agy_out = back
 
     @work(thread=True)
     def start_background(self, launch: Launch) -> None:

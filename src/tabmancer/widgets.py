@@ -279,8 +279,11 @@ class TopBar(Horizontal):
         yield Static("", id="live")
         yield Static("", id="clock")
 
-    def show_usage(self, limits: list[Limit]) -> None:
-        """Plan limits as small bars: green, then amber from 60 %, red from 85 %."""
+    def show_usage(self, limits: list[Limit], agy_parts: list[tuple[str, str]] | tuple = (),
+                   agy_first: bool = False) -> None:
+        """Plan limits as small bars: green, then amber from 60 %, red from 85 %. agy_parts: where agy's
+        chain stands (agy.bar_view), 'agy Neon 54% left · Hydrogen 31% left', after the plan limits, or
+        before them with agy the main CLI (agy_first)."""
         text = Text()
         for limit in limits:
             if limit.label not in ("session", "week") and not limit.label.startswith("codex ")                     and limit.percent < 50:
@@ -297,6 +300,15 @@ class TopBar(Horizontal):
             if left:
                 # No ↻: some fonts draw it two cells wide, right over the time.
                 text.append(f" · {left}", style=MUTED)
+        if agy_parts:
+            chain = Text()
+            for i, (words, tone) in enumerate(agy_parts):
+                chain.append(" · " if i else "agy ", style=MUTED)
+                chain.append(words, style={"ok": GREEN, "low": AMBER, "out": f"bold {RED}"}.get(tone, MUTED))
+            if text:
+                text = chain + Text("   ") + text if agy_first else text + Text("   ") + chain
+            else:
+                text = chain
         self.put("usage", text)
 
     def put(self, part: str, content) -> None:

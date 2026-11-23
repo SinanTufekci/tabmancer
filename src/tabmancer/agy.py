@@ -433,6 +433,7 @@ CLAUDE_WORDS = re.compile(r"claude|\b(opus|sonnet|haiku|fable)\b", re.IGNORECASE
 GPT_WORDS = re.compile(r"gpt", re.IGNORECASE)  # gpt-oss-120b, chatgpt-4o; o3/o4 are left alone
 REREAD_AFTER = 30.0  # seconds: a quota read this recent serves the next caller too
 UNREADABLE = "couldn't read agy's quota"
+LOW_LEFT = 15  # percent left of a model's quota from which the top bar shows it amber
 
 _version: tuple[int, ...] | None = None  # agy's version once read; a failed read is tried again
 _reading = threading.Lock()  # one `agy -p /usage` at a time; the others wait for its answer
@@ -937,6 +938,43 @@ def all_out(usage: dict | None = None, now: datetime | None = None) -> datetime 
     except Exception:  # noqa: BLE001 - not known to be out
         return None
     return None if any(back is None for back in backs) else min(b for b in backs if b is not None)
+
+
+def bar_view(usage: dict | None = None, now: datetime | None = None) -> dict:
+    """agy's chain as the dashboard's top bar and Bit say it, with no UI in it (a Qt front end reads
+    it too). From the saved quota only: it never runs agy. {} when agy is not installed; else
+
+    - 'parts': [(words, tone)] for each model of the chain, tone 'ok' | 'low' | 'out' | 'unknown':
+      ('Neon 54% left', 'ok'), ('Neon out till 14:00', 'out'), ('Neon ?', 'unknown'); or one part
+      ('agy quota not read', 'unknown') / ('agy quota read 09:12', 'unknown') when nothing is known now.
+    - 'all_out': when the first model is back (local time) while every model is out; else None.
+    - 'said': what Bit says while all are out ('agy: Neon and Hydrogen out until …'); else ''.
+    """
+    now = now or datetime.now(timezone.utc)
+    usage = usage if usage is not None else load_quota()  # read once for all of it
+    view = quota_view(usage, now)
+    if not view:
+        return {}
+    here = _local(now)
+    parts: list[tuple[str, str]] = []
+    for model in view["chain"]:
+        back, left = model["back"], model["left"]
+        if back is not None:
+            when = f"{back:%H:%M}" if back.date() == here.date() else f"{back:%a %H:%M}"
+            parts.append((f"{model['name']} out till {when}", "out"))
+        elif left is None:
+            parts.append((f"{model['name']} ?", "unknown"))
+        else:
+            parts.append((f"{model['name']} {left:.0f}% left", "low" if left < LOW_LEFT else "ok"))
+    if all(tone == "unknown" for _, tone in parts):
+        read_at = view["read_at"]
+        parts = [("agy quota not read" if read_at is None else f"agy quota read {read_at:%H:%M}", "unknown")]
+    back = all_out(usage, now)
+    said = ""
+    if back is not None:
+        quota = _quota(usage)
+        said = "agy: " + out_words([(m, b) for m in chain() if (b := _out_until(m, quota, now)) is not None])
+    return {"parts": parts, "all_out": _local(back), "said": said}
 
 
 # --- a run that failed on quota ----------------------------------------------------------------
