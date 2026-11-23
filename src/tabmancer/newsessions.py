@@ -1,4 +1,5 @@
-"""Fresh sessions in several projects at once: the `n` dialog and `tabmancer new`.
+"""Fresh sessions in several projects at once: the `n` dialog (its rules: newforms.py, shared with
+`tabmancer new` and the desktop window).
 
 A long conversation drags its history into every turn. Starting clean is often better,
 so this picks folders (the projects you worked in lately, or any folder you type) and
@@ -9,10 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-import re
 import time
-from dataclasses import dataclass, field, replace
-from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -25,107 +23,34 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import agy, clis, improve, picks, router, teams, workspaces
+from . import agy, clis, improve, newforms, picks, router
 from .dialogs import Choice, cards, frame, light_rows, pill, title
-from .launch import Launch, Mode
-from .sessions import Session, folder_key
+from .newforms import (  # noqa: F401  (re-exported: the dashboard, cli and the tests use them from here)
+    ADVISOR_SHORT,
+    AGY_CHAIN,
+    AGY_SHORT,
+    CAP_SHORT,
+    ORDINALS,
+    SHORT,
+    Project,
+    Request,
+    ago,
+    clip,
+    default_cli,
+    find,
+    fit,
+    home_as_tilde,
+    launches,
+    linked_team,
+    match,
+    matches,
+    projects,
+    term_pattern,
+    topics,
+)
+from .sessions import folder_key
 from .summarize import SummaryError
 from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, keys
-
-
-@dataclass
-class Project:
-    cwd: str
-    sessions: int = 0
-    last: datetime | None = None
-    used: set[str] = field(default_factory=set)  # the CLIs it was worked on with
-
-    @property
-    def name(self) -> str:
-        return Path(self.cwd).name or self.cwd
-
-
-def projects(sessions: list[Session]) -> list[Project]:
-    """Every folder that has sessions or sits in a workspace, most recently used first."""
-    found: dict[str, Project] = {}
-    for session in sessions:
-        if not session.cwd:
-            continue
-        project = found.setdefault(folder_key(session.cwd), Project(session.cwd))
-        project.sessions += 1
-        project.used.add(session.cli)
-        if project.last is None or session.last_active > project.last:
-            project.last = session.last_active
-    for workspace in workspaces.load().values():
-        for entry in workspace.entries:
-            found.setdefault(folder_key(entry.cwd), Project(entry.cwd))
-    alive = [p for p in found.values() if Path(p.cwd).is_dir()]
-    return sorted(alive, key=lambda p: (p.last is None, -(p.last.timestamp() if p.last else 0), p.name.casefold()))
-
-
-def match(name: str, known: list[Project]) -> Project | None:
-    """A folder path, or the name of a recent project (its most recent folder of that name)."""
-    path = Path(os.path.expanduser(name))
-    if path.is_dir():
-        return Project(str(path.resolve()))
-    return next((p for p in known if p.name.casefold() == name.casefold()), None)
-
-
-def topics(message: str | None) -> list[str]:
-    """The first messages written, one a line: each line its own session."""
-    return [" ".join(line.split()) for line in (message or "").split("\n") if line.strip()]
-
-
-def launches(folders: list[str], cli: str, prompt: str | None, pick: picks.Pick | None = None) -> list[Launch]:
-    """A fresh session in each folder for each line of the message (one, with no message); Claude
-    Code ones with the model and effort picked (picks.fresh). A tab is titled by its line."""
-    out = []
-    for cwd in folders:
-        for topic in topics(prompt) or [None]:
-            about = topic if topic is None or len(topic) <= 32 else topic[:31] + "…"
-            out.append(picks.fresh(Launch(title=f"{Path(cwd).name or cwd}: {about or 'new'}", cwd=cwd, mode=Mode.NEW,
-                                          session_id="", prompt=topic, cli=cli), pick or picks.Pick()))
-    return out
-
-
-ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth")
-
-
-def linked_team(folder: str, message: str, pick: picks.Pick, taken: set[str]) -> teams.Team:
-    """The lines of the message as a team of peers in one folder: a line "name: topic" is a member of
-    that name, any other line one named first, second... in its order."""
-    members: list[teams.Member] = []
-    for index, line in enumerate(topics(message)):
-        named = teams.parse_members(line) if teams.MEMBER_LINE.match(line) else []
-        member = named[0] if named else teams.Member(ORDINALS[index % len(ORDINALS)], line)
-        while member.name in {m.name for m in members}:
-            member = replace(member, name=f"{member.name}{index + 1}")
-        members.append(replace(member, model=member.model or pick.model, effort=member.effort or pick.effort,
-                               advisor=pick.advisor if picks.advisor_ok(member.model or pick.model, pick.advisor)
-                               else ""))
-    # Cleaned as new_team will clean it: cut to 18, "my-shop-frontends-" became "my-shop-frontends"
-    # there, a name taken already, and the second linked team was saved over the first.
-    base = teams.clean(teams.clean(Path(folder).name)[:18]) or "team"
-    name = next(n for n in (teams.clean(base if k == 1 else f"{base}-{k}") for k in range(1, 100)) if n not in taken)
-    goal = "; ".join(m.focus for m in members)
-    return teams.new_team(name, folder, goal, members, peers=True, cap=pick.cap)
-
-
-@dataclass
-class Request:
-    """What the dialog asks for: fresh sessions in these folders, or (linked) a team of peers."""
-    folders: list[str]
-    cli: str
-    message: str = ""
-    pick: picks.Pick = field(default_factory=picks.Pick)
-    linked: bool = False
-
-
-def default_cli() -> str:
-    """The main CLI (clis.main_cli) if it is on, else Claude Code if it is on, else whichever is on."""
-    on = clis.enabled()
-    main = clis.main_cli()
-    return main if main in on else "claude" if "claude" in on else on[0]
 
 
 class FolderList(OptionList):
@@ -222,15 +147,10 @@ class NewSessions(ModalScreen[Request | None]):
                                        placeholder="Optional. A line each: a session for each line")
                         yield Label("", id="new-link")
                     with Vertical(id="pick-card", classes="card"):
-                        # The card's title names the rows: the model above, the effort under it.
-                        yield Choice([picks.DEFAULT, *picks.MODELS], id="new-model", labels=SHORT)
-                        # agy's own: its chain, no Claude model (agy.resolve), shown in its place.
-                        yield Choice([AGY_CHAIN, *agy.chain()], id="new-agy-model",
-                                     labels={**AGY_SHORT, **{m: agy.name(m).lower() for m in agy.chain()}})
-                        yield Choice([picks.DEFAULT, *picks.EFFORTS], id="new-effort", labels=SHORT)
-                        yield Choice([*picks.CAPS, picks.NO_CAP], value=picks.default_cap(), id="new-cap",
-                                     labels=CAP_SHORT)
-                        yield Choice([picks.NO_ADVISOR, *picks.ADVISORS], id="new-advisor", labels=ADVISOR_SHORT)
+                        # The card's title names the rows: the model above (agy's own in its place: its
+                        # chain, no Claude model), the effort under it, then the context and the advisor.
+                        for row in newforms.choices():
+                            yield Choice(row.values, value=row.value, id=f"new-{row.name}", labels=row.labels)
                         yield Label("", id="new-pick-words")
                         yield Label("", id="new-route")
                     with Vertical(id="opens-card", classes="card"):
@@ -259,14 +179,8 @@ class NewSessions(ModalScreen[Request | None]):
     # --- several topics, linked -------------------------------------------------------------
 
     def can_link(self) -> str:
-        """Why the lines cannot be linked now; empty when they can."""
-        if self.cli != "claude":
-            return "linked sessions are Claude Code's"
-        if len(topics(self.message.text)) < 2:
-            return "write two lines or more"
-        if len(self.ticked) != 1:
-            return "tick one folder"
-        return ""
+        """Why the lines cannot be linked now; empty when they can (newforms.can_link)."""
+        return newforms.can_link(self.cli, self.message.text, len(self.ticked))
 
     def show_link(self) -> None:
         """Under the messages, once there are two lines or more: what they open, apart or linked as a
@@ -286,20 +200,15 @@ class NewSessions(ModalScreen[Request | None]):
     def show_opens(self) -> None:
         """The card on the right: a line for each tab that will open, the folder and its message."""
         card, opens = self.query_one("#opens-card"), self.query_one("#new-opens", Static)
-        known = {folder_key(p.cwd): p for p in self.extra + self.found} | self.shown
-        chosen = [known[key].cwd for key in self.ticked if key in known]
-        lines = topics(self.message.text)
-        if not chosen:
-            card.border_title = "Opens nothing yet"
+        what = newforms.opens(self.chosen(), self.message.text, self.linked and not self.can_link())
+        if not what.rows:
+            card.border_title = what.title
             opens.update(Text("Tick folders on the left with Space.", style=MUTED))
             return
-        linked = self.linked and not self.can_link()
-        count = len(chosen) * max(1, len(lines))
-        card.border_title = Text(f"Opens {count} tab{'s' * (count != 1)}" + (", linked" if linked else ""),
-                                 style=f"bold {GREEN}")
+        card.border_title = Text(what.title, style=f"bold {GREEN}")
         card.border_subtitle = Text.assemble(clis.label(self.cli), *(f" · {part}" for part in self.pick_parts()))
         room = max(1, (card.content_size.height or 4) - 2)  # under them, the note
-        rows = [(Path(cwd).name or cwd, line) for cwd in chosen for line in (lines or [""])]
+        rows = what.rows
         out = Text()
         for index, (folder, line) in enumerate(rows[:room]):
             if index:
@@ -426,13 +335,11 @@ class NewSessions(ModalScreen[Request | None]):
         many = len(clis.enabled()) > 1
         self.query_one("#cli", Label).update(Text.assemble(
             ("with ", MUTED), (clis.label(self.cli), f"bold {CYAN}"), ("  Ctrl+O" if many else "", MUTED)))
-        for choice in self.query(Choice):
-            choice.set_class(self.cli != "claude", "-off")
-        on_agy = self.cli == "agy"
-        self.query_one("#new-model").display = not on_agy
-        self.query_one("#new-agy-model", Choice).display = on_agy
-        self.query_one("#new-agy-model", Choice).set_class(False, "-off")
-        if on_agy and not self.quota_read:
+        for name, (shown, on) in newforms.rows(self.cli).items():
+            choice = self.query_one(f"#new-{name}", Choice)
+            choice.display = shown
+            choice.set_class(not on, "-off")
+        if self.cli == "agy" and not self.quota_read:
             self.quota_read = True  # once a dialog: what agy has left, for the chain's line
             self.run_worker(self.read_quota, thread=True, group="agy-quota", exit_on_error=False)
         self.show_pick()
@@ -443,62 +350,27 @@ class NewSessions(ModalScreen[Request | None]):
             self.app.call_from_thread(self.show_pick)
 
     def agy_model(self) -> tuple[str, str]:
-        """The model agy's sessions get from its row, and why (agy.resolve: never a Claude one)."""
-        value = self.query_one("#new-agy-model", Choice).value
-        return agy.resolve("" if value == AGY_CHAIN else value)
+        """The model agy's sessions get from its row, and why (newforms.agy_model: never a Claude one)."""
+        return newforms.agy_model(self.query_one("#new-agy-model", Choice).value)
 
     # --- model and effort -----------------------------------------------------------
 
+    def values(self) -> dict[str, str]:
+        """Each row's value, by its name (newforms.ROWS)."""
+        return {row: self.query_one(f"#new-{row}", Choice).value for row in newforms.ROWS}
+
     def pick(self) -> picks.Pick:
-        """What the Model, Effort and Context rows say; for agy its model row only; nothing for other CLIs."""
-        if self.cli == "agy":
-            return picks.Pick(self.agy_model()[0])
-        if self.cli != "claude":
-            return picks.Pick()
-        model, effort, cap, advisor = (self.query_one(f"#new-{row}", Choice).value
-                                       for row in ("model", "effort", "cap", "advisor"))
-        model = "" if model == picks.DEFAULT else model
-        advisor = advisor if advisor != picks.NO_ADVISOR and picks.advisor_ok(model, advisor) else ""
-        return picks.Pick(model, "" if effort == picks.DEFAULT else effort, cap, advisor)
+        """What the rows say (newforms.pick_of)."""
+        return newforms.pick_of(self.cli, self.values())
 
     def pick_parts(self) -> list[str]:
         """The pick as the card of what opens says it: 'sonnet · high', '300k context'."""
-        pick = self.pick()
-        return [part for part in (pick.words(), f"{pick.cap} context" if picks.cap_tokens(pick.cap) else "",
-                                  f"{pick.advisor} advisor" if pick.advisor else "") if part]
+        return newforms.pick_parts(self.pick())
 
     def show_pick(self) -> None:
         """A line on the row in focus, or on what is picked: what it means for the sessions."""
-        words = self.query_one("#new-pick-words", Label)
-        if self.cli == "agy":
-            chosen = self.query_one("#new-agy-model", Choice).value
-            model, why = self.agy_model()
-            about = (agy.chain_line() if chosen == AGY_CHAIN
-                     else f"{agy.name(chosen).lower()}, {agy.chain_words(chosen)}")
-            now = f"Now: {agy.name(model)}" + (f" ({why})" if why else "") if model else f"Now: none, {why}"
-            words.update(f"{about}. {now}.")
-        elif self.cli != "claude":
-            words.update(f"Model and effort are for Claude Code sessions; {clis.label(self.cli)} uses its own settings.")
-        else:
-            model, effort = self.query_one("#new-model", Choice), self.query_one("#new-effort", Choice)
-            cap = self.query_one("#new-cap", Choice)
-            advisor = self.query_one("#new-advisor", Choice)
-            shown_model = "" if model.value == picks.DEFAULT else model.value
-            if advisor.value != picks.NO_ADVISOR and not picks.advisor_ok(shown_model, advisor.value):
-                words.update(f"{advisor.value} cannot advise {shown_model}: only a model as strong or stronger "
-                             "can, so none is given.")
-            elif self.focused is advisor:
-                words.update(f"{ADVISOR_SHORT.get(advisor.value, advisor.value)}: "
-                             f"{picks.ADVISOR_WORDS[advisor.value]}. For these sessions only.")
-            elif self.focused is cap:
-                words.update(f"{CAP_SHORT.get(cap.value, cap.value)}: {picks.CAP_WORDS[cap.value]}")
-            elif self.focused is effort or (self.focused is not model and effort.value != picks.DEFAULT
-                                            and model.value == picks.DEFAULT):
-                words.update(f"{effort.value}: {picks.EFFORT_WORDS[effort.value]}")
-            elif self.focused is model or model.value != picks.DEFAULT:
-                words.update(f"{model.value}: {picks.MODEL_WORDS[model.value]}")
-            else:
-                words.update("default: your Claude Code settings pick them.")
+        focused = next((row for row in newforms.ROWS if self.focused is self.query_one(f"#new-{row}")), None)
+        self.query_one("#new-pick-words", Label).update(newforms.pick_words(self.cli, self.values(), focused))
         if self.is_mounted:
             self.show_opens()
             self.show_route()
@@ -506,15 +378,8 @@ class NewSessions(ModalScreen[Request | None]):
     def show_help(self) -> None:
         """One line under the cards: how to use the box in focus."""
         focused = self.focused
-        if focused is self.message:
-            about = "Enter: a line more, a session each in every folder ticked. Ctrl+L links them; Ctrl+E improves them."
-        elif isinstance(focused, Choice):
-            about = ("←/→ picks. Ctrl+R: the router's pick for the first message (write it first). Left at default: "
-                     "your Claude Code settings decide.")
-        else:
-            about = ("Space ticks a folder. Type to filter by name or path (a / or a \\ alike); a folder path "
-                     "works too.")
-        self.query_one("#new-help", Label).update(about)
+        kind = "message" if focused is self.message else "choice" if isinstance(focused, Choice) else "folders"
+        self.query_one("#new-help", Label).update(newforms.help_words(kind))
 
     def on_choice_changed(self, event: Choice.Changed) -> None:
         self.show_pick()
@@ -532,11 +397,18 @@ class NewSessions(ModalScreen[Request | None]):
 
     def route_key(self) -> str:
         """The first message as the router is asked about it: its lines, each one tidied."""
-        return "\n".join(topics(self.message.text))
+        return newforms.route_key(self.message.text)
+
+    def known(self) -> list[newforms.Project]:
+        """The ticked folders' projects, as the list knows them."""
+        known = {folder_key(p.cwd): p for p in self.extra + self.found} | self.shown
+        return [known[key] for key in self.ticked if key in known]
+
+    def chosen(self) -> list[str]:
+        return [project.cwd for project in self.known()]
 
     def chosen_names(self) -> list[str]:
-        known = {folder_key(p.cwd): p for p in self.extra + self.found} | self.shown
-        return [known[key].name for key in self.ticked if key in known]
+        return [project.name for project in self.known()]
 
     def ask_route(self, take: bool = False) -> None:
         """Ask the router about the first message as it is now, unless it was asked already: one
@@ -589,66 +461,28 @@ class NewSessions(ModalScreen[Request | None]):
         agy's row (Claude Code's stay as they were): as "chain" when it is what the chain picks now,
         so the sessions still follow the quota when they open; another CLI's pick is only said."""
         self.take_route = False
-        if route.cli == "agy":
-            if route.pick.model in agy.chain():
-                chained = route.pick.model == agy.resolve("")[0]
-                self.query_one("#new-agy-model", Choice).pick(AGY_CHAIN if chained else route.pick.model)
-            return
-        if route.cli != "claude":
-            return
-        for row, value in (("model", route.pick.model), ("effort", route.pick.effort), ("cap", route.pick.cap)):
-            if value:
-                self.query_one(f"#new-{row}", Choice).pick(value)
+        for row, value in newforms.route_take(route).items():
+            self.query_one(f"#new-{row}", Choice).pick(value)
 
     def taken(self, route: router.Route) -> bool:
-        pick = self.pick()
-        return all(not want or have == want for want, have in
-                   ((route.pick.model, pick.model), (route.pick.effort, pick.effort), (route.pick.cap, pick.cap)))
+        return newforms.taken(route, self.pick())
 
     def show_route(self) -> None:
         """The router's line, under the rows: what it suggests and why, that it is asking, or why not."""
         label = self.query_one("#new-route", Label)
-        key = self.route_key()
-        label.display = self.cli in router.CLIS
-        if self.cli not in router.CLIS:
-            return
-        slot = (self.cli, key)
-        found = self.routes.get(slot)
-        if not router.worth_routing(key):
-            label.update(Text.assemble(("Router: ", MUTED), ("Ctrl+R", f"bold {MUTED}"),
-                                       (" suggests a pick once there is a ", MUTED), ("first message", f"bold {AMBER}"),
-                                       (" (3 words or more).", MUTED)))
-        elif slot in self.routing:
-            asking ="reading agy's quota…" if self.cli == "agy" else f"asking {router.MODEL} what this needs…"
-            label.update(Text.assemble(("Router: ", MUTED), (asking, MUTED),
-                                       ("  it goes in when it comes" if self.take_route else "", MUTED)))
-        elif isinstance(found, router.Route):
-            why = f" — {found.why}" if found.why else ""
-            if found.cli != "claude":
-                label.update(Text.assemble(("Router: ", MUTED), (found.words(), f"bold {CYAN}"), (why, MUTED)))
-            elif self.taken(found):
-                label.update(Text.assemble(("✓ ", f"bold {GREEN}"), (found.why, AMBER),
-                                           ("  Ctrl+R asks the router again", MUTED)) if found.guessed else
-                             Text.assemble(("✓ ", f"bold {GREEN}"), ("the router's pick", GREEN), (why, MUTED)))
-            else:
-                label.update(Text.assemble(("Router suggests ", MUTED), (found.words(), f"bold {CYAN}"), (why, MUTED),
-                                           ("  Ctrl+R", f"bold {AMBER}"), (" takes it", MUTED)))
-        elif isinstance(found, str):
-            label.update(Text.assemble(("Router: no suggestion (", MUTED), (found[:80], AMBER),
-                                       ("). Ctrl+R asks again.", MUTED)))
-        else:
-            label.update(Text.assemble(("Router: ", MUTED), ("Ctrl+R", f"bold {AMBER}"),
-                                       (" picks a model, effort and context for this message.", MUTED)))
+        slot = (self.cli, self.route_key())
+        parts = newforms.route_line(self.cli, self.message.text, slot in self.routing, self.routes.get(slot),
+                                    self.take_route, self.pick())
+        label.display = parts is not None
+        if parts is not None:
+            label.update(Text.assemble(*((text, TONES[tone]) for text, tone in parts)))
 
     def action_route(self) -> None:
         """Ctrl+R: the router's pick into the rows, asked for now if it is not there yet."""
-        if self.cli not in router.CLIS:
-            self.notify(f"The router picks for Claude Code and Antigravity sessions, not {clis.label(self.cli)}: "
-                        "Ctrl+O to another CLI first.", severity="warning")
-            return
-        if not router.worth_routing(self.route_key()):
-            self.notify("Ctrl+R needs the first message: write what the session is to do (3 words or more), "
-                        "and the router picks for it.", severity="warning", timeout=6)
+        refusal = newforms.route_refusal(self.cli, self.message.text)
+        if refusal is not None:
+            words, seconds = refusal
+            self.notify(words, severity="warning", timeout=seconds)
             return
         self.ask_route(take=True)
 
@@ -660,9 +494,9 @@ class NewSessions(ModalScreen[Request | None]):
         if self.improving is not None:
             return
         text = self.message.text
-        if not improve.worth_improving(text):
-            self.notify("Ctrl+E needs a first message to improve: write what the session is to do first.",
-                        severity="warning", timeout=5)
+        refusal = newforms.improve_refusal(text)
+        if refusal:
+            self.notify(refusal, severity="warning", timeout=5)
             return
         self.improving = text
         self.improve_note.start(self, self.message)
@@ -705,8 +539,7 @@ class NewSessions(ModalScreen[Request | None]):
     # --- actions --------------------------------------------------------------------
 
     def action_next_cli(self) -> None:
-        on = clis.enabled()
-        self.cli = on[(on.index(self.cli) + 1) % len(on)] if self.cli in on else on[0]
+        self.cli = newforms.next_cli(self.cli)
         self.show_cli()
         self.show_link()
 
@@ -735,16 +568,16 @@ class NewSessions(ModalScreen[Request | None]):
                 self.notify("Tick the folders first (Space).", severity="warning")
                 return
             self.toggle(folders.get_option_at_index(folders.highlighted).id)
-        known = {folder_key(p.cwd): p for p in self.extra + self.found} | self.shown
-        chosen = [known[key].cwd for key in self.ticked if key in known]
-        prompt = "\n".join(topics(self.message.text))
-        self.dismiss(Request(chosen, self.cli, prompt, self.pick(), linked=self.linked and not self.can_link()))
+        self.dismiss(newforms.request(self.chosen(), self.cli, self.message.text, self.pick(), self.linked))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
 
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+# The router line's tones (newforms.route_line) in this terminal's colours.
+TONES = {"muted": MUTED, "muted-bold": f"bold {MUTED}", "warn": AMBER, "warn-bold": f"bold {AMBER}",
+         "pick": f"bold {CYAN}", "ok": GREEN, "ok-bold": f"bold {GREEN}"}
 FLASH_SECONDS = 1.5  # the card's frame green, a moment, when a rewrite went in
 
 
@@ -821,36 +654,6 @@ def put_improved(box: TextArea, sent: str, better: str, why: str, notify) -> tup
 
 
 TAIL = 20  # the sessions and the last time, right-aligned at a row's end
-SHORT = {picks.DEFAULT: "default"}  # "your default" as the Model and Effort rows show it
-CAP_SHORT = {picks.NO_CAP: "Claude's own"}  # no cap, as the Context row shows it
-ADVISOR_SHORT = {picks.NO_ADVISOR: "no advisor"}  # as the Advisor row shows it
-AGY_CHAIN = "chain"  # agy's Model row: the chain decides by quota (agy.pick_model)
-AGY_SHORT = {AGY_CHAIN: "chain", **{model: agy.name(model).lower() for model in agy.DEFAULT_CHAIN}}
-
-
-def _seps(text: str) -> str:
-    """Folders written with / or \\ alike: on Windows a path is written either way."""
-    return text.replace("\\", "/")
-
-
-def find(typed: str, projects: list[Project]) -> list[Project]:
-    """The projects a filter's words find (n's list, and the new-team form's): every one for no words;
-    else those with every word in their name or folder (/ and \\ alike), the ones with them in the
-    name first ("app" is in every folder under AppData); and a folder written out in full first of
-    all, the project it is when it is listed (else a newer one that matches too went first, and
-    Enter took it)."""
-    needle = os.path.expanduser(typed.strip())
-    if not needle:
-        return list(projects)
-    words = [_seps(w).casefold() for w in needle.split()]
-    hits = [p for p in projects if matches(needle, p)]
-    hits.sort(key=lambda p: not all(w in _seps(p.name).casefold() for w in words))  # stable: newest first still
-    path = Path(needle)
-    if path.is_dir():
-        key = folder_key(str(path))
-        same = next((p for p in projects if folder_key(p.cwd) == key), None) or Project(str(path.resolve()))
-        hits = [same, *(p for p in hits if folder_key(p.cwd) != key)]
-    return hits
 
 
 def project_columns(project: Project, width: int, terms: list[str], colour: str = TEXT) -> Text:
@@ -862,37 +665,3 @@ def project_columns(project: Project, width: int, terms: list[str], colour: str 
     count = f"{project.sessions}" if project.sessions else "none"
     return Text.assemble(name, (count.rjust(10), TEXT if project.sessions else MUTED),
                          ((ago(project.last) if project.last else "").rjust(10), MUTED))
-
-
-def matches(needle: str, project: Project) -> bool:
-    """Whether a project is what the filter asks for: every word of it in its name or its folder,
-    whatever the case and whichever way a / or a \\ is written ("desktop/shop" finds C:\\...\\Desktop\\shop)."""
-    where = _seps(f"{project.name} {project.cwd}").casefold()
-    return all(_seps(term).casefold() in where for term in needle.split())
-
-
-def term_pattern(term: str) -> str:
-    """A filter word as a pattern that finds it in a row, its / and \\ either way, in any case."""
-    return "(?i)" + "".join(r"[\\/]" if char in "/\\" else re.escape(char) for char in term)
-
-
-def home_as_tilde(path: str) -> str:
-    home = str(Path.home())
-    inside = folder_key(path).startswith(folder_key(home)) and path[len(home):][:1] in ("", "\\", "/")
-    return "~" + path[len(home):] if inside else path
-
-
-def fit(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[:limit - 1] + "…"
-
-
-def clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else "…" + text[-(limit - 1):]
-
-
-def ago(moment: datetime) -> str:
-    seconds = max(0.0, (datetime.now() - moment).total_seconds())
-    for size, unit in ((86400, "d"), (3600, "h"), (60, "m")):
-        if seconds >= size:
-            return f"{int(seconds // size)}{unit} ago"
-    return "just now"

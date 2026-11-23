@@ -15,7 +15,7 @@ from datetime import timedelta
 from . import claudeupdate, clis, shortcuts, workspaces
 from .config import merge_json, read_json, write_json
 from .launch import Launch, continue_prompt, open_tabs
-from .picks import EFFORTS, NO_CAP, Pick, advisor_ok, cap_tokens
+from .picks import EFFORTS, NO_CAP, Pick, cap_tokens
 from .sessions import MOST_DAYS, find_sessions, nothing_found
 from .shutdowns import open_at_shutdown, recent_shutdowns
 
@@ -752,36 +752,20 @@ def _cap(word: str) -> str:
 
 def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: float, pick: Pick | None = None,
                 linked: bool = False) -> None:
-    from . import newsessions, teams
+    from . import newforms
 
-    cli = cli or newsessions.default_cli()
-    if pick and cli != "claude":
-        sys.exit("--model, --effort, --autocompact and --advisor are for Claude Code sessions.")
-    if pick and not advisor_ok(pick.model, pick.advisor):
-        sys.exit(f"{pick.advisor} cannot advise {pick.model}: only a model as strong or stronger can.")
-    if linked and (cli != "claude" or len(names) != 1 or len(newsessions.topics(prompt)) < 2):
-        sys.exit("--linked takes one folder, two --prompt or more, and Claude Code.")
-    listed = find_sessions(days, quick=True)
-    known = newsessions.projects(listed)
-    folders, missing = [], []
-    for name in names:
-        project = newsessions.match(name, known)
-        if project:
-            folders.append(project.cwd)
-        else:
-            missing.append(name)
+    cli = cli or newforms.default_cli()
+    problem = newforms.fresh_problem(names, prompt, cli, pick, linked)
+    if problem:
+        sys.exit(problem)
+    folders, missing = newforms.folders_for(names, newforms.projects(find_sessions(days, quick=True)))
     if missing:
         sys.exit(f"Not a folder, and no recent project of that name: {', '.join(missing)}")
-    if linked:
-        saved = teams.load()
-        team = newsessions.linked_team(folders[0], prompt or "", pick or Pick(), set(saved))
-        saved[team.name] = team
-        teams.save(saved)
-        launch_all(teams.start(team, {}))
-        print(f"The team of peers {team.name}: {', '.join(team.session_name(m) for m in team.members)}. "
-              "T in the dashboard shows it.")
-        return
-    launch_all(newsessions.launches(folders, cli, prompt or "", pick))
+    built = newforms.build(newforms.Request(folders, cli, prompt or "", pick or Pick(), linked))
+    launch_all(built.launches)
+    if built.team is not None:
+        print(f"The team of peers {built.team.name}: "
+              f"{', '.join(built.team.session_name(m) for m in built.team.members)}. T in the dashboard shows it.")
 
 
 def manage_clis(action: str | None, names: list[str]) -> None:

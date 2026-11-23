@@ -48,6 +48,7 @@ from . import (
     gitstate,
     handover,
     marks,
+    newforms,
     newsessions,
     picks,
     rename,
@@ -2909,15 +2910,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         def start(request: newsessions.Request | None) -> None:
             if not request or not request.folders:
                 return
-            if request.linked:  # the lines as a team of peers: saved, opened, and shown
-                saved = teams.load()
-                team = newsessions.linked_team(request.folders[0], request.message, request.pick, set(saved))
-                saved[team.name] = team
-                teams.save(saved)
-                self.open_team(team, teams.start(team, {}))
-                self.push_screen(TeamScreen(team, self.accent()))
+            built = newforms.build(request)
+            if built.team is not None:  # the lines as a team of peers: saved, opened, and shown
+                self.open_team(built.team, built.launches)
+                self.push_screen(TeamScreen(built.team, self.accent()))
                 return
-            self.open_sessions(newsessions.launches(request.folders, request.cli, request.message, request.pick))
+            self.open_sessions(built.launches)
 
         self.push_screen(newsessions.NewSessions(found, ticked), start)
 
