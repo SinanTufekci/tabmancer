@@ -77,7 +77,7 @@ def test_in_a_git_repository_the_suggestion_sees_its_files_folder_by_folder(tmp_
 
 def test_ask_leaves_the_model_to_your_settings_and_passes_the_effort(monkeypatch):
     ran = []
-    monkeypatch.setattr(summarize.shutil, "which", lambda name: "claude")
+    monkeypatch.setattr(summarize.shutil, "which", lambda name: "claude" if name == "claude" else None)  # no agy
     monkeypatch.setattr(summarize.subprocess, "run",
                         lambda argv, **kw: ran.append(argv) or subprocess.CompletedProcess(argv, 0, "ok", ""))
     assert REAL_ASK("hello", "", effort="medium") == "ok"

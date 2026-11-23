@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import picks, router, teambus
+from . import clis, picks, router, teambus
 from .config import config_dir, read_json, write_json
 from .launch import Launch, Mode
 from .sessions import (
@@ -88,7 +88,9 @@ class Member:
     def line(self) -> str:
         """The member as a line of the members box: 'api: endpoints [src/api] @sonnet @high'."""
         owns = f" [{self.owns}]" if self.owns else ""
-        cli_tag = f" @{self.cli}" if self.cli != "claude" else ""
+        # Read back, no tag is the main CLI: said always but where Claude Code is both, so a line read
+        # after the main CLI changed still names the CLI it was written with.
+        cli_tag = f" @{self.cli}" if self.cli != "claude" or clis.main_cli() != "claude" else ""
         return f"{self.name}: {self.focus}{owns}{cli_tag}{picks.tags(self.pick)}" if self.focus else \
             f"{self.name}{owns}{cli_tag}{picks.tags(self.pick)}"
 
@@ -170,7 +172,8 @@ def clean(name: str) -> str:
 
 
 def _split_tags(text: str) -> tuple[str, picks.Pick, str]:
-    """Strip trailing @cli, @model and @effort tags in any order."""
+    """Strip trailing @cli, @model and @effort tags in any order. With no @cli, a Gemini model is
+    agy's and a Claude one Claude Code's; with neither, the main CLI's (clis.main_cli)."""
     model = effort = cli = ""
     while found := picks.TAG.search(text):
         word = found[1]
@@ -184,7 +187,9 @@ def _split_tags(text: str) -> tuple[str, picks.Pick, str]:
         text = text[:found.start()]
     if not cli and model.lower().startswith("gemini"):
         cli = "agy"
-    return text, picks.Pick(model, effort), cli or "claude"
+    elif not cli and picks.FAMILY.search(model):
+        cli = "claude"
+    return text, picks.Pick(model, effort), cli or clis.main_cli()
 
 
 def parse_members(text: str, lead_ok: bool = False) -> list[Member]:

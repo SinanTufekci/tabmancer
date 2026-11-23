@@ -122,9 +122,10 @@ class Request:
 
 
 def default_cli() -> str:
-    """Claude Code if it is on, else whichever CLI is on."""
+    """The main CLI (clis.main_cli) if it is on, else Claude Code if it is on, else whichever is on."""
     on = clis.enabled()
-    return "claude" if "claude" in on else on[0]
+    main = clis.main_cli()
+    return main if main in on else "claude" if "claude" in on else on[0]
 
 
 class FolderList(OptionList):

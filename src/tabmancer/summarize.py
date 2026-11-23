@@ -17,6 +17,7 @@ from datetime import datetime
 
 from .config import read_json, write_json
 from .sessions import Session, _is_real_prompt, _shorten, _text, sanitize
+from .teambus import PRINT_TIMEOUT_EXIT
 
 FILE = "summaries.json"
 
@@ -112,14 +113,50 @@ def session_digest(session: Session) -> str:
     return digest(session)
 
 
+# Claude Code signs in other ways than claude.ai: an API key or token in the environment, a cloud
+# provider, or a key it keeps in .claude.json.
+CLAUDE_KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+               "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
+AGY_MIN_WAIT = 30  # seconds: an agy call took 9 to 13 s (agy 1.5.15, Hydrogen, 2026-11-23)
+AGY_MAX_ARG = 30_000  # characters of prompt on agy's command line (Windows' holds 32,767 in all)
+CUT = "\n\n[... part of this was cut to fit agy's command line ...]\n\n"
+
+
+def _claude_ready() -> bool:
+    """claude is on PATH and signed in: a claude.ai account, or a key Claude Code takes."""
+    if not shutil.which("claude"):
+        return False
+    if any(os.environ.get(key) for key in CLAUDE_KEYS):
+        return True
+    from . import accounts
+
+    return accounts.claude() is not None or bool(accounts._read(accounts.claude_file()).get("primaryApiKey"))
+
+
+def backend() -> str:
+    """Which CLI answers tabmancer's background calls: agy when it is the main CLI (clis.main_cli),
+    or when Claude Code is not on PATH or not signed in, and agy is; Claude Code otherwise."""
+    from . import clis
+
+    if shutil.which("agy") and (clis.main_cli() == "agy" or not _claude_ready()):
+        return "agy"
+    return "claude"
+
+
 def ask(prompt: str, model: str, timeout: float = 180, effort: str = "") -> str:
-    """One answer from `claude -p`: no tools, no transcript left behind, run from a neutral
-    folder so no project CLAUDE.md is loaded into the request. An empty model is your default.
-    No MCP server is started either (--strict-mcp-config with none given): with no tools they
-    are of no use, and starting them took half of a short call's time (4.9 s against 2.6 s)."""
+    """One answer to a prompt, from the CLI backend() names. model and effort are Claude Code's and
+    go to claude only: agy always runs the chain's model (agy.resolve), and none when the chain is
+    out of quota.
+
+    claude: `claude -p` with no tools, no transcript left behind, run from a neutral folder so no
+    project CLAUDE.md is loaded into the request. An empty model is your default. No MCP server is
+    started either (--strict-mcp-config with none given): with no tools they are of no use, and
+    starting them took half of a short call's time (4.9 s against 2.6 s)."""
+    if backend() == "agy":
+        return _ask_agy(prompt, timeout)
     claude = shutil.which("claude")
     if not claude:
-        raise SummaryError("The claude CLI is not on PATH.")
+        raise SummaryError("The claude CLI is not on PATH, nor is agy.")
     chosen = [*(["--model", model] if model else []), *(["--effort", effort] if effort else [])]
     try:
         result = subprocess.run(
@@ -133,6 +170,79 @@ def ask(prompt: str, model: str, timeout: float = 180, effort: str = "") -> str:
     if result.returncode != 0 or not answer:
         raise SummaryError(result.stderr.strip()[:300] or "claude returned nothing.")
     return answer
+
+
+def _ask_agy(prompt: str, timeout: float) -> str:
+    """One answer from `agy -p` on the chain's model, run in agy.background_dir() so the call is never
+    listed as a conversation of yours. With every chain model out of quota nothing runs, and the
+    error says which are out and until when; a run that fails on quota is noted (note_quota_error),
+    so the next call goes on to the chain's next model. agy stops the turn itself a few seconds
+    before tabmancer would (--print-timeout, exit 3: an answer cut short is no answer here)."""
+    from . import agy
+
+    exe = shutil.which("agy")
+    if not exe:
+        raise SummaryError("agy is not on PATH.")
+    picked, why = agy.resolve("")
+    if not picked:
+        raise SummaryError(str(agy.no_model(why)))
+    wait = max(AGY_MIN_WAIT, int(timeout))
+    folder = agy.background_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise SummaryError(f"no folder for agy's call: {error}") from error
+    named = agy.label(picked) or picked
+    argv = [exe, "--model", picked, "--disable-slash-commands", "--print-timeout", f"{wait}s",
+            "-p", fit_argument(prompt)]
+    code, out, err = _run(argv, wait + 15, folder)
+    if code is None:
+        raise SummaryError(f"agy ({named}) gave no answer in {wait} s{': ' + err[:200] if err else ''}.")
+    answer = out.strip()
+    if code == 0 and answer:
+        return answer
+    back = agy.note_quota_error(err + "\n" + out, picked)
+    if back is not None:
+        raise SummaryError(f"{named} is out of quota until {agy._when_back(back)}.")
+    if code == PRINT_TIMEOUT_EXIT:
+        raise SummaryError(f"agy ({named}) ran out of time ({wait} s).")
+    raise SummaryError(err.strip()[:300] or f"agy returned nothing (exit {code}).")
+
+
+def fit_argument(prompt: str, most: int = AGY_MAX_ARG) -> str:
+    """The prompt as one command-line argument (agy takes it as -p's value only): one longer than
+    `most` loses its middle, keeping the instructions at the top and the newest part at the end."""
+    if len(prompt) <= most:
+        return prompt
+    head = most * 2 // 3
+    return prompt[:head] + CUT + prompt[len(prompt) - (most - head - len(CUT)):]
+
+
+def _run(argv: list[str], timeout: float, cwd) -> tuple[int | None, str, str]:
+    """(exit code, stdout, stderr), or (None, ...) when it would not start or ran out of time. On
+    time out the whole process tree goes: a child of agy holding the pipe kept a read waiting (Windows)."""
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                                errors="replace", cwd=cwd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError as error:
+        return None, "", str(error)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out or "", err or ""
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False,
+                           timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            proc.kill()
+        try:
+            proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        return None, "", ""
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, "", str(error)
 
 
 def summarize(session: Session) -> dict:

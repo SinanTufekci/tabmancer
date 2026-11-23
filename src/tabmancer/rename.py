@@ -24,7 +24,7 @@ def rename(session: Session, name: str) -> None:
     """Rename a closed session. Raises OSError if Claude did not."""
     claude = shutil.which("claude")
     if not claude:
-        raise OSError("the claude CLI is not on PATH")
+        raise OSError("renaming is Claude Code's own (/rename), and the claude CLI is not on PATH")
     cwd = session.cwd if session.cwd and Path(session.cwd).is_dir() else str(Path.home())
     try:
         # On stdin: through a claude.cmd shim, cmd.exe would act on & | < > in the name.

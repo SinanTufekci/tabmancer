@@ -60,7 +60,7 @@ def test_summarize_runs_claude_without_tools_and_caches(session, monkeypatch):
         calls.append((argv, kwargs))
         return Result(stdout="  Built a parser.\n Tests still missing. ")
 
-    monkeypatch.setattr(Z.shutil, "which", lambda name: "claude")
+    monkeypatch.setattr(Z.shutil, "which", lambda name: "claude" if name == "claude" else None)  # no agy
     monkeypatch.setattr(Z.subprocess, "run", fake_run)
     entry = Z.summarize(session)
     assert entry["summary"] == "Built a parser. Tests still missing."
@@ -77,7 +77,7 @@ def test_summarize_reports_failures(session, monkeypatch):
     monkeypatch.setattr(Z.shutil, "which", lambda name: None)
     with pytest.raises(Z.SummaryError, match="not on PATH"):
         Z.summarize(session)
-    monkeypatch.setattr(Z.shutil, "which", lambda name: "claude")
+    monkeypatch.setattr(Z.shutil, "which", lambda name: "claude" if name == "claude" else None)  # no agy
     monkeypatch.setattr(Z.subprocess, "run", lambda *a, **k: Result(1, "", "rate limited"))
     with pytest.raises(Z.SummaryError, match="rate limited"):
         Z.summarize(session)

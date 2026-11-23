@@ -145,6 +145,29 @@ differs:
 | Tokens, time at work, tools in the stats | ✓ | ✓ | |
 | AI summary | ✓ | ✓ | |
 
+### Antigravity as the main CLI
+
+tabmancer also runs without a Claude account, on Antigravity alone (with a Google AI plan,
+say). Press `m` in the `,` dialog, or run:
+
+```sh
+tabmancer clis main agy      # or: tabmancer clis main claude, the default
+```
+
+With agy as the main CLI, **new** starts agy, and a team member with no `@cli` tag runs on
+agy (a member tagged with a Claude model, `@sonnet` say, still runs on Claude Code).
+tabmancer's own calls go to agy too: the router, AI summaries, improving a first message,
+the team line-up, transcript handovers and the report. They run as `agy -p` on the agy
+model chain (Neon, then Hydrogen), never on a Claude model, from a folder of their own
+that is left out of the list. Each takes some 10 seconds and about 1% of the 5-hour
+Gemini quota. With every model of the chain out of quota, nothing runs, and you are told
+until when.
+
+They go to agy as well when Claude Code is not installed or not signed in, whatever the
+main CLI. For a Claude Code session, the router still picks among Claude's models,
+whichever CLI answers it. Renaming a session and Claude's plan limits stay Claude Code's
+own. Codex cannot be the main CLI: it has no background run tabmancer can use.
+
 With Codex on, its plan limits show beside Claude's: in the top bar, in the Plan limits
 tab and its forecast. Codex has no command to ask, so they come from what its latest turn
 wrote into its session files.

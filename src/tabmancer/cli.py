@@ -98,7 +98,8 @@ def main(argv: list[str] | None = None) -> None:
                        help="a stronger model the sessions ask at the turns that matter (Claude Code's --advisor), "
                             "for these sessions only")
     using = sub.add_parser("clis", help="which coding CLIs' sessions to list: claude, codex, agy")
-    using.add_argument("action", nargs="?", choices=["enable", "disable"])
+    using.add_argument("action", nargs="?", choices=["enable", "disable", "main"],
+                       help="main: the CLI tabmancer starts by default and runs its own calls on (claude or agy)")
     using.add_argument("names", nargs="*", metavar="name", help=", ".join(clis.CLIS))
     sub.add_parser("cleanup", help="free disk space: move old sessions to the Recycle Bin")
     prompt = sub.add_parser("continue-prompt", help="show or change what auto-continue tells Claude")
@@ -731,7 +732,11 @@ def manage_clis(action: str | None, names: list[str]) -> None:
     unknown = [name for name in names if name not in clis.CLIS]
     if unknown or (action and not names):
         sys.exit(f"Name one or more of: {', '.join(clis.CLIS)}" + (f" (not {', '.join(unknown)})" if unknown else ""))
-    if action:
+    if action == "main":
+        if len(names) != 1 or names[0] not in clis.MAINS:
+            sys.exit(f"Name one of: {', '.join(clis.MAINS)} (Codex has no background run tabmancer can use)")
+        clis.set_main(names[0])
+    elif action:
         on = set(clis.enabled())
         on = on | set(names) if action == "enable" else on - set(names)
         clis.set_enabled(sorted(on))
@@ -739,8 +744,10 @@ def manage_clis(action: str | None, names: list[str]) -> None:
     for cli in clis.CLIS.values():
         where = clis.installed(cli.name) or "not found on PATH"
         print(f"{'on ' if cli.name in on else 'off'}  {cli.label:<12} {cli.name:<7} {where}")
+    print(f"\nMain CLI: {clis.label(clis.main_cli())}. {clis.MAIN_COST[clis.main_cli()]}")
     if not action:
         print(f"\nTurn one on with: {PROG} clis enable codex   (or press , in the dashboard)")
+        print(f"Run tabmancer on Antigravity with: {PROG} clis main agy")
 
 
 def print_report(days: float, save: bool) -> None:

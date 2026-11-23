@@ -1,4 +1,4 @@
-"""The `,` dialog: which CLIs' sessions the dashboard lists."""
+"""The `,` dialog: which CLIs' sessions the dashboard lists, and which of them is the main one."""
 
 from __future__ import annotations
 
@@ -18,7 +18,8 @@ from .theme import CYAN, GREEN, MUTED, TEXT, keys
 
 
 class CliSettings(ModalScreen[list[str] | None]):
-    """Space turns a CLI on or off, Enter saves, Esc leaves things as they were."""
+    """Space turns a CLI on or off, m picks the main CLI (clis.main_cli), Enter saves both, Esc
+    leaves things as they were."""
 
     DEFAULT_CSS = frame("CliSettings", "medium") + """
     CliSettings OptionList { height: auto; background: $surface; border: none; }
@@ -27,11 +28,13 @@ class CliSettings(ModalScreen[list[str] | None]):
         Binding("escape", "cancel", "Cancel"),
         Binding("enter", "save", "Save", priority=True),
         Binding("space", "toggle", "Turn on or off", show=False),
+        Binding("m", "main", "Main CLI", show=False),
     ]
 
     def __init__(self) -> None:
         super().__init__()
         self.on = set(clis.enabled())
+        self.main = clis.main_cli()
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -39,7 +42,9 @@ class CliSettings(ModalScreen[list[str] | None]):
             yield Label(Text("Their sessions join the list, open in tabs and count in the stats. "
                              "Claude Code is the one every feature works with.", style=MUTED))
             yield OptionList(*[Option(self.prompt(cli), id=cli.name) for cli in clis.CLIS.values()])
-            yield Label(keys(("Space", "turn one on or off"), ("Enter", "save"), ("Esc", "cancel")), classes="hint")
+            yield Label(self.main_words(), id="main-cli")
+            yield Label(keys(("Space", "turn one on or off"), ("m", "main CLI"), ("Enter", "save"), ("Esc", "cancel")),
+                        classes="hint")
 
     def prompt(self, cli: clis.Cli) -> Text:
         """[x] or [ ] in front, as in the session list: a dimmed X read as a tick."""
@@ -49,6 +54,19 @@ class CliSettings(ModalScreen[list[str] | None]):
                              (f"{cli.label:<13}", f"bold {TEXT}"),
                              ("installed" if found else "not found", GREEN if found else MUTED),
                              (f"\n    {cli.reads}", MUTED))
+
+    def main_words(self) -> Text:
+        """The main CLI and what it costs: tabmancer's own calls run on it."""
+        return Text.assemble(("Main CLI: ", MUTED), (clis.label(self.main), f"bold {CYAN}"),
+                             (" (starts by default, runs tabmancer's own calls)\n", MUTED),
+                             (clis.MAIN_COST[self.main], MUTED))
+
+    def action_main(self) -> None:
+        """Claude Code and agy in turn; agy as main is turned on in the list too."""
+        self.main = clis.MAINS[(clis.MAINS.index(self.main) + 1) % len(clis.MAINS)]
+        self.query_one("#main-cli", Label).update(self.main_words())
+        if self.main not in self.on:
+            self.toggle(self.main)
 
     def on_mount(self) -> None:
         self.query_one(OptionList).focus()
@@ -69,6 +87,8 @@ class CliSettings(ModalScreen[list[str] | None]):
         self.query_one(OptionList).replace_option_prompt(name, self.prompt(clis.CLIS[name]))
 
     def action_save(self) -> None:
+        if self.main != clis.main_cli():
+            clis.set_main(self.main)
         self.dismiss([name for name in clis.CLIS if name in self.on])
 
     def action_cancel(self) -> None:

@@ -16,6 +16,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -203,28 +204,46 @@ STEP_NOT_REACHED = (0, 1, 10)  # unspecified, pending, queued: behind the one he
 _CONVERSATION_ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z-]{7,63}")
 
 
-def waiting_for_you(session_id: str) -> bool:
-    """Whether the agy conversation stopped at a step held for your OK (a permission prompt in its
-    tab: an MCP tool, a command): its newest step that has been reached is WAITING. Only read, from
-    its own db; False when there is none or it cannot be read."""
+STEP_AT_WORK = (2, 8)  # running (a tool, a command), generating (the model writing)
+
+
+def _newest_step(session_id: str) -> int | None:
+    """The status of the agy conversation's newest step that has been reached, from its own db, read
+    only; None when there is none or it cannot be read."""
     if not _CONVERSATION_ID.fullmatch(session_id or ""):
-        return False  # "agy:<member>" before its conversation is known, or anything odd
+        return None  # "agy:<member>" before its conversation is known, or anything odd
     path = home() / "conversations" / f"{session_id}.db"
     if not path.is_file():
-        return False
+        return None
     try:
         con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=1)
     except sqlite3.Error:
-        return False
+        return None
     try:
         marks = ",".join("?" * len(STEP_NOT_REACHED))
         row = con.execute(f"SELECT status FROM steps WHERE status NOT IN ({marks}) ORDER BY idx DESC LIMIT 1",
                           STEP_NOT_REACHED).fetchone()
     except sqlite3.Error:
-        return False
+        return None
     finally:
         con.close()
-    return row is not None and row[0] == STEP_WAITING
+    return row[0] if row is not None and isinstance(row[0], int) else None
+
+
+def waiting_for_you(session_id: str) -> bool:
+    """Whether the agy conversation stopped at a step held for your OK (a permission prompt in its
+    tab: an MCP tool, a command): its newest step that has been reached is WAITING. Only read, from
+    its own db; False when there is none or it cannot be read."""
+    return _newest_step(session_id) == STEP_WAITING
+
+
+def step_state(session_id: str) -> str:
+    """What an agy conversation is doing, by its newest reached step: "permission" (held for your
+    OK), "busy" (running a tool or the model writing), "" (done, stopped, or not known). One small
+    read-only query: the caller keeps it to recently active conversations, as a step left running
+    by a killed agy stays "busy" in its db."""
+    status = _newest_step(session_id)
+    return "permission" if status == STEP_WAITING else "busy" if status in STEP_AT_WORK else ""
 
 
 def user_events(path: Path) -> list[dict]:
@@ -319,6 +338,24 @@ def _rows() -> list[dict]:
         con.close()
 
 
+BACKGROUND_DIR = "tabmancer-bg"
+
+
+def background_dir() -> Path:
+    """The folder tabmancer's own background agy calls run in (summarize.ask): a folder of their own,
+    so they are told from your conversations by it and never listed."""
+    return Path(tempfile.gettempdir()) / BACKGROUND_DIR
+
+
+def _is_background(folder: str) -> bool:
+    if not folder:
+        return False
+    try:
+        return os.path.normcase(os.path.normpath(folder)) == os.path.normcase(os.path.normpath(background_dir()))
+    except (TypeError, ValueError):
+        return False
+
+
 def find(days: float = 14) -> list[Session]:
     since = datetime.now() - timedelta(days=days)
     sessions = []
@@ -327,6 +364,9 @@ def find(days: float = 14) -> list[Session]:
         last = _when(row.get("last_modified_time"))
         if not sid or last is None or last < since or row.get("nesting_depth"):
             continue  # nested ones are subagents of another conversation
+        folder = _folder(row.get("workspace_uris"))
+        if _is_background(folder):
+            continue  # tabmancer's own call (a summary, the router), not a conversation of yours
         title = str(row.get("title") or row.get("preview") or "").strip()
         preview = str(row.get("preview") or "").strip()
         status = str(row.get("status") or "")
@@ -338,7 +378,7 @@ def find(days: float = 14) -> list[Session]:
             session_id=sid,
             path=tpath if tpath.is_file() else home() / "conversations" / f"{sid}.db",
             cli="agy",
-            cwd=_folder(row.get("workspace_uris")),
+            cwd=folder,
             title=tag or _shorten(title or "(untitled)", 80),
             first_prompt=_shorten(first_prompt, 300),
             last_prompt=_shorten(meta.get("last_prompt") or "", 300),
