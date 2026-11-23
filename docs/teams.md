@@ -280,8 +280,9 @@ The plugin has two parts, and both leave `agy` sessions outside a tabmancer team
 - **A Stop hook**, run when each turn ends:
   - If the turn failed on quota (`RESOURCE_EXHAUSTED … Resets in 4h7m`), it notes the model as out until then, so the next pick skips it.
   - If messages arrived for the member during the turn, it sends the member round once more with them, marking them read only once they are out. It does this at most 3 times in a row, so a message that keeps being ignored cannot loop.
+  - It skips messages the member's own listen already printed. Inside `agy`'s sandbox the listen can't mark them read (`[acks off]`), so without this the member would get them twice. The hook looks for the listen's line (`[12:41:59 from lead]`) in the member's `agy` transcript and marks those messages read instead. If it finds no transcript, it hands everything over and adds that some may have come already.
   - The hook never waits.
-  - Not yet seen at work in a real session: in the live test every message was read within a turn, so the hook never had one to hand over.
+  - Seen at work with `agy` 1.5.15 (2026-11-23): a message sent in the middle of a turn was handed over when the turn ended, and the member answered it.
 
 #### Codex members (not tested)
 

@@ -882,6 +882,12 @@ def send_command(team: str, to: str, text: str, sender: str = "", summary: str =
     return 0
 
 
+def header(msg: dict) -> str:
+    """How a listen (and agy's Stop hook) heads a message it prints: '[12:41:59 from lead]'. The
+    Stop hook looks for it in an agy member's transcript to tell what a listen already showed."""
+    return f"[{msg['at'].strftime('%H:%M:%S')} from {msg.get('from')}]"
+
+
 def listen_command(team: str, member: str, timeout: float = DEFAULT_LISTEN_TIMEOUT,
                    since: datetime | None = None) -> int:
     """`listen`: wait for this member's messages, print them, and only then mark them read."""
@@ -898,8 +904,7 @@ def listen_command(team: str, member: str, timeout: float = DEFAULT_LISTEN_TIMEO
         print(f"[timeout] No messages for {who} in team {team}.")
         return 0
     for msg in arrived:
-        stamp = msg["at"].strftime("%H:%M:%S")
-        print(f"[{stamp} from {msg['from']}]: {msg['text']}")
+        print(f"{header(msg)}: {msg['text']}")
     sys.stdout.flush()
     try:
         ack(team, who, [msg["id"] for msg in arrived])  # read only once it is out

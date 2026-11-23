@@ -126,11 +126,83 @@ def test_a_message_not_written_out_stays_unread():
     assert len(teambus.unread("shop", "ui")) == 1
 
 
-def test_the_hook_command_as_written_runs_through_cmd_and_hands_messages_over():
+def _transcript(conversation: str, first_prompt: str, *later: str, age: float = 0) -> None:
+    """An agy transcript as agy writes one (JSON lines, a step's text JSON-escaped)."""
+    path = agy.transcript_path(conversation)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    steps = [{"step_index": 0, "type": "USER_INPUT", "content": f"<USER_REQUEST>\n{first_prompt}"}]
+    steps += [{"step_index": i, "type": "RUN_COMMAND", "content": text} for i, text in enumerate(later, 1)]
+    path.write_text("".join(json.dumps(step) + "\n" for step in steps), encoding="utf-8")
+    if age:
+        moment = time.time() - age
+        os.utime(path, (moment, moment))
+
+
+def _listen_output(monkeypatch, capsys) -> str:
+    """What the member's listen printed inside agy's sandbox: the bus folder read-only, so [acks off]."""
+    def refused(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(teambus, "agent_pid", lambda *a: None)
+    with monkeypatch.context() as m:
+        m.setattr(teambus, "_atomic_write_json", refused)
+        m.setattr(teambus, "_append_jsonl", refused)
+        assert teambus.listen_command("shop", "ui", timeout=0.5) == 0
+    out = capsys.readouterr().out
+    assert teambus.ACKS_OFF in out
+    return out
+
+
+def test_what_the_listen_already_showed_is_marked_read_not_handed_over_again(monkeypatch, capsys):
+    # The 2026-11-23 Stop run: TASK-2 came through the listen, MIDTURN during the turn; the hook
+    # handed over both, and a model could have done TASK-2 twice.
+    task = teambus.send("shop", "lead", "ui", "TASK-2: reply DONE-2")
+    shown = _listen_output(monkeypatch, capsys)
+    teambus.send("shop", "lead", "ui", "MIDTURN: reply MID-OK")
+    _transcript("conv-ui", "[tabmancer:shop-ui] Read your full team role", shown)
+    answer = json.loads(_hook({"terminationReason": "END", "executionNum": 0}, TEAM))
+    assert "MIDTURN: reply MID-OK" in answer["reason"] and "TASK-2" not in answer["reason"]
+    assert "may have shown" not in answer["reason"]  # it could tell
+    assert teambus.unread("shop", "ui") == []
+    assert task["id"] not in [m["id"] for m in teambus.unread("shop", "ui")]
+
+
+def test_when_the_listen_showed_them_all_the_turn_ends(monkeypatch, capsys):
+    teambus.send("shop", "lead", "ui", "TASK-2: reply DONE-2")
+    _transcript("conv-ui", "[tabmancer:shop-ui] go", _listen_output(monkeypatch, capsys))
+    assert _hook({"terminationReason": "END", "executionNum": 0}, TEAM) == ""
+    assert teambus.unread("shop", "ui") == []
+
+
+def test_a_shown_line_needs_its_text_too_and_survives_json_escaping():
+    at = datetime(2026, 11, 23, 12, 41, 59)
+    first = {"id": "a", "at": at, "from": "lead", "text": 'endpoint "pay" is /pay ü <b>'}
+    second = {"id": "b", "at": at, "from": "lead", "text": "MIDTURN: reply MID-OK"}  # the same second
+    printed = json.dumps({"content": f"{teambus.header(first)}: {first['text']}"}).encode()  # as escaped
+    assert agyplugin._printed(first, teambus.header(first)) in printed
+    assert agyplugin._printed(second, teambus.header(second)) not in printed  # same header, not shown
+
+
+@pytest.mark.parametrize("whose", ["another member's", "an old one", "none"])
+def test_without_the_members_own_recent_transcript_everything_goes_with_a_caution(monkeypatch, capsys, whose):
+    teambus.send("shop", "lead", "ui", "TASK-2: reply DONE-2")
+    shown = _listen_output(monkeypatch, capsys)
+    if whose == "another member's":
+        _transcript("conv-api", "[tabmancer:shop-api] go", shown)
+    elif whose == "an old one":
+        _transcript("conv-ui", "[tabmancer:shop-ui] go", shown, age=agyplugin.SHOWN_WITHIN + 60)
+    answer = json.loads(_hook({"terminationReason": "END", "executionNum": 0}, TEAM))
+    assert "TASK-2: reply DONE-2" in answer["reason"]
+    assert "Your listen may have shown you some of them already" in answer["reason"]
+    assert teambus.unread("shop", "ui") == []
+
+
+def test_the_hook_command_as_written_runs_through_cmd_and_hands_messages_over(tmp_path):
     """The seam: hooks.json's command string, run the way agy runs it (one string to the shell)."""
     command = json.loads(agyplugin.files()["hooks.json"])["tabmancer-stop"]["Stop"][0]["command"]
     teambus.send("shop", "lead", "ui", "from the real hook")
-    env = {**os.environ, **TEAM}
+    # A home of its own: the hook looks through agy's transcripts, and never the real ones here.
+    env = {**os.environ, **TEAM, "USERPROFILE": str(tmp_path / "home"), "HOME": str(tmp_path / "home")}
     done = subprocess.run(command, shell=True, input=json.dumps({"executionNum": 0, "terminationReason": "END"}),
                           capture_output=True, text=True, encoding="utf-8", env=env, timeout=60, check=False)
     assert done.returncode == 0, done.stderr

@@ -22,19 +22,24 @@ The Stop hook (`python -I -m tabmancer.agyplugin hook`, after every agy turn):
   next pick skips it;
 - a member with messages waiting: answers {"decision": "continue"} with them, so it reads them
   before it stops (at most MAX_CONTINUES times in one stop chain), and marks them read once out.
+  Seen at work with agy 1.5.15 (2026-11-23): a message sent mid-turn came back answered.
+- messages the member's own listen already printed are not handed over again: in agy's sandbox the
+  listen cannot mark them read ([acks off]), so they were still unread, and a model could redo the
+  task. The hook finds the listen's line for each ('[12:41:59 from lead]: <text>', teambus.header)
+  in the member's agy transcript and marks those read instead. With no transcript to look in, it hands
+  everything over and says some may have come already.
 It imports only the standard library until it knows it has something to do.
-
-Not yet seen working: in the retest every message was read within a turn, so no Stop hook
-handed one over.
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import IO
 
@@ -47,6 +52,9 @@ TEAM_TOOLS = ("team_send", "team_inbox", "team_wait", "team_who", "team_status")
 # agy calls a plugin's server <plugin>_<server> (the retests' transcripts: tabmancer_tabmancer).
 SERVER_NAME = f"{NAME}_{NAME}"
 STDIN_WAIT = 3.0  # an event that never closes stdin does not hold the hook up
+SHOWN_WITHIN = 15 * 60  # seconds: the turn that just ended wrote its member's transcript this recently
+SHOWN_TEXT = 60  # characters of a message's text a transcript must hold after its header
+TAG_WITHIN = 64 * 1024  # bytes: a member's first prompt, with its [tabmancer:<session>] tag, is near the top
 STATE_FILE = "agy-plugin.json"  # what was there before the first install, for remove
 
 
@@ -82,11 +90,52 @@ def _turns(value: object) -> int:
         return MAX_CONTINUES
 
 
-def continue_reason(messages: list[dict]) -> str:
-    lines = "\n".join(f"[{m['at'].strftime('%H:%M:%S')} from {m.get('from')}]: {m.get('text')}" for m in messages)
+def continue_reason(messages: list[dict], unsure: bool = False) -> str:
+    from . import teambus
+
+    lines = "\n".join(f"{teambus.header(m)}: {m.get('text')}" for m in messages)
     return (f"Messages from your team arrived while you worked (tabmancer team bus):\n{lines}\n"
-            "Handle them now: answer with the team_send tool (or your bus send command) where one is "
+            + ("Your listen may have shown you some of them already: do not redo what you have done. "
+               if unsure else "")
+            + "Handle them now: answer with the team_send tool (or your bus send command) where one is "
             "needed, then go on or wait for the next message.")
+
+
+def shown_by_listen(team: str, member: str, messages: list[dict]) -> set[str] | None:
+    """The ids of the messages this member's listen already printed into its agy conversation, by
+    their header line in the transcripts of its conversations ([tabmancer:<team>-<member>] in the
+    first prompt) written in the last SHOWN_WITHIN seconds. None when no such transcript is found:
+    then nothing can be told."""
+    from . import agy, teambus
+
+    tag = f"[tabmancer:{team}-{member}]".lower().encode()
+    try:
+        folders = list((agy.home() / "brain").iterdir())
+    except OSError:
+        return None
+    now, shown, found = time.time(), set(), False
+    for folder in folders:
+        path = agy.transcript_path(folder.name)
+        try:
+            if now - path.stat().st_mtime > SHOWN_WITHIN:
+                continue
+            text = path.read_bytes()
+        except OSError:
+            continue
+        if tag not in text[:TAG_WITHIN].lower():
+            continue
+        found = True
+        shown.update(m["id"] for m in messages if _printed(m, teambus.header(m)) in text)
+    return shown if found else None
+
+
+def _printed(message: dict, header: str) -> bytes:
+    """The start of the line a listen printed for a message, as it stands in a transcript: its
+    header and the text up to the first character JSON may write otherwise (at most SHOWN_TEXT).
+    The header alone is not enough: two messages from one sender in one second share it."""
+    text = str(message.get("text") or "")
+    plain = "".join(itertools.takewhile(lambda c: " " <= c <= "~" and c not in '"\\<>&', text))
+    return f"{header}: {plain[:SHOWN_TEXT]}".encode()
 
 
 def hook(stdin: IO[str] | None = None, stdout: IO[str] | None = None,
@@ -117,8 +166,17 @@ def hook(stdin: IO[str] | None = None, stdout: IO[str] | None = None,
     waiting = teambus.unread(team, member, since=teambus._read_team_file(team)[0])
     if not waiting:
         return 0
+    try:
+        shown = shown_by_listen(team, member, waiting)
+    except Exception:  # noqa: BLE001  (a transcript it cannot read: hand everything over)
+        shown = None
+    if shown:  # they reached the member through its listen, which could not mark them read
+        teambus.mark_delivered(team, member, sorted(shown))
+        waiting = [m for m in waiting if m["id"] not in shown]
+        if not waiting:
+            return 0
     try:  # ASCII: the console's code page cannot spoil it on the way to agy
-        sink.write(json.dumps({"decision": "continue", "reason": continue_reason(waiting)}))
+        sink.write(json.dumps({"decision": "continue", "reason": continue_reason(waiting, unsure=shown is None)}))
         sink.flush()
     except (OSError, ValueError):
         return 0
