@@ -150,6 +150,13 @@ def main(argv: list[str] | None = None) -> None:
                           default="summary", help="one slide, not the card that sums it up")
     wrapping.add_argument("--gif", action="store_true", help="a GIF, its numbers counting up, not a still PNG")
     wrapping.add_argument("--names", action="store_true", help="the top project's name on the tools slide")
+    windowing = sub.add_parser("desktop", help="tabmancer in a desktop window (the desktop extra: "
+                                               'pip install "tabmancer[desktop]"); so far the team monitor')
+    windowing.add_argument("--monitor", action="store_true",
+                           help="a team's monitor, read-only: what tabmancer team watch shows, with room")
+    windowing.add_argument("team", nargs="?", default="", help="the team (default: the one team with members open)")
+    windowing.add_argument("--demo", dest="made_up", action="store_true",
+                           help="over the made-up team of tabmancer --demo: nothing of yours is read")
     # What the login shortcut runs when there is no windowless gui launcher.
     sub.add_parser("startup-run", help="(used by the login shortcut)")
     args = parser.parse_args(argv)
@@ -222,6 +229,8 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(team_who(args.team))
         elif args.action == "run":
             sys.exit(team_run(args.team, args.rest))
+    elif args.command == "desktop":
+        sys.exit(desktop_window(args.monitor, args.team, args.made_up))
     elif args.command == "mcp":
         from . import mcpserver
 
@@ -473,6 +482,30 @@ def team_watch(name: str, days: float, tabs_window: str = "") -> int:
     sixel.probe()
     print_leftover(SessionPicker(days, watch=team, tabs_window=tabs_window).run())  # "": it asks which, with the list of teams
     return 0
+
+
+def desktop_window(monitor: bool, name: str, demo: bool = False) -> int:
+    """`tabmancer desktop --monitor [team]`: the team's monitor in a Qt window, from the desktop extra.
+    Without Qt it says how to add it; the terminal monitor (team watch) is there either way."""
+    from . import desktop
+
+    if not desktop.available():
+        print(f"The desktop window needs Qt, from the desktop extra: {desktop.INSTALL}", file=sys.stderr)
+        print(f"The terminal monitor needs nothing more: {PROG} team watch [team]", file=sys.stderr)
+        return 1
+    if not monitor:
+        print(f"Only the team monitor is in the desktop window so far: {PROG} desktop --monitor [team]",
+              file=sys.stderr)
+        return 2
+    team = name
+    if not demo:  # the demo's teams are made up when it starts
+        team, problem = watched_team(name)
+        if problem:
+            print(problem, file=sys.stderr)
+            return 1
+    from .desktop.monitor import run
+
+    return run(team, demo=demo)  # "": it asks which, with the list of teams
 
 
 def team_send(name: str, rest: list[str]) -> int:

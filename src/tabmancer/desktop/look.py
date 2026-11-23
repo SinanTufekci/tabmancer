@@ -1,0 +1,106 @@
+"""How the desktop window looks: the dashboard's black, its colours and its accent, in Qt.
+
+The colours are the dashboard's own (theme.py) and so are the words for a member (monitorview):
+the window draws what the terminal monitor says, in its colours, from the same functions.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+from html import escape
+
+from PySide6.QtGui import QColor, QFont, QFontDatabase
+
+from .. import theme
+from ..config import read_json
+
+GREEN, BLUE, AMBER, RED, ORANGE, CYAN = theme.GREEN, theme.BLUE, theme.AMBER, theme.RED, theme.ORANGE, theme.CYAN
+MUTED, TEXT = theme.MUTED, theme.TEXT
+BLACK, SUNKEN, SURFACE = "#000000", theme.SUNKEN, theme.SURFACE
+PANEL, BORDER, FAINT, DIM = "#181818", "#2a2a2a", "#262626", "#5a5a5a"
+HEX = re.compile(r"#[0-9a-fA-F]{6}")
+MONO_FAMILIES = ("Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono", "DejaVu Sans Mono", "Menlo",
+                 "Liberation Mono", "Courier New")
+
+
+def accent() -> str:
+    """The accent of the theme picked in the dashboard (orange unless another was picked)."""
+    saved = read_json("config.json")
+    name = saved.get("theme") if isinstance(saved, dict) else None
+    if isinstance(name, str):
+        for old in ("antyard-", "ccharbor-", "ccrestore-"):  # saved under an old name
+            if name.startswith(old):
+                name = "tabmancer-" + name.removeprefix(old)
+    return theme.THEMES.get(name if isinstance(name, str) else "", theme.THEMES[theme.DEFAULT_THEME])[1]
+
+
+def colour_of(style: str, default: str = TEXT) -> tuple[str, bool]:
+    """A Rich style the dashboard words a thing in ('bold #f85149') as (colour, bold)."""
+    found = HEX.search(style or "")
+    return (found.group(0) if found else default), "bold" in (style or "").split()
+
+
+def span(words: str, style: str = "", default: str = TEXT) -> str:
+    """Words as HTML in a style's colour, for a QLabel."""
+    colour, bold = colour_of(style, default)
+    weight = "font-weight:600;" if bold else ""
+    return f'<span style="color:{colour};{weight}">{escape(words)}</span>'
+
+
+def percent_colour(percent: float) -> str:
+    """A limit or context used: red from 85%, amber from 60%, as the terminal monitor says it."""
+    return RED if percent >= 85 else AMBER if percent >= 60 else TEXT
+
+
+def fonts_for_offscreen() -> None:
+    """Qt's offscreen platform finds no fonts on Windows unless told where they are (measured)."""
+    if sys.platform == "win32" and os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
+
+
+def mono_family() -> str:
+    """The first monospace family installed (Cascadia on Windows), else Qt's fixed font."""
+    families = set(QFontDatabase.families())
+    found = next((f for f in MONO_FAMILIES if f in families), None)
+    return found or QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+
+
+def font(size: float, bold: bool = False, family: str = "") -> QFont:
+    out = QFont(family or mono_family())
+    out.setPointSizeF(size)
+    out.setBold(bold)
+    out.setStyleHint(QFont.StyleHint.Monospace)
+    return out
+
+
+def qcolor(colour: str) -> QColor:
+    return QColor(colour)
+
+
+def sheet(accent_colour: str) -> str:
+    """The window's style sheet: black, hairline borders, the accent where something is picked."""
+    return f"""
+    QMainWindow, QWidget#central {{ background: {BLACK}; }}
+    QMainWindow::separator {{ background: {BORDER}; width: 3px; height: 3px; }}
+    QWidget {{ color: {TEXT}; }}
+    QMenuBar {{ background: {SUNKEN}; color: {TEXT}; padding: 2px 6px; }}
+    QMenuBar::item {{ padding: 3px 10px; background: transparent; }}
+    QMenuBar::item:selected {{ background: {PANEL}; }}
+    QMenu {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {BORDER}; }}
+    QMenu::item {{ padding: 4px 22px 4px 14px; }}
+    QMenu::item:selected {{ background: {PANEL}; color: {accent_colour}; }}
+    QMenu::item:disabled {{ color: {DIM}; }}
+    QMenu::separator {{ height: 1px; background: {BORDER}; margin: 4px 8px; }}
+    QDockWidget {{ color: {MUTED}; }}
+    QDockWidget::title {{ background: {PANEL}; padding: 5px 10px; text-align: left;
+                          border-bottom: 1px solid {BORDER}; }}
+    QStatusBar {{ background: {SURFACE}; border-top: 1px solid {BORDER}; }}
+    QStatusBar::item {{ border: none; }}
+    QScrollArea, QTextBrowser {{ background: {SUNKEN}; border: none; }}
+    QScrollBar:vertical {{ background: {SUNKEN}; width: 10px; }}
+    QScrollBar::handle:vertical {{ background: {FAINT}; border-radius: 4px; min-height: 24px; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+    QToolTip {{ background: {PANEL}; color: {TEXT}; border: 1px solid {BORDER}; }}
+    """

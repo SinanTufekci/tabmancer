@@ -66,7 +66,12 @@ tabmancer doctor         # check that everything tabmancer relies on still works
 tabmancer updates        # whether a newer tabmancer is out (off: never ask PyPI)
 tabmancer claude-updates # claude update once a day before sessions open (on, off, now)
 tabmancer --demo         # the dashboard over made-up sessions: nothing of yours is touched
+tabmancer desktop --monitor [team]  # a team's monitor in a desktop window (the desktop extra, below; --demo)
 ```
+
+The desktop window needs Qt, from an optional extra: `uv tool install "tabmancer[desktop]"` (or
+`pipx install "tabmancer[desktop]"`). Without it tabmancer runs as ever. So far the window holds the
+team's monitor, read-only ([teams](teams.md#in-a-desktop-window-tabmancer-desktop---monitor)).
 
 Run `tabmancer doctor` after a Claude Code update if something looks off. It checks the
 CLI (its version against the one tabmancer was last checked with, and that every flag and

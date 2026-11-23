@@ -83,6 +83,8 @@ def fresh_sessions(known: dict[str, Session], live: dict[str, dict], full: bool)
             continue
         mark_live(fresh, live.get(sid))
         updates[sid] = fresh
+    # agy keeps no record of what is open: its own db says (as app.read_live asks it).
+    updates |= agy.live_updates({sid: s for sid, s in known.items() if sid not in updates})
     return updates
 
 

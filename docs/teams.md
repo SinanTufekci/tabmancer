@@ -165,6 +165,29 @@ itself stays the dashboard's, however many monitors are open: continuing session
 desktop notifications, updates, Wrapped, the readings behind the stats. It shows the plan limits
 the dashboard read last (up to 15 minutes old) rather than ask Claude Code a second time.
 
+#### In a desktop window (`tabmancer desktop --monitor`)
+
+The same monitor can open in a desktop window of its own, with room for more than a terminal
+gives it: `tabmancer desktop --monitor [team]` (with no name: the one team with members open,
+else the list of teams). It needs Qt, from an optional extra: `pip install "tabmancer[desktop]"`
+(or `uv tool install "tabmancer[desktop]"`). Without it, `tabmancer desktop` says so, and
+everything else, the terminal monitor too, runs as ever.
+
+It is the dashboard's black with its colours: a card for each member (what it does, its state,
+model, how full its context is, its tokens and git, its newest message), the conversation as
+lanes, the messages newest first, and the team's tokens an hour today beside the plan limits
+and agy's chain (Neon, then Hydrogen) as rings. Each of those is a panel you can drag, dock
+elsewhere, float or close; View puts them back, and the window keeps where you left them. The
+menus name every key of the monitor, and the key bar stays under the window.
+
+For now it only watches. It reads the team every two seconds, as the terminal monitor does, and
+never claims the dashboard's part: the dashboard that acts goes on acting. `← →`, `j` and `Esc`
+pick members, `Enter` brings the picked member's tab to the front, `T` watches another team, `?`
+lists the keys and `q` closes the window. The keys that change the team (`s`, `a`, `d`, `g`, `h`,
+`H`, `x`, `p`) and `D` are in its menus, greyed, saying they are the terminal monitor's for now:
+`tabmancer team watch <team>`. `tabmancer desktop --monitor --demo` shows it over the made-up
+team of `tabmancer --demo`.
+
 A team whose members are all closed, after a restart say, stays a team: its row sits among
 the closed sessions where it last worked, with a box to tick the whole team. `s` on it
 starts the team: each member resumed as itself, the lead last, so the others are up when it

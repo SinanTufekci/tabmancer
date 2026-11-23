@@ -34,6 +34,10 @@
 - **A team's monitor (`M`).** One team's members, messages and quota in a window of its own,
   maximized on a second screen, only watching. In a window of 180x40 or more the preview stands
   beside the list, with a team's cards in it (`V` puts it back under the list).
+- **The team's monitor in a desktop window.** `tabmancer desktop --monitor [team]`, from an
+  optional extra (`pip install "tabmancer[desktop]"`, Qt): the cards, the conversation as lanes, the
+  messages, the team's hours and the limits as rings, in panels you can move, float and close;
+  every key in the menus. Read-only for now. Without the extra, tabmancer runs as ever.
 - **One dashboard acts.** With several open, only one reads limits, sends desktop notes, updates
   Claude Code and runs queued handovers; the others watch and take over when it closes.
 - **An account is an account in an organisation.** The same email in your personal plan and in a

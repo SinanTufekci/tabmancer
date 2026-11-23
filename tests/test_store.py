@@ -12,6 +12,7 @@ import pytest
 from test_team_tree import peer, send, shop, transcript
 
 from tabmancer import actor, agy, gitstate, sessions, store, teams, tokens, usage
+from tabmancer.sessions import Exit, Session
 from tabmancer.store import Snapshot, TeamStore
 
 
@@ -232,6 +233,16 @@ def test_an_agy_member_carries_the_chain_from_the_saved_quota(fake_home, tmp_pat
     assert docs.cli == "agy" and docs.model == neon and docs.quota["left"] == 72
     assert [standing["model"] for standing in snap.agy_quota["chain"]] == [neon, hydrogen]
     assert snap.agy_quota["pick"] == neon
+
+
+def test_an_agy_session_takes_its_live_state_from_agy(monkeypatch):
+    """agy has no pid files: what it does now comes from its own db, as the dashboard's poll asks it."""
+    asleep = Session(session_id="a1", path=None, cwd="C:/work/shop", title="shop-docs", exit=Exit.CLEAN, cli="agy")
+    claude = Session(session_id="c1", path=None, cwd="C:/work/shop", title="shop-api", exit=Exit.CLEAN)
+    monkeypatch.setattr(agy, "live_state", lambda sid, now=None: "busy" if sid == "a1" else "")
+    fresh = store.fresh_sessions({"a1": asleep, "c1": claude}, {}, full=False)
+    assert set(fresh) == {"a1"}  # only what changed
+    assert (fresh["a1"].exit, fresh["a1"].live_state) == (Exit.RUNNING, "busy")
 
 
 def test_a_team_without_agy_has_no_agy_quota(fake_home, tmp_path, monkeypatch, quiet):
