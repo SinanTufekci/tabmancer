@@ -71,10 +71,10 @@ class Superseded(Exception):
 
 
 _PRIVATE: set[str] = set()  # folders seen to be this user's alone
-# Windows: the bus in %TEMP% (True) or in %LOCALAPPDATA%	abmancerus (False). Pending the
-# retest's probe of whether agy's terminal sandbox refuses writes under %TEMP% only, even in an
-# --add-dir folder (the 2026-11-20 seam test's listen was refused there). Members already running
-# keep theirs: they were started with TABMANCER_BUS_DIR.
+# Windows: the bus in %TEMP% (True) or in %LOCALAPPDATA%/tabmancer/bus (False). %TEMP% it stays:
+# agy's terminal sandbox refuses writes in an --add-dir folder outside %TEMP% too (the 2026-11-23
+# retest), so moving it gains nothing; agy members write through the plugin's tools, or the listen
+# says [acks off]. Members already running keep theirs: they were started with TABMANCER_BUS_DIR.
 WINDOWS_BUS_IN_TEMP = True
 
 
@@ -895,13 +895,28 @@ PRESENCE_OFF = ("[presence off] This command could not write the bus folder, so 
                 "you listening.")
 
 
+DELIVERY_MOST = 120  # characters of a delivery note in who and team_status
+
+
+def delivery_words(info: object) -> str:
+    """What happened last when the bus handed a member its messages (a Codex member's `codex queue`,
+    codexbus), from its live presence: 'delivery: queued', 'delivery failed: ...'; '' when none."""
+    note = " ".join(str(info.get("delivery") or "").split()) if isinstance(info, dict) else ""
+    if not note:
+        return ""
+    note = note if note.startswith("delivery") else f"delivery: {note}"
+    return note if len(note) <= DELIVERY_MOST else note[:DELIVERY_MOST - 3] + "..."
+
+
 def who_command(team: str, members: list[str]) -> int:
     """`who` as a copy in the bus folder sees it: each member, open or not, listening or not."""
     live = read_presence(team)
     for name in members or sorted(live):
         info = live.get(name)
         state = "listening" if info and info.get("listening") else "open" if info else "closed"
-        print(f"{name} ({team}-{name}) · {info.get('cli', '?') if info else '?'} · {state}")
+        delivery = delivery_words(info)
+        print(f"{name} ({team}-{name}) · {info.get('cli', '?') if info else '?'} · {state}"
+              + (f" · {delivery}" if delivery else ""))
     return 0
 
 

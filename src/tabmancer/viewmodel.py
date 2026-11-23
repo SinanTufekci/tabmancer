@@ -419,8 +419,8 @@ def _presence_of(presence: dict[str, dict], team: teams.Team, member: teams.Memb
 
 def member_model(member: teams.Member, session: Session | None) -> tuple[str, str]:
     """(model, note): the model a member answers with, its session's when known; else the one it
-    starts with: for an agy member the picker's (Argon, Hydrogen, Flash by quota, never Claude), with
-    a note when the one written for it is replaced."""
+    starts with: for an agy member the picker's (agy's chain by quota, never Claude), with a note
+    when the one written for it is replaced; ('', why) when all of the chain is out of quota."""
     if session is not None and session.model and not session.model.startswith("<"):
         return session.model, ""
     if member.cli == "agy":

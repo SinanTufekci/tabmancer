@@ -186,7 +186,7 @@ def test_a_lead_may_start_its_closed_members_without_asking_and_is_told_how(tmp_
     team = teams.new_team("shop", str(tmp_path), "Goal", teams.parse_members("api: x; ui: y"))
     lead, api, _ = team.members
     tools = next(a for a in teams.launch(team, lead).argv if a.startswith("--allowedTools="))
-    assert tools == "--allowedTools=SendMessage,ListAgents,Bash(tabmancer team start:*)"
+    assert tools == f"--allowedTools=SendMessage,ListAgents,Bash(tabmancer team start {team.name}:*)"
     assert "tabmancer team start shop <member>" in teams.role(team, lead)
     assert next(a for a in teams.launch(team, api).argv if a.startswith("--allowedTools=")).endswith("ListAgents")
     assert "tabmancer team start" not in teams.role(team, api)  # a member asks its lead

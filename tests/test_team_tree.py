@@ -70,8 +70,10 @@ def shop(home, tmp_path, monkeypatch, api_open=True):
 
 async def ready(pilot, app, unfold=False):
     """Until the team "shop" is in the list, open (a team may show closed until the live poll lands),
-    and with unfold, its members under its row."""
-    for _ in range(100):
+    and with unfold, its members under its row. By the clock (20 s at most), not a count of pauses:
+    a loaded machine may take longer than 5 s."""
+    end = time.monotonic() + 20
+    while time.monotonic() < end:
         await pilot.pause(0.05)
         state = app.team_states.get("shop")
         if state is not None and state.open_count() and f"{TEAM_ROW}shop" in app.table.rows and app.team_open("shop"):

@@ -227,6 +227,15 @@ def tidy(goal: str) -> str:
 
 
 GOAL_IN_PROMPT = 300  # a first message names the goal on one line, this long at most
+SENTENCE_END = re.compile(r"[.!?…][\"')\]”’]*$")  # "Done." "Done!)" "Is it?”"
+
+
+def sentence(text: str) -> str:
+    """Text that ends a sentence: with its own stop when it has one, else a period. A goal written
+    with its period gave "Build checkout.." in the role."""
+    text = text.rstrip()
+    return text if not text or SENTENCE_END.search(text) else f"{text}."
+
 
 
 def cut(text: str, most: int, more: str = "") -> str:
@@ -508,8 +517,14 @@ def bus_cmd(team: Team, member: Member) -> str:
     return teambus.command(team.name) if member.cli == "agy" else BUS_CMD
 
 
-def reopen(team: Team, bus: str = BUS_CMD) -> str:
-    """What a lead is told about a member that has closed: how to bring it back itself."""
+def reopen(team: Team, bus: str = BUS_CMD, tools: bool = False) -> str:
+    """What a lead is told about a member that has closed: how to bring it back itself. With tools
+    (an agy lead with tabmancer's plugin): the team_request tool, as a shell command from agy's
+    sandbox may not reach tabmancer."""
+    if tools:
+        return ("Check who is online with the team_who tool. A member that has closed comes back as itself, "
+                'where it left off, with the team_request tool (action: "start", members: ["<member>"]); with '
+                "no member named, every closed one does. The user approves each team_request in your tab.")
     if team.uses_bus:
         return (f"Check who is online with `{bus} who {team.name}`. A member that has closed comes back as "
                 f"itself, where it left off, with `{START} {team.name} <member>`; with no member named, every "
@@ -529,15 +544,38 @@ def _agy_plugin_installed() -> bool:
         return False
 
 
+def _agy_tools_asked() -> bool:
+    """Whether agy still asks before one of the team's tools (not all in its allow list)."""
+    try:
+        from . import agyplugin
+
+        return bool(agyplugin.asked_tools())
+    except Exception:  # noqa: BLE001  (the sentence about asking, rather than no role)
+        return True
+
+
+def _sends_by_tool(member: Member) -> bool:
+    """Whether a member sends with the team_send tool rather than its bus command: Codex always (its
+    sandbox may not reach the bus), agy with tabmancer's plugin (its terminal sandbox may refuse)."""
+    return member.cli == "codex" or (member.cli == "agy" and _agy_plugin_installed())
+
+
+def send_how(team: Team, member: Member, to: str = "<member>") -> str:
+    """How this member sends to `to`, as the role says it."""
+    if _sends_by_tool(member):
+        return f'the team_send tool (to: "{to}", message: "...")'
+    return f'`{bus_cmd(team, member)} send {team.name} {to} "..." --from {member.name}`'
+
+
 def _bus_role(team: Team, member: Member) -> str:
     """Role prompt for a member of a mixed-CLI (Claude + Antigravity) or Antigravity team."""
     others = roster(team, member)
-    goal = f"Team goal:\n\n{team.goal}\n\n" if "\n" in team.goal else f"Team goal: {team.goal}. "
+    goal = f"Team goal:\n\n{team.goal}\n\n" if "\n" in team.goal else f"Team goal: {sentence(team.goal)} "
     bus = bus_cmd(team, member)
-    send_cmd = f'{bus} send {team.name} <member> "<message>" --from {member.name}'
     listen_cmd = f"{bus} listen {team.name} {member.name}"
+    tools = member.cli == "agy" and _agy_plugin_installed()  # the bus and team_request as agy's MCP tools
+    by_tool = _sends_by_tool(member)
     if member.cli == "codex":
-        send_cmd = 'the team_send tool (to: "<member>", message: "...")'
         listen_how = (
             "Nothing to run to receive messages: tabmancer queues each message for you into this conversation, "
             "where it arrives as a new turn. When you have nothing else to do, end your turn. team_inbox "
@@ -552,15 +590,15 @@ def _bus_role(team: Team, member: Member) -> str:
             "Never poll in a loop or use timers. After handling a message and replying, start "
             f"`{listen_cmd}` in the background again before ending your turn."
         )
-        if _agy_plugin_installed():
+        if tools:
             # The tools run outside agy's terminal sandbox; a shell send from inside it may be refused.
-            send_cmd = 'the team_send tool (to: "<member>", message: "...")'
             listen_how += (
                 " The bus is also yours as tools (team_send, team_inbox, team_who, team_status): send and look "
-                "with them, not with shell commands, and keep waiting with the background listen above. Your "
-                "first team_* call may ask for approval in your tab: make it alone, and no other team_* call "
-                "until it is answered. If the listen says [acks off], call team_inbox with ack: true once "
-                "you have read its messages, or they come again.")
+                "with them, not with shell commands, and keep waiting with the background listen above. "
+                + ("Your first team_* call may ask for approval in your tab: make it alone, and no other team_* "
+                   "call until it is answered. " if _agy_tools_asked() else "")
+                + "If the listen says [acks off], call team_inbox with ack: true once you have read its "
+                "messages, or they come again.")
         else:
             listen_how += (
                 " The bus commands write to the bus folder, which agy's terminal sandbox may refuse: if one "
@@ -577,9 +615,12 @@ def _bus_role(team: Team, member: Member) -> str:
         f"Team: {team.name}, working in {team.cwd}. You run on {member.cli}. {goal}"
         + (f"The other members (address by member name or session name): {others}. " if others else
            "There are no other members yet. ")
-        + f"This team communicates through tabmancer's cross-CLI team bus (Claude and Antigravity members share it). "
-        f"Send a message with `{send_cmd}` (optional `--summary \"short gist\"`). "
-        f"See who is online with `{bus} who {team.name}`. {listen_how} "
+        + "This team communicates through tabmancer's cross-CLI team bus (Claude and Antigravity members share it). "
+        + (f'Send a message with {send_how(team, member)}, and optionally summary: "short gist". '
+           "See who is online with the team_who tool. " if by_tool else
+           f"Send a message with {send_how(team, member)} (optional `--summary \"short gist\"`). "
+           f"See who is online with `{bus} who {team.name}`. ")
+        + f"{listen_how} "
         + ("The same bus is also yours as tools (mcp__tabmancer__team_send, team_inbox, team_status, team_who; "
            "team_wait blocks your turn, so the background listen above is the way to wait). "
            if member.cli == "claude" else "")
@@ -593,21 +634,25 @@ def _bus_role(team: Team, member: Member) -> str:
             f"at most {team.decide}, fewer when the work is small, none if you can do it well alone. "
             "Give each a short name (a word) and an area, and optionally @agy (for Antigravity) or @claude, "
             "a model and an effort. "
-            f'Add them all with one shell command: {ADD} {team.name} "name: area @model @effort; name: area @agy". '
-            "Each opens and introduces itself on the team bus. Then send each its first task with "
-            f"`{bus} send`, start `{listen_cmd}` in the background while waiting for reports, keep track of "
+            + (f'Add them all with one shell command: {ADD} {team.name} "name: area @model @effort; name: area @agy". '
+               if not tools else 'Add them all with one call of the team_request tool (action: "add", lineup: '
+               '"name: area @model @effort; name: area @agy"), which the user approves in your tab. ')
+            + "Each opens and introduces itself on the team bus. Then send each its first task with "
+            + ("the team_send tool" if tools else f"`{bus} send`")
+            + f", start `{listen_cmd}` in the background while waiting for reports, keep track of "
             "who does what, answer their questions, sort out overlaps and check the results. Do small glue work "
-            "yourself. Tell the user here when the goal is met or a decision is theirs. " + reopen(team, bus)
+            "yourself. Tell the user here when the goal is met or a decision is theirs. " + reopen(team, bus, tools)
         )
     if member.lead:
         return (
             f"You are {team.session_name(member)}, the orchestrator of this team. {common} Split the goal into "
-            f"tasks, send each member its first task with `{bus} send {team.name} <member> \"...\" "
-            f"--from {member.name}` (messages queue safely even if a member is still starting), then start "
+            "tasks, send each member its first task with "
+            + ("the team_send tool" if tools else f"`{bus} send {team.name} <member> \"...\" --from {member.name}`")
+            + " (messages queue safely even if a member is still starting), then start "
             f"`{listen_cmd}` in the background while waiting for their reports. Keep track of who does what, "
             "answer their questions, sort out overlaps and check the results. Do small glue work yourself and "
             "leave the members' areas to them. Tell the user here when the goal is met or a decision is theirs. "
-            + reopen(team, bus)
+            + reopen(team, bus, tools)
         )
     if team.lead is None:
         text = (
@@ -615,15 +660,16 @@ def _bus_role(team: Team, member: Member) -> str:
             f"{member.focus or member.name}. {common} Nobody leads this team: your part is yours to plan and "
             "decide, and the user talks to each of you in your own tab. Before you change something another "
             f"member's work depends on (a shared file, an interface, a schema, the build), tell that member with "
-            f"`{bus} send` and agree on it first; when you finish something the others need, tell them. "
+            f"{'the team_send tool' if by_tool else f'`{bus} send`'} and agree on it first; when you finish "
+            "something the others need, tell them. "
             "Tell the user here when your part is done or a decision is theirs."
         )
     else:
         text = (
             f"You are {team.session_name(member)}, a member of this team. Your area: "
             f"{member.focus or member.name}. {common} {team.session_name(team.lead)} ({team.lead.name}) is the "
-            f"orchestrator: it hands out the work, and you report to it with `{bus} send {team.name} "
-            f"{team.lead.name} \"...\" --from {member.name}` when you finish something or get stuck. "
+            f"orchestrator: it hands out the work, and you report to it with {send_how(team, member, team.lead.name)} "
+            "when you finish something or get stuck. "
             "Ask another member directly when you need something from their area."
         )
     extra = duties(member)
@@ -635,7 +681,7 @@ def _role(team: Team, member: Member) -> str:
     if team.uses_bus:
         return _bus_role(team, member)
     others = roster(team, member)
-    goal = f"Team goal:\n\n{team.goal}\n\n" if "\n" in team.goal else f"Team goal: {team.goal}. "
+    goal = f"Team goal:\n\n{team.goal}\n\n" if "\n" in team.goal else f"Team goal: {sentence(team.goal)} "
     common = (f"Team: {team.name}, working in {team.cwd}. {goal}"
               + (f"The other members, by the name to use with SendMessage: {others}. " if others else
                  "There are no other members yet. ")
@@ -889,7 +935,7 @@ def read_suggestion(answer: str, working: list[Team] | None = None, goal: str = 
     to = team.session_name(member) if member is not None else ""
     if not message:
         added = ", ".join(m.name for m in parse_members(lines))
-        message = (f"The user's goal now adds this to the team's work: {goal}. Joining for it: {added}."
+        message = (f"The user's goal now adds this to the team's work: {sentence(goal)} Joining for it: {added}."
                    if kind == ADD_TO else f"A request from the user for the team: {goal}")
     return Suggestion(lines if kind == ADD_TO else "", count if kind == ADD_TO else 0, False, why, kind, team.name,
                       to, message)
@@ -980,7 +1026,7 @@ def mcp_config(team: Team, member: Member) -> Path | None:
 
 
 def agy_notes(team: Team, only: set[str] | None = None) -> list[str]:
-    """'ui: opus never runs through agy: Argon instead (...)', for each agy member (of only, by name,
+    """'ui: opus never runs through agy: Neon instead (...)', for each agy member (of only, by name,
     when given) whose model was asked for and is not the one it gets: said where the team starts."""
     from . import agy
 
@@ -1033,20 +1079,20 @@ def options(team: Team, member: Member) -> tuple[str, ...]:
         from . import agy
 
         # Always a model, from agy's chain by quota and never a Claude one (agy.resolve): with
-        # none, agy runs its own default, which may be neither. No --effort: agy's model ids
-        # carry theirs (gemini-4-argon-high).
-        return ("--mode", "auto", "--add-dir", str(bdir), "--model", agy.resolve(member.model)[0])
+        # none, agy runs its own default, which may be neither. With the whole chain out there is
+        # none: no --model here, and the launch refuses to open the tab and says why
+        # (agy.model_flags raises NoModel) rather than agy running a model nobody picked. No
+        # --effort: agy's model ids carry theirs (gemini-4-neon-high).
+        model = agy.resolve(member.model)[0]
+        return ("--mode", "auto", "--add-dir", str(bdir), *(("--model", model) if model else ()))
     # --allowedTools=... in one piece: written apart it takes every word after it as a tool.
-    # A deciding lead may add members without asking: that one command, and only it.
-    # A lead may bring its closed members back without asking: that one command, and only it.
     served = mcp_config(team, member)
+    rules = ",".join(f"Bash({rule}:*)" for rule in bash_rules(team, member))
     if team.uses_bus:
         # The bus as shell commands, and as tools when its MCP server is there (mcp_config).
-        tools = f"Bash({BUS_CMD}:*)" + ("".join(f",mcp__{MCP_SERVER}__{t}" for t in MCP_ALLOWED)
-                                         if served is not None else "")
+        tools = rules + ("".join(f",mcp__{MCP_SERVER}__{t}" for t in MCP_ALLOWED) if served is not None else "")
     else:
-        tools = "SendMessage,ListAgents" + (f",Bash({START}:*)" if member.lead else "") + (
-            f",Bash({ADD}:*)" if member.lead and team.decide else "")
+        tools = "SendMessage,ListAgents" + (f",{rules}" if rules else "")
     path = role_file(team, member)
     told = (("--append-system-prompt-file", str(path)) if path is not None else
             ("--append-system-prompt", " ".join(role(team, member).split())))
@@ -1054,6 +1100,22 @@ def options(team: Team, member: Member) -> tuple[str, ...]:
             "--settings", str(settings_file()),
             *((f"--mcp-config={served}",) if served is not None else ()),  # one piece: it takes several
             f"--allowedTools={tools}", *told)
+
+
+def bash_rules(team: Team, member: Member) -> list[str]:
+    """The tabmancer commands a Claude member runs without asking, for its own team only: a member
+    of shop could otherwise send on, listen to, start or add to any other team unasked (with
+    `tabmancer team:*`). Claude Code matches `<rule>:*` as the command and any arguments after a
+    space (shop's rules never match shop2), and checks each part of a command joined by && ; |.
+    - A bus member: send and who for its team, listen as itself.
+    - A lead: start for its team (its closed members back); a deciding lead: add too."""
+    rules = ([f"{BUS_CMD} send {team.name}", f"{BUS_CMD} listen {team.name} {member.name}",
+              f"{BUS_CMD} who {team.name}"] if team.uses_bus else [])
+    if member.lead:
+        rules.append(f"{START} {team.name}")
+        if team.decide:
+            rules.append(f"{ADD} {team.name}")
+    return rules
 
 
 def ensure_worktree(team: Team, member: Member) -> Path | None:
@@ -1085,6 +1147,8 @@ def _agy_first_prompt(team: Team, member: Member, bus_role: Path | None, prompt:
     """Initial -i prompt for an agy team member: embeds its team tag and points to its role file."""
     tag = f"[tabmancer:{team.session_name(member)}]"
     bus = bus_cmd(team, member)
+    tools = _sends_by_tool(member)
+    sends = "the team_send tool" if tools else f"`{bus} send`"
     role_hint = (f"Read your full team role in {bus_role} and follow it strictly." if bus_role is not None
                  else " ".join(role(team, member).split()))
     if resuming:
@@ -1096,16 +1160,18 @@ def _agy_first_prompt(team: Team, member: Member, bus_role: Path | None, prompt:
     if prompt:
         return f"{tag} {role_hint} {prompt}"
     if member.lead and team.decide and not any(not m.lead for m in team.members):
+        adds = ('the team_request tool (action: "add", lineup: "name: area; ...")' if tools else
+                f'{ADD} {team.name} "name: area; ..."')
         body = (f"Goal: {goal_line(team)} The team is yours to make: decide the members the work needs (at most "
-                f'{team.decide}), add them with {ADD} {team.name} "name: area; ...", send each its first task with '
-                f'`{bus} send`, then start `{bus} listen {team.name} {member.name}` in the background.')
+                f"{team.decide}), add them with {adds}, send each its first task with "
+                f"{sends}, then start `{bus} listen {team.name} {member.name}` in the background.")
     elif member.lead:
         body = (f"Goal: {goal_line(team)} Your team is starting now. Plan the work, send each member its first task "
-                f"with `{bus} send {team.name} <member> \"...\" --from {member.name}`, then start "
+                f"with {send_how(team, member)}, then start "
                 f"`{bus} listen {team.name} {member.name}` in the background.")
     elif team.lead is None:
         body = (f"Goal: {goal_line(team)} Your part: {member.focus or member.name}. The others start alongside you: "
-                f"say hello to them with `{bus} send`, start `{bus} listen {team.name} {member.name}` in the "
+                f"say hello to them with {sends}, start `{bus} listen {team.name} {member.name}` in the "
                 "background, agree where your parts meet, then start on yours.")
     else:
         body = (f"Goal: {goal_line(team)} Your area: {member.focus or member.name}. Wait for your first task from "

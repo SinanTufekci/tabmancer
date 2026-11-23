@@ -543,7 +543,9 @@ def team_who(name: str) -> int:
             state = "closed"
         role_word = "lead" if member.lead else (member.focus or member.name)
         owns = f" [{member.owns}]" if member.owns else ""
-        print(f"{member.name} ({team.session_name(member)}) · {member.cli} · {state} · {role_word}{owns}")
+        delivery = teambus.delivery_words(pinfo)  # a Codex member's last `codex queue`
+        print(f"{member.name} ({team.session_name(member)}) · {member.cli} · {state} · {role_word}{owns}"
+              + (f" · {delivery}" if delivery else ""))
     return 0
 
 

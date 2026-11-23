@@ -24,7 +24,8 @@ def test_the_lead_is_told_to_make_the_team_and_may_run_only_the_add_command(tmp_
     lead = team.lead
     argv = teams.launch(team, lead).argv
     tools = next(a for a in argv if a.startswith("--allowedTools="))
-    assert tools == "--allowedTools=SendMessage,ListAgents,Bash(tabmancer team start:*),Bash(tabmancer team add:*)"
+    assert tools == (f"--allowedTools=SendMessage,ListAgents,Bash(tabmancer team start {team.name}:*),"
+                     f"Bash(tabmancer team add {team.name}:*)")
     role = role_of(argv)
     assert 'tabmancer team add shop "name: area @model @effort; name: area"' in role and "at most 3" in role
     assert "There are no other members yet" in role
@@ -32,7 +33,8 @@ def test_the_lead_is_told_to_make_the_team_and_may_run_only_the_add_command(tmp_
     fixed = teams.new_team("fixed", str(tmp_path), "goal", teams.parse_members("api: x"))
     for member in fixed.members:  # a line-up given: nobody adds members unasked; the lead may start closed ones
         tools = next(a for a in teams.launch(fixed, member).argv if a.startswith("--allowedTools="))
-        assert tools == "--allowedTools=SendMessage,ListAgents" + (",Bash(tabmancer team start:*)" if member.lead else "")
+        assert tools == "--allowedTools=SendMessage,ListAgents" + (
+            f",Bash(tabmancer team start {fixed.name}:*)" if member.lead else "")
 
 
 def test_members_join_up_to_the_limit_and_are_kept(fake_home, tmp_path):

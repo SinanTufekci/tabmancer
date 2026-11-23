@@ -238,7 +238,7 @@ def test_who_and_status_name_the_members_and_what_waits(tmp_path):
     who = _text(_call(server, out, "team_who"))
     assert who.splitlines()[1:] == ["lead (lead): not seen", "api (you): not seen", "ui: not seen"]
     status = _text(_call(server, out, "team_status", msg_id=8))
-    assert "2 message(s)" in status and "ui (agy, gemini-4-argon-high): 1 unread, last sent" in status
+    assert "2 message(s)" in status and "ui (agy, gemini-4-neon-high): 1 unread, last sent" in status
     assert "api (claude): 0 unread" in status
     assert "lead → ui: screens" in status and "ui → lead: on it" in status
 
@@ -406,7 +406,7 @@ def test_status_names_the_model_an_agy_member_runs_on_by_quota(tmp_path):
     from tabmancer import agy
 
     _team(tmp_path)
-    agy.note_out_of_quota("gemini-4-argon-high", datetime.now(UTC) + timedelta(hours=2))
+    agy.note_out_of_quota("gemini-4-neon-high", datetime.now(UTC) + timedelta(hours=2))
     server, out = _server("api")
     status = _text(_call(server, out, "team_status"))
     ui = next(line for line in status.splitlines() if line.strip().startswith("ui ("))
@@ -524,3 +524,25 @@ def test_a_lineup_after_the_dashes_reaches_team_add_whole(monkeypatch, tmp_path)
     with pytest.raises(SystemExit):
         cli.main()
     assert got == [("shop", "--help: x @agy")]
+
+
+def test_who_and_status_say_how_a_codex_members_last_delivery_went(tmp_path, capsys):
+    _team(tmp_path, lineup="lead: plans\napi: endpoints\nrev: reviews @codex")
+    teambus.write_presence("shop", "rev", cli="codex", pid=os.getpid())
+    teambus.update_presence("shop", "rev", delivery="codex queue failed (1): no thread")
+    server, out = _server("api")
+    who = _text(_call(server, out, "team_who"))
+    assert "rev: running, delivery: codex queue failed (1): no thread" in who
+    assert "api (you): not seen" in who  # no note where nothing was delivered
+    status = _text(_call(server, out, "team_status", msg_id=8))
+    assert "rev (codex" in status and "delivery: codex queue failed (1): no thread" in status
+    teambus.who_command("shop", ["rev", "api"])
+    printed = capsys.readouterr().out
+    assert "rev (shop-rev) · codex · open · delivery: codex queue failed (1): no thread" in printed
+    assert "api (shop-api) · ? · closed\n" in printed
+    # Its own words kept, one line, and cut when long.
+    assert teambus.delivery_words({"delivery": "queued"}) == "delivery: queued"
+    assert teambus.delivery_words({"delivery": "delivery failed: disk gone"}) == "delivery failed: disk gone"
+    assert teambus.delivery_words({"delivery": "a\nb"}) == "delivery: a b"
+    assert len(teambus.delivery_words({"delivery": "x" * 500})) == teambus.DELIVERY_MOST
+    assert teambus.delivery_words(None) == teambus.delivery_words({}) == ""

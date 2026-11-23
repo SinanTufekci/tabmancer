@@ -1,4 +1,4 @@
-"""tabmancer's Antigravity plugin: the team bus as MCP tools and two hooks, for agy members.
+"""tabmancer's Antigravity plugin: the team bus as MCP tools and a Stop hook, for agy members.
 
 agy reads neither a workspace's MCP config nor its hooks for a fresh folder; a plugin it has
 installed (`agy plugin install <folder>`, copied to ~/.gemini/config/plugins/<name>) it does, for
@@ -9,6 +9,14 @@ Both parts run in every agy session, team or not, and both get agy's environment
 `tabmancer team run` started has TABMANCER_TEAM and TABMANCER_MEMBER, anything else has neither
 and is left alone (the tools say it is not a team session; the hook does nothing).
 
+agy asks before every MCP tool call, and a PreToolUse hook answering "allow" does not change that
+(agy 1.5.15, the 2026-11-23 retest: the hook ran, its reason is in the step, the prompt came all
+the same). What does is agy's own allow list, permissions.allow in
+~/.gemini/antigravity-cli/settings.json: install adds mcp(tabmancer_tabmancer/<tool>) for the
+team's tools (TEAM_TOOLS, never team_request), merged into what is there; remove takes away the
+ones it added. They hold for every agy session, which is harmless: those tools only read and write
+tabmancer's team bus, and outside a team they say so and do nothing.
+
 The Stop hook (`python -I -m tabmancer.agyplugin hook`, after every agy turn):
 - a turn that failed on quota: notes the model out until its reset (agy.note_quota_error), so the
   next pick skips it;
@@ -16,10 +24,8 @@ The Stop hook (`python -I -m tabmancer.agyplugin hook`, after every agy turn):
   before it stops (at most MAX_CONTINUES times in one stop chain), and marks them read once out.
 It imports only the standard library until it knows it has something to do.
 
-The PreToolUse hook (`... hook pretool`, before each MCP tool call): allows the team's own tools
-(TEAM_TOOLS, not team_request) for a team member, so a member is not stopped at a permission
-prompt nobody watches (the 2026-11-20 seam test hung there). For anything else, and on input it
-cannot read, it answers an empty decision: no opinion, agy asks or allows as it would anyway.
+Not yet seen working: in the retest every message was read within a turn, so no Stop hook
+handed one over.
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import IO
@@ -34,14 +41,11 @@ from typing import IO
 NAME = "tabmancer"
 MAX_CONTINUES = 3  # stop answering "continue" once a stop chain has gone round this often
 HOOK_TIMEOUT = 10  # seconds agy gives the hook before it gives up on it
-PRETOOL_TIMEOUT = 5  # the same for the PreToolUse hook, which holds up a tool call
-# agy names a tool step by its type lowercased (CORTEX_STEP_TYPE_MCP_TOOL); the model's call is
-# call_mcp_tool. Either way the matcher is anchored, so other tools never start the hook.
-PRETOOL_MATCHER = "mcp_tool|call_mcp_tool"
-# Allowed without asking for a member: teams.MCP_ALLOWED (a test keeps them equal; this module
-# imports nothing heavy). Never team_request: what a lead starts or adds is asked of you.
-TEAM_TOOLS = frozenset({"team_send", "team_inbox", "team_wait", "team_who", "team_status"})
-SERVER_NAMES = frozenset({NAME, f"{NAME}_{NAME}"})  # agy calls a plugin's server <plugin>_<server>
+# In agy's allow list: teams.MCP_ALLOWED (a test keeps them equal; this module imports nothing
+# heavy). Never team_request: what a lead starts or adds is asked of you.
+TEAM_TOOLS = ("team_send", "team_inbox", "team_wait", "team_who", "team_status")
+# agy calls a plugin's server <plugin>_<server> (the retests' transcripts: tabmancer_tabmancer).
+SERVER_NAME = f"{NAME}_{NAME}"
 STDIN_WAIT = 3.0  # an event that never closes stdin does not hold the hook up
 STATE_FILE = "agy-plugin.json"  # what was there before the first install, for remove
 
@@ -122,50 +126,6 @@ def hook(stdin: IO[str] | None = None, stdout: IO[str] | None = None,
     return 0
 
 
-def _plain(value: object) -> object:
-    """A tool argument as agy may send it: the value itself, or the value as JSON text."""
-    if isinstance(value, str) and value[:1] in ('"', "{"):
-        try:
-            return json.loads(value)
-        except ValueError:
-            return value
-    return value
-
-
-def tool_decision(event: dict, environ: dict[str, str]) -> str:
-    """'allow' for one of the team's tools in a team member's session, else '' (no opinion)."""
-    if not (environ.get("TABMANCER_TEAM") and environ.get("TABMANCER_MEMBER")):
-        return ""
-    call = event.get("toolCall")
-    args = _plain(call.get("args")) if isinstance(call, dict) else None
-    if not isinstance(args, dict):
-        return ""
-    server, tool = _plain(args.get("ServerName")), _plain(args.get("ToolName"))
-    if not (isinstance(server, str) and isinstance(tool, str)):
-        return ""
-    return "allow" if server.lower() in SERVER_NAMES and tool in TEAM_TOOLS else ""
-
-
-def pretool(stdin: IO[str] | None = None, stdout: IO[str] | None = None,
-            environ: dict[str, str] | None = None) -> int:
-    """agy's PreToolUse hook: see the module's docstring. Always answers and exits 0."""
-    source: IO[str] = stdin if stdin is not None else sys.stdin
-    sink: IO[str] = stdout if stdout is not None else sys.stdout
-    try:
-        decision = tool_decision(_read_event(source), environ if environ is not None else dict(os.environ))
-    except Exception:  # noqa: BLE001  (no opinion rather than a broken tool call)
-        decision = ""
-    answer = {"decision": decision}
-    if decision:
-        answer["reason"] = "tabmancer team bus tool, allowed for team members"
-    try:
-        sink.write(json.dumps(answer))
-        sink.flush()
-    except (OSError, ValueError):
-        pass
-    return 0
-
-
 # --- install and remove ---------------------------------------------------------------------------
 
 def gemini_dir() -> Path:
@@ -226,9 +186,6 @@ def files() -> dict[str, str]:
             f"{NAME}-stop": {"Stop": [{
                 "type": "command", "command": f"{_cmd_word(python)} -I -m tabmancer.agyplugin hook",
                 "timeout": HOOK_TIMEOUT}]},
-            f"{NAME}-tools": {"PreToolUse": [{"matcher": PRETOOL_MATCHER, "hooks": [{
-                "type": "command", "command": f"{_cmd_word(python)} -I -m tabmancer.agyplugin hook pretool",
-                "timeout": PRETOOL_TIMEOUT}]}]},
         }, indent=2),
     }
 
@@ -240,15 +197,107 @@ def _agy() -> str | None:
 
 
 def _run(argv: list[str], runner=None) -> tuple[int, str]:
+    """agy's plugin command: (exit code, what it said). Its output goes to a file, not a pipe: agy
+    1.5.15 leaves a process behind that holds a pipe open, so reading it to the end waited out the
+    60 s timeout on validate and install (to a file: 0.2 s). No stdin: nothing is asked."""
     import subprocess
+    import tempfile
 
     runner = runner or subprocess.run
     try:
-        done = runner(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
-                      check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        with tempfile.TemporaryFile() as out:
+            done = runner(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, timeout=60,
+                          check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            out.seek(0)
+            said = out.read().decode("utf-8", errors="replace")
     except (OSError, subprocess.SubprocessError) as problem:
         return -1, str(problem)
-    return done.returncode, ((done.stdout or "") + (done.stderr or "")).strip()
+    return done.returncode, said.strip()
+
+
+# --- agy's allow list -----------------------------------------------------------------------------
+
+class SettingsError(Exception):
+    """agy's settings file is there but not one tabmancer can add to without rewriting it."""
+
+
+def settings_file() -> Path:
+    from . import agy
+
+    return agy.home() / "settings.json"  # ~/.gemini/antigravity-cli/settings.json
+
+
+def allow_entry(tool: str) -> str:
+    return f"mcp({SERVER_NAME}/{tool})"
+
+
+def _read_settings() -> dict:
+    """agy's settings ({} when there is no file). SettingsError when they cannot be added to as they
+    are: not JSON, not an object, or permissions / permissions.allow of another shape."""
+    path = settings_file()
+    if not path.exists():
+        return {}
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as problem:
+        raise SettingsError(f"{path} cannot be read as JSON ({problem})") from problem
+    if not isinstance(settings, dict):
+        raise SettingsError(f"{path} is not a JSON object")
+    permissions = settings.get("permissions", {})
+    if not isinstance(permissions, dict) or not isinstance(permissions.get("allow", []), list):
+        raise SettingsError(f"{path}: permissions.allow is not a list")
+    return settings
+
+
+def _write_settings(settings: dict) -> None:
+    """Through a temporary file in the same folder, then put in place: agy never reads half a file.
+    As agy writes it: two-space indent, LF, a newline at the end."""
+    path = settings_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(prefix=".settings-", suffix=".json", dir=path.parent)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as out:
+            out.write(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def asked_tools() -> list[str]:
+    """The team's tools agy still asks about (not in its allow list); all of them when its settings
+    cannot be read."""
+    try:
+        allowed = _read_settings().get("permissions", {}).get("allow", [])
+    except SettingsError:
+        return list(TEAM_TOOLS)
+    return [tool for tool in TEAM_TOOLS if allow_entry(tool) not in allowed]
+
+
+def allow_tools() -> list[str]:
+    """Add the team's tools that are missing to agy's allow list, after what is there, which is kept
+    as it was. The entries it added (none: the file is not written). SettingsError: nothing done."""
+    settings = _read_settings()
+    allowed = settings.setdefault("permissions", {}).setdefault("allow", [])
+    added = [allow_entry(tool) for tool in TEAM_TOOLS if allow_entry(tool) not in allowed]
+    if added:
+        allowed.extend(added)
+        _write_settings(settings)
+    return added
+
+
+def disallow_tools(entries: list[str]) -> list[str]:
+    """Take these of the team's entries out of agy's allow list, and nothing else. The ones taken."""
+    ours = {allow_entry(tool) for tool in TEAM_TOOLS}
+    if not settings_file().exists():
+        return []
+    settings = _read_settings()
+    allowed = settings.get("permissions", {}).get("allow", [])
+    going = [e for e in allowed if e in ours and e in entries]
+    if going:
+        settings["permissions"]["allow"] = [e for e in allowed if e not in going]
+        _write_settings(settings)
+    return going
 
 
 def status() -> str:
@@ -265,13 +314,39 @@ def status() -> str:
     return "installed"
 
 
+def installed_version() -> str:
+    """The version in the installed plugin's plugin.json (tabmancer's when it was installed); ''."""
+    try:
+        version = json.loads((installed_dir() / "plugin.json").read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return version if isinstance(version, str) else ""
+
+
+def enabled() -> bool | None:
+    """agy's own switch for the plugin (~/.gemini/config/config.json, plugins.<name>.enabled, which
+    `agy plugin enable` / `disable` write): None when it says nothing. Only read."""
+    try:
+        entry = json.loads((gemini_dir() / "config" / "config.json").read_text(encoding="utf-8"))["plugins"][NAME]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    switch = entry.get("enabled") if isinstance(entry, dict) else None
+    return switch if isinstance(switch, bool) else None
+
+
 def install(runner=None) -> tuple[bool, str]:
-    """Write the plugin folder, let agy check it, install it. (done, what to tell)."""
+    """Write the plugin folder, let agy check it, install it, and add the team's tools to agy's
+    allow list. (done, what to tell). Settings it cannot add to: nothing is done."""
     agy_exe = _agy()
     if agy_exe is None:
         return False, "agy is not on PATH: install Antigravity's CLI first."
-    from .config import write_json
+    from .config import read_json, write_json
 
+    try:
+        _read_settings()
+    except SettingsError as problem:
+        return False, (f"Nothing installed: {problem}. tabmancer adds the team's tools to its permissions.allow "
+                       "and will not rewrite a file it cannot read; fix it or move it away, then install again.")
     if not _state_path().is_file():  # the first install: what agy had before it, for remove
         write_json(STATE_FILE, {"manifest": manifest_file().is_file(), "data": data_dir().is_dir()})
     folder = source_dir()
@@ -284,9 +359,20 @@ def install(runner=None) -> tuple[bool, str]:
     code, said = _run([agy_exe, "plugin", "install", str(folder)], runner)
     if code != 0:
         return False, f"agy plugin install failed ({code}): {said}"
-    return True, (f"Installed agy plugin {NAME}: agy members of tabmancer teams get the team_* tools "
-                  "(allowed without asking, but team_request) and messages handed over when a turn ends. Other agy sessions are left alone. Undo: "
-                  "tabmancer agy-plugin remove")
+    try:
+        added = allow_tools()
+    except (SettingsError, OSError) as problem:
+        return False, (f"Installed agy plugin {NAME}, but its tools are not in agy's allow list ({problem}): agy "
+                       f"will ask for {', '.join(asked_tools())}.")
+    state = read_json(STATE_FILE) if _state_path().is_file() else {}
+    state = state if isinstance(state, dict) else {}
+    mine = state.get("allowed") if isinstance(state.get("allowed"), list) else []
+    write_json(STATE_FILE, {**state, "allowed": [*mine, *(e for e in added if e not in mine)]})
+    return True, (f"Installed agy plugin {NAME}: agy members of tabmancer teams get the team_* tools and messages "
+                  f"handed over when a turn ends. {', '.join(TEAM_TOOLS)} are in agy's allow list "
+                  f"({settings_file()}, permissions.allow; {len(added)} added), so agy runs them without "
+                  "asking, in any session (they only touch tabmancer's team bus); team_request still asks. "
+                  "Undo: tabmancer agy-plugin remove")
 
 
 def remove(runner=None) -> tuple[bool, str]:
@@ -301,6 +387,14 @@ def remove(runner=None) -> tuple[bool, str]:
         if code != 0:
             return False, f"agy plugin uninstall failed ({code}): {said}"
     before = read_json(STATE_FILE) if _state_path().is_file() else {}
+    # The allow entries install added; ones agy had before (a tab's "always allow") stay. With no
+    # record (an install from before it kept one): all of the team's.
+    added = before.get("allowed") if isinstance(before, dict) and isinstance(before.get("allowed"), list) else (
+        [allow_entry(tool) for tool in TEAM_TOOLS])
+    try:
+        taken, left = disallow_tools(added), ""
+    except (SettingsError, OSError) as problem:
+        taken, left = [], f" Its tools stay in agy's allow list: {problem}."
     if isinstance(before, dict) and before:
         data = data_dir()
         if not before.get("data") and data.is_dir() and not any(data.iterdir()):
@@ -316,17 +410,22 @@ def remove(runner=None) -> tuple[bool, str]:
 
     shutil.rmtree(source_dir(), ignore_errors=True)
     _state_path().unlink(missing_ok=True)
-    return True, f"Removed agy plugin {NAME}."
+    return True, (f"Removed agy plugin {NAME}" + (f" and {len(taken)} entries from agy's allow list." if taken
+                                                   else ".") + left)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     action = args[0] if args else "status"
     if action == "hook":
-        return pretool() if args[1:2] == ["pretool"] else hook()
+        return hook()
     if action == "status":
+        state = status()
         print({"installed": "installed", "outdated": "installed, but older than this tabmancer: run "
-               "tabmancer agy-plugin install", "missing": "not installed: tabmancer agy-plugin install"}[status()])
+               "tabmancer agy-plugin install", "missing": "not installed: tabmancer agy-plugin install"}[state])
+        asked = asked_tools()
+        if state != "missing" and asked:
+            print(f"agy will ask for {', '.join(asked)}: tabmancer agy-plugin install adds them to its allow list")
         return 0
     if action in ("install", "remove"):
         done, said = install() if action == "install" else remove()

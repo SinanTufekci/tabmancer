@@ -319,7 +319,7 @@ def agy_chain(monkeypatch):
     """agy's model pick, as the picker gives it; no agy is run."""
     from tabmancer import agy
 
-    state = {"pick": ("gemini-4-argon-high", "Argon while its quota lasts"), "refreshed": 0}
+    state = {"pick": ("gemini-4-hydrogen-high", "Hydrogen while its quota lasts"), "refreshed": 0}
 
     def refresh(timeout=25):
         state["refreshed"] += 1
@@ -334,13 +334,26 @@ def agy_chain(monkeypatch):
 
 def test_an_agy_pick_is_the_chains_model_and_asks_no_claude(agy_chain):
     route = router.suggest("refactor the session list", ["a"], cli="agy")
-    assert route == router.Route(Pick("gemini-4-argon-high"), "Argon while its quota lasts", cli="agy")
-    assert agy_chain["refreshed"] == 1 and route.words() == "gemini-4-argon-high"
+    assert route == router.Route(Pick("gemini-4-hydrogen-high"), "Hydrogen while its quota lasts", cli="agy")
+    assert agy_chain["refreshed"] == 1 and route.words() == "gemini-4-hydrogen-high"
 
 
 def test_an_agy_pick_with_no_model_left_or_a_claude_one_is_none(agy_chain):
-    agy_chain["pick"] = ("", "agy is not on PATH")  # the chain itself always ends in Flash: none only without agy
-    with pytest.raises(summarize.SummaryError, match="not on PATH"):
+    agy_chain["pick"] = ("", "agy is not on PATH")
+    with pytest.raises(summarize.SummaryError, match="not on PATH") as said:
+        router.suggest("refactor the session list", ["a"], cli="agy")
+    assert router.AGY_NONE in str(said.value)
+    # Every model of the chain out of quota: said, with what to do, and no model put in its place.
+    agy_chain["pick"] = ("", "Neon and Hydrogen out until Nov 23 12:16: pick one or wait")  # agy's own words
+    with pytest.raises(summarize.SummaryError) as said:
+        router.suggest("refactor the session list", ["a"], cli="agy")
+    assert str(said.value) == "Neon and Hydrogen out until Nov 23 12:16: pick one or wait"  # its time kept whole
+    agy_chain["pick"] = ("", "Neon and Hydrogen out of quota until 14:00.")
+    with pytest.raises(summarize.SummaryError) as said:
+        router.suggest("refactor the session list", ["a"], cli="agy")
+    assert str(said.value) == f"{router.AGY_NONE} (Neon and Hydrogen out of quota until 14:00)"
+    agy_chain["pick"] = ("", "")
+    with pytest.raises(summarize.SummaryError, match=r"pick one in agy's row, or wait \(none is usable\)"):
         router.suggest("refactor the session list", ["a"], cli="agy")
     agy_chain["pick"] = ("claude-opus-5-5", "")
     with pytest.raises(summarize.SummaryError, match="never runs Claude through agy"):
@@ -464,11 +477,11 @@ async def test_a_late_claude_answer_does_not_land_while_agy_is_picked(fake_home,
         dialog.show_cli()
         await pilot.press("ctrl+r")  # agy for the same message: its own pick, not Claude's in waiting
         route = dialog.query_one("#new-route")
-        await until(pilot, lambda: "gemini-4-argon-high" in str(route.render()))
+        await until(pilot, lambda: "gemini-4-hydrogen-high" in str(route.render()))
         release.set()  # Claude's answer comes now, for a CLI no longer picked
         await until(pilot, lambda: ("claude", dialog.route_key()) in dialog.routes)
         await pilot.pause(0.1)
-        assert "gemini-4-argon-high" in str(route.render()) and "haiku" not in str(route.render())
+        assert "gemini-4-hydrogen-high" in str(route.render()) and "haiku" not in str(route.render())
         dialog.cli = "claude"
         assert dialog.pick() == Pick(cap="300k")  # not taken into the Claude rows behind agy's back
         dialog.show_cli()
@@ -507,7 +520,27 @@ async def test_the_n_dialog_says_the_agy_pick_and_leaves_the_rows(fake_home, mon
         dialog.show_cli()
         await pilot.press("ctrl+r")
         route = dialog.query_one("#new-route")
-        await until(pilot, lambda: "gemini-4-argon-high" in str(route.render()))
-        assert "Argon while its quota lasts" in str(route.render()) and "takes it" not in str(route.render())
+        await until(pilot, lambda: "gemini-4-hydrogen-high" in str(route.render()))
+        assert "Hydrogen while its quota lasts" in str(route.render()) and "takes it" not in str(route.render())
         dialog.cli = "claude"  # back to Claude Code: the Claude rows were never touched
         assert dialog.pick() == Pick(cap="300k")
+
+
+async def test_with_no_agy_model_to_give_the_n_dialog_says_so_and_picks_none(fake_home, monkeypatch, capped,
+                                                                              agy_chain):
+    agy_chain["pick"] = ("", "Neon and Hydrogen out of quota until 14:00")
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(160, 30)) as pilot:
+        dialog = await open_dialog(pilot, app)
+        await pilot.press("tab")
+        dialog.message.insert("refactor the session list")
+        dialog.cli = "agy"
+        dialog.show_cli()
+        row = dialog.query_one("#new-agy-model")
+        before = row.value
+        await pilot.press("ctrl+r")
+        route = dialog.query_one("#new-route")
+        await until(pilot, lambda: "out of quota" in str(route.render()))
+        shown = " ".join(str(route.render()).split())
+        assert "pick one in agy's row, or wait" in shown
+        assert row.value == before  # no model put in its place, silently or not

@@ -83,7 +83,7 @@ the goal, looks at the project and picks the members the work needs, up to the l
 set (4 unless you change it), fewer when the work is small: their names, their areas and,
 when it matters, their models and efforts. It adds them with one command,
 `tabmancer team add <team> "name: area @model @effort; name: area"`, the only command it may run
-without asking you (`--allowedTools=...,Bash(tabmancer team add:*)`). Each member opens in
+without asking you, and for its own team only (`--allowedTools=...,Bash(tabmancer team add <team>:*)`). Each member opens in
 its own tab (or, with `Ctrl+B`, in the background) and introduces itself to the lead, and the
 team view shows them join.
 
@@ -91,7 +91,7 @@ A member that has closed comes back with `tabmancer team start <team> [member ..
 it back in the dashboard: as itself (its name, its role), where it left off; one that never started
 opens new; the lead last; in the background where the team runs its members there. With no member
 named, every one that is not open starts; one that is open, in a tab or in the background, is left
-be. Every lead may run it without asking (`--allowedTools=...,Bash(tabmancer team start:*)`) and is
+be. Every lead may run it for its own team without asking (`--allowedTools=...,Bash(tabmancer team start <team>:*)`) and is
 told of it in its role, so it can bring back a member it needs; `tabmancer team add` is for members
 new to the team.
 
@@ -221,7 +221,15 @@ ui: screens and styles [src/ui] @agy
 review: checks changes @agy @gemini-4-hydrogen-high
 ```
 
-Without a model, tabmancer picks one by the quota `agy` reports: `gemini-4-argon-high` while its quota lasts, then `gemini-4-hydrogen-high`, then `gemini-3.8-flash-high`. Claude and GPT models never run through `agy`: such a tag on an `@agy` member is replaced by that pick. Effort tags don't apply to `agy` members, since an Antigravity model id carries its effort.
+Without a model, tabmancer picks one by the quota `agy` reports: `gemini-4-neon-high` while its quota lasts, then `gemini-4-hydrogen-high`. When both are out of quota, no model is picked for you: the session or member does not open, and tabmancer says when the first is back, so you can name a model yourself or wait. A model you name is used as named. Claude and GPT models never run through `agy`: such a tag on an `@agy` member is replaced by the chain's pick. Effort tags don't apply to `agy` members, since an Antigravity model id carries its effort.
+
+To use another chain, list the model ids in order in tabmancer's `config.json`:
+
+```json
+{"agy_models": ["gemini-4-neon-high", "gemini-4-hydrogen-high"]}
+```
+
+`agy models` lists the ids your plan has. Claude and GPT ids in that list are left out.
 
 A pure Claude Code team keeps using Claude Code's own `SendMessage`/`ListAgents` cross-session messaging. When a team includes at least one `@agy` member, every member on that team shares tabmancer's local cross-CLI message bus instead:
 
@@ -250,7 +258,7 @@ Who calls is never a tool argument. It comes from `--team`/`--member`, or else f
 
 `team_request` runs `tabmancer team add|start` for the caller's own team and logs who asked in the bus folder's `requests.jsonl`. A lead adds a Codex member only to a team that already has one.
 
-Delivery is at least once. A message is marked read only once it has gone out (a tool's answer, the hook's output, `codex queue` taking it), so a member that stops at that moment may see it again. A message is never marked read without being sent.
+Delivery is at least once. A message is marked read only once it has gone out (a tool's answer, the hook's output, `codex queue` taking it), so a member that stops at that moment may see it again. A message is never marked read without being sent. A listen that cannot write the bus folder (agy's terminal sandbox) prints its messages and says `[acks off]`: they stay unread, so every listen of that member, two at once or one after another, shows them again until the member marks them read with `team_inbox` (`ack: true`) or runs the listen outside the sandbox.
 
 Claude Code members of a bus team get the server without any setup: their command line gets `--mcp-config` with a file of their own in the bus folder, and the tools are allowed without asking, except `team_request`: what a lead starts or adds is asked of you each time. They still wait with the background `tabmancer team listen`: `team_wait` would hold their turn open.
 
@@ -259,10 +267,12 @@ Claude Code members of a bus team get the server without any setup: their comman
 `agy` doesn't load a workspace's MCP servers or hooks, only those of a plugin it has installed. That changes `agy` for every session, so tabmancer never does it by itself: `tabmancer doctor` offers it, and you install it yourself:
 
 ```text
-tabmancer agy-plugin install    # agy plugin validate, then agy plugin install
-tabmancer agy-plugin status     # installed, older than this tabmancer, or not installed
-tabmancer agy-plugin remove     # agy plugin uninstall, and the files the install left behind
+tabmancer agy-plugin install    # agy plugin validate, agy plugin install, and the tools in agy's allow list
+tabmancer agy-plugin status     # installed, older than this tabmancer, or not installed; tools agy will ask for
+tabmancer agy-plugin remove     # agy plugin uninstall, the allow entries it added, the files the install left
 ```
+
+`agy` asks before every MCP tool call. A hook can't turn that off; only `agy`'s own allow list can. So the install adds the five team tools, `mcp(tabmancer_tabmancer/team_send)`, `team_inbox`, `team_wait`, `team_who` and `team_status`, to `permissions.allow` in `~/.gemini/antigravity-cli/settings.json`. It never adds `team_request`, so a lead's start or add is still asked of you. The install adds only the entries that are missing and leaves everything else in the file as it was. If the file can't be read as JSON, it installs nothing and says why. The entries hold for every `agy` session, which does no harm: these tools only touch tabmancer's team bus, and outside a team they say so and do nothing. `remove` takes away the entries the install added. Entries you allowed yourself in a tab stay. `tabmancer doctor` and `agy-plugin status` name any team tool `agy` will still ask for.
 
 The plugin has two parts, and both leave `agy` sessions outside a tabmancer team alone:
 
@@ -271,6 +281,7 @@ The plugin has two parts, and both leave `agy` sessions outside a tabmancer team
   - If the turn failed on quota (`RESOURCE_EXHAUSTED … Resets in 4h7m`), it notes the model as out until then, so the next pick skips it.
   - If messages arrived for the member during the turn, it sends the member round once more with them, marking them read only once they are out. It does this at most 3 times in a row, so a message that keeps being ignored cannot loop.
   - The hook never waits.
+  - Not yet seen at work in a real session: in the live test every message was read within a turn, so the hook never had one to hand over.
 
 #### Codex members (not tested)
 
@@ -284,7 +295,7 @@ codex -c "mcp_servers.tabmancer.command='tabmancer'" \
       -c "mcp_servers.tabmancer.tool_timeout_sec=3600"
 ```
 
-Codex has no background command that wakes an idle session. Instead, the member's `tabmancer team run` wrapper watches the bus and puts each message into the member's thread with `codex queue --thread <id> --message <text> --resume`. The thread is the Codex session whose first prompt carries the member's `[tabmancer:<team>-<member>]` tag. A batch too long for one command line goes as a note to read the messages with `team_inbox`. A message counts as read only once `codex queue` has taken it. What happened last shows in the member's presence (`delivery`).
+Codex has no background command that wakes an idle session. Instead, the member's `tabmancer team run` wrapper watches the bus and puts each message into the member's thread with `codex queue --thread <id> --message <text> --resume`. The thread is the Codex session whose first prompt carries the member's `[tabmancer:<team>-<member>]` tag. A batch too long for one command line goes as a note to read the messages with `team_inbox`. A message counts as read only once `codex queue` has taken it. What happened last (`delivery: queued`, `codex queue failed ...`) shows after the member in `tabmancer team who` and in the `team_who` and `team_status` tools, while its wrapper runs.
 
 To use the tools in a Codex session you started yourself, `codex mcp add tabmancer -- tabmancer mcp --team shop --member qa` keeps the server for every session instead. Set `tool_timeout_sec` under `[mcp_servers.tabmancer]` in Codex's config then.
 

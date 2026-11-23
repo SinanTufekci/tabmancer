@@ -174,10 +174,14 @@ class FakeAgy:
         self.fail = fail
 
     def __call__(self, argv, **kwargs):
+        # As _run calls agy: no stdin, its output into a file (a pipe hung on agy 1.5.15), errors too.
+        assert kwargs["stdin"] is subprocess.DEVNULL and kwargs["stderr"] is subprocess.STDOUT
+        assert "capture_output" not in kwargs and kwargs["stdout"] not in (None, subprocess.PIPE)
         self.calls.append(list(argv[1:]))
         verb = argv[2]
         if verb == self.fail:
-            return subprocess.CompletedProcess(argv, 1, "", f"{verb} broke")
+            kwargs["stdout"].write(f"{verb} broke".encode())
+            return subprocess.CompletedProcess(argv, 1)
         if verb == "install":  # agy copies the folder in, and makes its manifest and data folder
             target = agyplugin.installed_dir()
             target.mkdir(parents=True, exist_ok=True)
@@ -189,7 +193,8 @@ class FakeAgy:
             import shutil
 
             shutil.rmtree(agyplugin.installed_dir())
-        return subprocess.CompletedProcess(argv, 0, "ok", "")
+        kwargs["stdout"].write(b"ok")
+        return subprocess.CompletedProcess(argv, 0)
 
 
 @pytest.fixture
@@ -270,8 +275,41 @@ def test_an_agy_members_role_names_the_tools_only_when_the_plugin_is_there(tmp_p
     assert "team_send, team_inbox, team_who, team_status" in role
     assert "keep waiting with the background listen" in role and "listen shop ui" in role
     # Sends go through the tool (outside the sandbox), the first call alone, and acks when they are off.
-    assert 'Send a message with `the team_send tool (to: "<member>"' in role and "send shop <member>" not in role
+    assert 'Send a message with the team_send tool (to: "<member>", message: "..."), and optionally summary' in role
+    assert "send shop <member>" not in role and "--summary" not in role and "who shop" not in role
+    assert 'report to it with the team_send tool (to: "lead"' in role
     assert "make it alone" in role and "[acks off], call team_inbox with ack: true" in role
+    # agy allows the tools (install put them in its allow list): no first call to make alone.
+    agyplugin.allow_tools()
+    role = teams.role(team, ui)
+    assert "make it alone" not in role and "may ask for approval" not in role
+    assert "[acks off], call team_inbox with ack: true" in role
+
+
+@pytest.mark.parametrize("decide", [0, 3])
+def test_an_agy_lead_with_the_plugin_adds_and_brings_back_members_with_team_request(tmp_path, monkeypatch, decide):
+    from tabmancer import teams
+
+    folder = tmp_path / "shop"
+    folder.mkdir()
+    team = teams.new_team("shop", str(folder), "Build checkout",
+                          teams.parse_members("lead: plans @agy\nui: screens", lead_ok=True))
+    team.decide = decide
+    lead = team.members[0]
+    bare = teams.role(team, lead)
+    assert "team start shop <member>" in bare and "team_request" not in bare  # the shell command, as before
+    monkeypatch.setattr(agyplugin, "status", lambda: "installed")
+    role = teams.role(team, lead)
+    # From agy's sandbox a shell command may not reach tabmancer: the tools do, asked of the user.
+    assert 'team_request tool (action: "start", members: ["<member>"])' in role
+    assert "team start shop" not in role and "send shop <member>" not in role
+    assert "first task with the team_send tool" in role
+    if decide:
+        assert 'team_request tool (action: "add", lineup:' in role and "team add shop" not in role
+    # A Claude lead is not touched by agy's plugin.
+    claude = teams.new_team("shop2", str(folder), "Build checkout",
+                            teams.parse_members("lead: plans\nui: screens @agy", lead_ok=True))
+    assert "team_request" not in teams.role(claude, claude.members[0])
 
 
 @pytest.mark.parametrize("event", [{"terminationReason": "END"}, {"terminationReason": "END", "executionNum": None},
@@ -299,79 +337,133 @@ def test_a_folder_name_cmd_would_read_runs_as_written(tmp_path):
     assert done.stdout.strip() == "ran ok", done.stdout + done.stderr
 
 
-# --- the PreToolUse hook: the team's own tools without a prompt -----------------------------------
+# --- agy's allow list: the team's tools without a prompt ------------------------------------------
+# (agy 1.5.15 asks before every MCP call whatever a PreToolUse hook answers; its allow list is
+# what skips the prompt.) All on the tests' agy home, never the real ~/.gemini.
 
-def _pretool(event, environ=None) -> dict:
-    out = io.StringIO()
-    text = event if isinstance(event, str) else json.dumps(event)
-    assert agyplugin.pretool(io.StringIO(text), out, environ if environ is not None else {}) == 0
-    return json.loads(out.getvalue())
-
-
-def _call(tool, server="tabmancer_tabmancer", quoted=False):
-    args = {"ServerName": server, "ToolName": tool, "Arguments": {}}
-    if quoted:  # as the transcript writes them: each value as JSON text
-        args = {key: json.dumps(value) for key, value in args.items()}
-    return {"toolCall": {"id": "c1", "name": "mcp_tool", "args": args}, "stepIdx": 14}
-
-
-@pytest.mark.parametrize("tool", sorted(agyplugin.TEAM_TOOLS))
-@pytest.mark.parametrize("server", ["tabmancer_tabmancer", "tabmancer"])
-def test_a_members_team_tools_are_allowed(tool, server):
-    assert _pretool(_call(tool, server), TEAM)["decision"] == "allow"
-    assert _pretool(_call(tool, server, quoted=True), TEAM)["decision"] == "allow"
+OURS = [f"mcp(tabmancer_tabmancer/{tool})" for tool in
+        ("team_send", "team_inbox", "team_wait", "team_who", "team_status")]
+THEIRS = {
+    "allowNonWorkspaceAccess": True,
+    "model": "Gemini 4 Neon (High)",
+    "permissions": {"allow": ["mcp(trello/list_boards)", "mcp(tabmancer_tabmancer/team_inbox)",
+                              "command(C:\\Program Files\\KiCad\\kicad-cli.exe)"],
+                    "deny": ["mcp(x/y)"]},
+    "trustedWorkspaces": ["C:\\Users\\me\\Desktop\\proj", "ü-folder"],
+}
 
 
-@pytest.mark.parametrize(("event", "environ"), [
-    (_call("team_request"), TEAM),  # what a lead starts or adds is always asked of you
-    (_call("team_who"), {}),  # not a team session
-    (_call("team_who"), {"TABMANCER_TEAM": "shop"}),
-    (_call("team_who", server="trello"), TEAM),  # another server's tool, even with our name
-    (_call("list_boards", server="trello"), TEAM),
-    (_call("team_who", server="tabmancer_other"), TEAM),
-    ({"toolCall": {"name": "run_command", "args": {"CommandLine": "ping -n 20 127.0.0.1"}}}, TEAM),
-])
-def test_anything_else_gets_no_opinion(event, environ):
-    assert _pretool(event, environ) == {"decision": ""}
+def _settings() -> dict:
+    return json.loads(agyplugin.settings_file().read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("text", ["", "not json", "[]", "null", '{"toolCall": null}', '{"toolCall": {"args": 3}}',
-                                  '{"toolCall": {"args": {"ServerName": 1, "ToolName": "team_who"}}}',
-                                  '{"toolCall": {"args": "{broken"}}'])
-def test_bad_input_gets_no_opinion(text):
-    assert _pretool(text, TEAM) == {"decision": ""}
+def _put_settings(value) -> None:
+    agyplugin.settings_file().parent.mkdir(parents=True, exist_ok=True)
+    text = value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+    agyplugin.settings_file().write_text(text, encoding="utf-8")
 
 
-def test_a_decision_that_cannot_be_reached_is_no_opinion(monkeypatch):
-    def boom(event, environ):
-        raise RuntimeError("anything")
+def test_the_allow_list_lives_in_agys_settings_under_the_tests_home():
+    assert agyplugin.settings_file() == agy.home() / "settings.json"
+    assert "no-agy-home" in str(agyplugin.settings_file())  # conftest's, never the real one
 
-    monkeypatch.setattr(agyplugin, "tool_decision", boom)
-    assert _pretool(_call("team_who"), TEAM) == {"decision": ""}
+
+def test_install_adds_only_the_missing_entries_and_keeps_everything_else_in_order(fake_agy):
+    _put_settings(THEIRS)
+    assert agyplugin.asked_tools() == ["team_send", "team_wait", "team_who", "team_status"]
+    done, said = agyplugin.install(fake_agy)
+    assert done and "4 added" in said and "team_request still asks" in said
+    now = _settings()
+    assert list(now) == list(THEIRS)  # every key, in its order
+    assert {k: v for k, v in now.items() if k != "permissions"} == {k: v for k, v in THEIRS.items()
+                                                                     if k != "permissions"}
+    assert now["permissions"]["deny"] == ["mcp(x/y)"]
+    allow = now["permissions"]["allow"]
+    assert allow[:3] == THEIRS["permissions"]["allow"]  # what was there, first and as it was
+    assert sorted(allow[3:]) == sorted(e for e in OURS if e != "mcp(tabmancer_tabmancer/team_inbox)")
+    assert len(allow) == len(set(allow)) and not any("team_request" in e for e in allow)
+    assert agyplugin.asked_tools() == []
+    text = agyplugin.settings_file().read_bytes()
+    assert b"\r" not in text and text.endswith(b"}\n") and "ü-folder".encode() in text  # as agy writes it
+    before = agyplugin.settings_file().stat().st_mtime_ns
+    agyplugin.install(fake_agy)  # nothing missing: the file is not written again
+    assert agyplugin.settings_file().stat().st_mtime_ns == before and _settings() == now
+
+
+def test_remove_takes_away_exactly_what_install_added(fake_agy):
+    _put_settings(THEIRS)
+    agyplugin.install(fake_agy)
+    done, said = agyplugin.remove(fake_agy)
+    assert done and "4 entries from agy's allow list" in said
+    assert _settings() == THEIRS  # team_inbox was there before (a tab's "always allow"): it stays
+
+
+def test_a_missing_settings_file_is_made_with_the_entries_alone(fake_agy):
+    assert not agyplugin.settings_file().exists()
+    assert agyplugin.install(fake_agy)[0]
+    assert _settings() == {"permissions": {"allow": OURS}}
+    assert not list(agyplugin.settings_file().parent.glob(".settings-*"))  # no temporary file left
+    agyplugin.remove(fake_agy)
+    assert _settings() == {"permissions": {"allow": []}}
+
+
+@pytest.mark.parametrize("text", ["{not json", "[]", '{"permissions": []}', '{"permissions": {"allow": "x"}}',
+                                  '// agy\n{"permissions": {}}'])
+def test_settings_it_cannot_add_to_are_refused_and_nothing_is_installed(fake_agy, text):
+    _put_settings(text)
+    done, said = agyplugin.install(fake_agy)
+    assert not done and said.startswith("Nothing installed:") and "will not rewrite" in said
+    assert fake_agy.calls == [] and agyplugin.status() == "missing"
+    assert agyplugin.settings_file().read_text(encoding="utf-8") == text  # untouched
+    assert agyplugin.asked_tools() == list(agyplugin.TEAM_TOOLS)
+
+
+def test_a_settings_file_broken_after_install_keeps_remove_from_touching_it(fake_agy):
+    agyplugin.install(fake_agy)
+    _put_settings("{broken")
+    done, said = agyplugin.remove(fake_agy)
+    assert done and "Its tools stay in agy's allow list" in said
+    assert agyplugin.settings_file().read_text(encoding="utf-8") == "{broken"
+
+
+def test_remove_without_a_record_takes_the_teams_entries_only(fake_agy):
+    agyplugin.install(fake_agy)
+    agyplugin._state_path().unlink()  # an install from before tabmancer kept what it added
+    _put_settings({"permissions": {"allow": ["mcp(trello/list_boards)", *OURS, "mcp(tabmancer_tabmancer/team_request)"]}})
+    agyplugin.remove(fake_agy)
+    assert _settings() == {"permissions": {"allow": ["mcp(trello/list_boards)", "mcp(tabmancer_tabmancer/team_request)"]}}
+
+
+def test_status_says_which_tools_agy_will_ask_for(fake_agy, capsys):
+    agyplugin.install(fake_agy)
+    _put_settings({"permissions": {"allow": OURS[:3]}})
+    assert agyplugin.main(["status"]) == 0
+    assert "agy will ask for team_who, team_status" in capsys.readouterr().out
 
 
 def test_the_team_tools_are_the_ones_claude_members_run_unasked():
     from tabmancer import teams
 
-    assert set(teams.MCP_ALLOWED) == agyplugin.TEAM_TOOLS and "team_request" not in agyplugin.TEAM_TOOLS
+    assert agyplugin.TEAM_TOOLS == teams.MCP_ALLOWED and "team_request" not in agyplugin.TEAM_TOOLS
 
 
-def test_the_pretool_hook_is_in_the_plugin_for_mcp_calls_only():
-    [group] = json.loads(agyplugin.files()["hooks.json"])["tabmancer-tools"]["PreToolUse"]
-    assert group["matcher"] == "mcp_tool|call_mcp_tool"
-    [handler] = group["hooks"]
-    assert handler["command"].endswith("-I -m tabmancer.agyplugin hook pretool")
-    assert handler["timeout"] == agyplugin.PRETOOL_TIMEOUT == 5
+def test_the_plugin_has_no_pretool_hook_any_more():
+    """agy 1.5.15 asked all the same after a PreToolUse "allow": the allow list does it instead."""
+    assert set(json.loads(agyplugin.files()["hooks.json"])) == {"tabmancer-stop"}
+    assert not hasattr(agyplugin, "pretool")
 
 
-def test_the_pretool_command_as_written_runs_through_cmd():
-    """The seam: hooks.json's command string, run the way agy runs it, with agy's env."""
-    [group] = json.loads(agyplugin.files()["hooks.json"])["tabmancer-tools"]["PreToolUse"]
-    command = group["hooks"][0]["command"]
-    for environ, expected in (({**os.environ, **TEAM}, "allow"),
-                              ({k: v for k, v in os.environ.items() if not k.startswith("TABMANCER_")}, "")):
-        done = subprocess.run(command, shell=True, input=json.dumps(_call("team_send", quoted=True)),
-                              capture_output=True, text=True, encoding="utf-8", env=environ, timeout=60,
-                              check=False)
-        assert done.returncode == 0, done.stderr
-        assert json.loads(done.stdout)["decision"] == expected
+def test_agys_output_is_read_from_a_file_even_when_a_child_keeps_its_pipe_open(tmp_path):
+    """agy 1.5.15 leaves a process holding its output open: read from a pipe, validate and install
+    waited out the 60 s timeout. Here a child that lives on 30 s after its parent exits."""
+    import time
+
+    script = tmp_path / "leaves_a_child.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "print('validated')\n", encoding="utf-8")
+    started = time.monotonic()
+    code, said = agyplugin._run([sys.executable, "-I", str(script)])
+    assert (code, said) == (0, "validated")
+    assert time.monotonic() - started < 15

@@ -180,21 +180,43 @@ def checks() -> list[Result]:
 
 def agy_plugin_check() -> Result | None:
     """Whether agy members of tabmancer teams have the plugin (the bus as tools, messages handed
-    over when a turn ends): offered, never installed from here, since it changes agy's plugins.
-    None when agy is not installed."""
-    from . import agyplugin
+    over when a turn ends): its version, whether agy has it turned on, and offered, never installed
+    from here, since it changes agy's plugins. None when agy is not installed, or when the plugin is
+    missing and no team has an agy member to want it."""
+    from . import __version__, agyplugin
 
     if agyplugin._agy() is None:
         return None
     state = agyplugin.status()
-    if state == "installed":
-        return "ok", "The tabmancer agy plugin is installed (agy team members get the team_* tools)."
+    if state == "missing":
+        if not _an_agy_member():
+            return None
+        return "ok", ("agy team members can get the team bus as tools, and messages handed over when a turn "
+                      "ends: tabmancer agy-plugin install (it adds a plugin to agy; tabmancer agy-plugin remove "
+                      "takes it away).")
+    version = agyplugin.installed_version() or "unknown"
+    if agyplugin.enabled() is False:
+        return "warn", (f"The tabmancer agy plugin ({version}) is installed but turned off in agy, so agy members "
+                        f"go without the team_* tools: agy plugin enable {agyplugin.NAME}")
     if state == "outdated":
-        return "warn", ("The tabmancer agy plugin is older than this tabmancer: tabmancer agy-plugin install "
-                        "brings it up to date.")
-    return "ok", ("agy team members can get the team bus as tools, and messages handed over when a turn "
-                  "ends: tabmancer agy-plugin install (it adds a plugin to agy; tabmancer agy-plugin remove "
-                  "takes it away).")
+        return "warn", (f"The tabmancer agy plugin is older than this tabmancer ({version}, now {__version__}): "
+                        "tabmancer agy-plugin install brings it up to date.")
+    asked = agyplugin.asked_tools()
+    if asked:
+        return "warn", (f"The tabmancer agy plugin {version} is installed, but agy will ask for {', '.join(asked)} "
+                        f"(not in permissions.allow of {agyplugin.settings_file()}), and a member waits at "
+                        "each prompt: tabmancer agy-plugin install adds them.")
+    return "ok", f"The tabmancer agy plugin {version} is installed (agy team members get the team_* tools)."
+
+
+def _an_agy_member() -> bool:
+    """Whether a saved team has an agy member."""
+    try:
+        from . import teams
+
+        return any(m.cli == "agy" for team in teams.load().values() for m in team.members)
+    except Exception:  # noqa: BLE001  (a teams file doctor cannot read is said by its own check)
+        return False
 
 
 def shortcut_check() -> Result | None:

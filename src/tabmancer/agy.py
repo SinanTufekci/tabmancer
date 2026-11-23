@@ -362,9 +362,10 @@ def find(days: float = 14) -> list[Session]:
 
 # --- which model an agy session runs on ----------------------------------------------------------
 # Never a Claude model through agy, nor a GPT one (agy bills both to its "Claude and GPT models"
-# quota): Argon while its quota lasts, then Hydrogen, and Flash only when Hydrogen is out too. Any
-# other model asked for by name (gemini-4-neon-high, say) is kept as it is. Claude Code's own picks
-# (picks.py) are not touched by any of this.
+# quota): the chain's models in order, each while its quota lasts (Neon, then Hydrogen, unless
+# config.json "agy_models" says otherwise), and none when all are out: the user then picks or waits.
+# Any other model asked for by name (gemini-4-argon-high, say) is kept as it is. Claude Code's own
+# picks (picks.py) are not touched by any of this.
 #
 # agy says what is left with `agy -p /usage` (1.1.11 and later): no agent turn, no quota spent,
 # some 3 s. One tab-separated row per limit, e.g.
@@ -373,21 +374,17 @@ def find(days: float = 14) -> list[Session]:
 # pick_model() only reads that file, so it is cheap. A run that fails on quota can be noted with
 # note_out_of_quota(), which holds until the reset it names.
 
-CHAIN = ("gemini-4-argon-high", "gemini-4-hydrogen-high", "gemini-3.8-flash-high")
-CHAIN_NAMES = {"gemini-4-argon-high": "Argon", "gemini-4-hydrogen-high": "Hydrogen",
-               "gemini-3.8-flash-high": "Flash"}
-# One line each, said where the model is picked.
-CHAIN_WORDS = {
-    "gemini-4-argon-high": "the first choice, while its own weekly quota lasts",
-    "gemini-4-hydrogen-high": "when Argon is out of quota",
-    "gemini-3.8-flash-high": "only when Hydrogen is out of quota too",
-}
-# The /usage families each model draws on. Argon has a family of its own; Hydrogen is under
-# "Gemini Models" (a live 429 on Hydrogen came with that row at 0%), which has a five-hour and a
-# weekly window: either at 0% is out. Flash names no row of its own: taken as under "Gemini Models"
-# too, so with that row at 0% the whole chain is out once Argon is.
-QUOTA_FAMILIES = {"gemini-4-argon-high": ("Gemini 4 Argon",), "gemini-4-hydrogen-high": ("Gemini Models",),
-                  "gemini-3.8-flash-high": ("Gemini Models",)}
+# The models agy's sessions get, in order, each while its quota lasts: config.json "agy_models" (a
+# list of agy model ids), else these. With all of them out of quota there is no model: the one who
+# starts the session picks one or waits; nothing else is put in their place.
+DEFAULT_CHAIN = ("gemini-4-neon-high", "gemini-4-hydrogen-high")
+CHAIN_SETTING = "agy_models"
+# The /usage family a model draws on: one named after it ("Gemini 4 Argon" for Argon), else, for a
+# Gemini model, "Gemini Models" (Hydrogen: a live 429 on it came with that row at 0%; Neon names no
+# row of its own as of agy 1.5.15, 2026-11-23). That family has a five-hour and a weekly window:
+# either at 0% is out.
+SHARED_FAMILY = "Gemini Models"
+MODEL_NAME = re.compile(r"^gemini-[\d.]+-([a-z]+)-(?:minimal|low|medium|high|xhigh)$")
 QUOTA_FILE = "agy_quota.json"
 STALE = timedelta(hours=2)  # a /usage read older than this says nothing about now
 NOTED_FOR = timedelta(hours=5)  # a quota failure noted with no reset time holds this long
@@ -416,10 +413,60 @@ def installed() -> bool:
     return shutil.which("agy") is not None
 
 
+def chain() -> tuple[str, ...]:
+    """The models agy's sessions get, in order: config.json "agy_models", else DEFAULT_CHAIN. A
+    Claude or GPT model in that list is left out (never through agy); a list with none left, or
+    no list, gives the default."""
+    saved = read_json("config.json")
+    listed = saved.get(CHAIN_SETTING) if isinstance(saved, dict) else None
+    if isinstance(listed, list):
+        models = tuple(dict.fromkeys(model_id(m) for m in listed if isinstance(m, str) and m.strip()))
+        models = tuple(m for m in models if m and not barred(m))
+        if models:
+            return models
+    return DEFAULT_CHAIN
+
+
+def model_id(model: str) -> str:
+    """An agy model id from its id or its display name: 'Gemini 4 Neon (High)' -> 'gemini-4-neon-high'."""
+    return re.sub(r"[^a-z0-9.]+", "-", (model or "").strip().lower()).strip("-")
+
+
 def chain_id(model: str) -> str:
-    """The chain's id for a model written as its id or its display name ('Gemini 4 Argon (High)'); '' if none."""
-    plain = re.sub(r"[^a-z0-9.]+", "-", (model or "").strip().lower()).strip("-")
-    return plain if plain in CHAIN else ""
+    """The chain's id for a model written as its id or its display name ('Gemini 4 Neon (High)'); '' if none."""
+    plain = model_id(model)
+    return plain if plain in chain() else ""
+
+
+def name(model: str) -> str:
+    """A model's short name: 'gemini-4-neon-high' -> 'Neon', 'gemini-3.8-flash-high' -> 'Flash'; any
+    other model as written."""
+    found = MODEL_NAME.match(model_id(model))
+    return found[1].capitalize() if found else (model or "").strip()
+
+
+def chain_words(model: str, models: tuple[str, ...] | None = None) -> str:
+    """Where a model stands in the chain, in a few words: said where the model is picked."""
+    models = models if models is not None else chain()
+    if model not in models:
+        return "picked by you, outside the chain"
+    at = models.index(model)
+    if at == 0:
+        return "the first choice, while its quota lasts"
+    return f"when {' and '.join(name(m) for m in models[:at])} {'is' if at == 1 else 'are'} out of quota"
+
+
+def chain_line(models: tuple[str, ...] | None = None) -> str:
+    """'Neon while its quota lasts, then Hydrogen; both out: you pick one or wait'."""
+    models = models if models is not None else chain()
+    names = [name(m) for m in models]
+    first = f"{names[0]} while its quota lasts" + "".join(f", then {n}" for n in names[1:])
+    return f"{first}; {'both' if len(names) == 2 else 'all'} out: you pick one or wait"
+
+
+class NoModel(OSError):
+    """No agy model to start with: every model of the chain is out of quota. An OSError so that
+    each place that opens tabs says it, as it says a terminal that would not start."""
 
 
 def _utc(value) -> datetime | None:
@@ -460,10 +507,16 @@ def parse_usage(stdout: str) -> list[list[str]]:
     return rows
 
 
-def _family_of(model: str, family: str) -> bool:
-    """Whether a /usage family is one the model draws on: by name, any case, or a longer name holding it."""
-    name = family.strip().lower()
-    return any(wanted.lower() in name for wanted in QUOTA_FAMILIES.get(model, ()))
+def _families(model: str, rows: list) -> set[str]:
+    """The /usage families a model draws on, as the rows name them: a family named after the model
+    ('Gemini 4 Argon'), else the shared one for a Gemini model; none for another model."""
+    plain = model_id(model)
+    short = name(plain).lower()
+    named = {str(row[0]).strip() for row in rows if row and MODEL_NAME.match(plain)
+             and re.search(rf"\b{re.escape(short)}\b", str(row[0]).lower())}
+    if named:
+        return named
+    return {SHARED_FAMILY} if plain.startswith("gemini") else set()
 
 
 def load_quota() -> dict:
@@ -473,7 +526,7 @@ def load_quota() -> dict:
       older than STALE (2 h) says nothing about now.
     - 'rows': list of [family, limit, remaining, resets, ...] as /usage printed them, all str:
       ["Gemini 4 Argon", "Gemini 4 Argon Weekly Limit", "37%", "2026-11-25T07:02:59Z"]. remaining
-      reads with _percent() ("37,5%", "<1%"); QUOTA_FAMILIES says which family a model draws on.
+      reads with _percent() ("37,5%", "<1%"); _families() says which family a model draws on.
     - 'out': {model id: UTC ISO time it is back}: models noted out of quota (note_out_of_quota).
     - 'unreadable': str, UTC ISO time agy last answered something that was no table; '' otherwise.
 
@@ -597,10 +650,13 @@ def _refresh(timeout: float, now: datetime | None) -> bool:
     data["unreadable"] = ""
 
     def still_out(model: str, until: str) -> bool:
+        """A note holds until its time, unless a family named after the model shows some left: the
+        shared family having some says nothing of one model's own quota ("Individual quota reached")."""
         if (_utc(until) or now) <= now:
             return False
-        shares = [_percent(remaining) for family, _, remaining, *_ in rows if _family_of(model, family)]
-        return not shares or min(s or 0 for s in shares) <= 0  # its family has some left: back already
+        own = _families(model, rows) - {SHARED_FAMILY}
+        shares = [_percent(remaining) for family, _, remaining, *_ in rows if family.strip() in own]
+        return not shares or min(s or 0 for s in shares) <= 0
 
     data["out"] = {model: until for model, until in data["out"].items() if still_out(model, until)}
     _save_quota(data)
@@ -613,25 +669,22 @@ def _fresh(quota: dict, now: datetime) -> datetime | None:
     return read_at if read_at is not None and now - read_at <= STALE else None
 
 
-def _same_family(model: str, other: str) -> bool:
-    """Whether two models draw on the same quota: the same model, or a /usage family in common."""
-    return model == other or bool(set(QUOTA_FAMILIES.get(model, ())) & set(QUOTA_FAMILIES.get(other, ())))
-
-
 def _out_until(model: str, quota: dict, now: datetime) -> datetime | None:
     """When a model is back if it is out of quota now; None when it is not known to be out. Out by
-    a note on it or on a model of its family, or by any of its family's rows at 0% (a five-hour
-    window and a weekly one each count); back once the last of those lifts."""
+    a note on it (only on it: one model's 429 says nothing of another's quota, so the next in the
+    chain is tried), or by any of its family's rows at 0% (a five-hour window and a weekly one each
+    count: then every model of that family is out); back once the last of those lifts."""
     backs = []
     for noted, until in quota["out"].items():
-        if _same_family(model, noted):
+        if noted == model:
             back = _utc(until) or now + NOTED_FOR
             if back > now:
                 backs.append(back)
     read_at = _fresh(quota, now)
     if read_at is not None:
+        families = _families(model, quota["rows"])
         for family, _, remaining, *rest in quota["rows"]:
-            if _family_of(model, family) and _percent(remaining) == 0:
+            if family.strip() in families and _percent(remaining) == 0:
                 back = _utc(rest[0] if rest else "") or read_at + STALE
                 if back > now:
                     backs.append(back)
@@ -642,7 +695,8 @@ def _left(model: str, quota: dict, now: datetime) -> str:
     """'37% of its week left' from a fresh read, or '' when it is not known."""
     if _fresh(quota, now) is None:
         return ""
-    found = [(limit, remaining) for family, limit, remaining, *_ in quota["rows"] if _family_of(model, family)]
+    families = _families(model, quota["rows"])
+    found = [(limit, remaining) for family, limit, remaining, *_ in quota["rows"] if family.strip() in families]
     if not found:
         return ""
     limit, remaining = min(found, key=lambda row: _percent(row[1]) or 0)
@@ -655,52 +709,65 @@ def _when_back(moment: datetime) -> str:
 
 
 def pick_model(usage: dict | None = None, now: datetime | None = None, start: str = "") -> tuple[str, str]:
-    """The model an agy session should run on, and why: the first of CHAIN not known to be out of
-    quota (from `start` on, when given), and Flash, the rule's last step, when all are. Never a
-    Claude model; ('', why) only when there is no agy. Reads only the saved quota (refresh_quota()
-    reads agy's), so it is cheap; never raises."""
+    """The model an agy session should run on, and why: the first of the chain (chain()) not known
+    to be out of quota, from `start` on when given. ('', why) when every one is out ("Neon and
+    Hydrogen out until Nov 23 12:16: pick one or wait"): nothing else is put in their place, the
+    one who starts the session decides. ('', why) too when there is no agy. Never a Claude or GPT
+    model. Reads only the saved quota (refresh_quota() reads agy's), so it is cheap; never raises."""
     if not installed():
         return "", "agy is not installed"
     return _pick(usage, now, start)
 
 
+def _quota(usage: dict | None) -> dict:
+    quota = usage if usage is not None else load_quota()
+    return {"read_at": str(quota.get("read_at") or ""), "rows": list(quota.get("rows") or []),
+            "out": dict(quota.get("out") or {}), "unreadable": str(quota.get("unreadable") or "")}
+
+
 def _pick(usage: dict | None, now: datetime | None, start: str) -> tuple[str, str]:
+    models = chain()
     try:
-        quota = usage if usage is not None else load_quota()
-        quota = {"read_at": str(quota.get("read_at") or ""), "rows": list(quota.get("rows") or []),
-                 "out": dict(quota.get("out") or {}), "unreadable": str(quota.get("unreadable") or "")}
+        quota = _quota(usage)
         now = now or datetime.now(timezone.utc)
         skipped: list[tuple[str, datetime]] = []
-        for model in CHAIN[CHAIN.index(start) if start in CHAIN else 0:]:
+        for model in models[models.index(start) if start in models else 0:]:
             back = _out_until(model, quota, now)
             if back is not None:
                 skipped.append((model, back))
                 continue
             if skipped:
-                gone = "; ".join(f"{CHAIN_NAMES[m]} out of quota until {_when_back(b)}" for m, b in skipped)
-                return model, f"{gone}: {CHAIN_NAMES[model]} next"
+                gone = "; ".join(f"{name(m)} out of quota until {_when_back(b)}" for m, b in skipped)
+                return model, f"{gone}: {name(model)} next"
             left = _left(model, quota, now)
             if left:
-                return model, f"{CHAIN_NAMES[model]}: {left}"
+                return model, f"{name(model)}: {left}"
             if _fresh(quota, now) is not None:
-                return model, f"{CHAIN_NAMES[model]} first"
+                return model, f"{name(model)} first"
             unreadable = _utc(quota["unreadable"])
             known = unreadable is not None and now - unreadable <= STALE
-            return model, f"{CHAIN_NAMES[model]} first ({UNREADABLE if known else 'quota not read yet'})"
-        last, _ = skipped[-1]
-        model, back = min(skipped, key=lambda item: item[1])
-        return last, (f"all agy models out of quota until {_when_back(back)} ({CHAIN_NAMES[model]} back first); "
-                      f"{CHAIN_NAMES[last]}, the last, is given all the same and will likely fail")
+            return model, f"{name(model)} first ({UNREADABLE if known else 'quota not read yet'})"
+        return "", out_words(skipped)
     except Exception:  # noqa: BLE001 - a guess beats a crash: the chain's first
-        return CHAIN[0], f"{CHAIN_NAMES[CHAIN[0]]} first ({UNREADABLE})"
+        return models[0], f"{name(models[0])} first ({UNREADABLE})"
+
+
+def out_words(skipped: list[tuple[str, datetime]]) -> str:
+    """'Neon and Hydrogen out until Nov 23 12:16: pick one or wait', short: a dialog's line holds
+    some 80 characters. The time is when the first of them is back."""
+    names = [name(m) for m, _ in skipped]
+    back = min(b for _, b in skipped)
+    who = " and ".join(names) if len(names) <= 2 else "all agy models"
+    return f"{who} out until {_when_back(back)}: pick one or wait"
 
 
 def resolve(model: str = "", usage: dict | None = None, now: datetime | None = None) -> tuple[str, str]:
     """The model an agy session is started with, for what was asked: the one guard on the way to
     `agy --model`. Empty or "auto" gives the chain's model by quota; a chain model is kept (the
     chain goes on from it if that one is out); a Claude or GPT model gives the chain's, with a note
-    saying so; any other model is kept as asked. Never empty, never "auto": with the whole chain
-    out it is still Flash, the last in it, not agy's own default."""
+    saying so; any other model is kept as asked (a model typed is the user's choice, Argon too).
+    Never "auto". ('', why) when the chain is needed and all of it is out of quota: the caller
+    asks, or refuses where it can be seen; it never picks another model."""
     word = (model or "").strip()
     if word and word.lower() != "auto" and not barred(word) and not chain_id(word):
         return word, ""
@@ -709,8 +776,13 @@ def resolve(model: str = "", usage: dict | None = None, now: datetime | None = N
     if asked:
         return picked, ("" if picked == asked else why)
     if barred(word):
-        return picked, f"{word} never runs through agy: {CHAIN_NAMES[picked]} instead ({why})"
+        # With the chain out, only why: the short line a dialog holds (the model asked for is not run anyway).
+        return picked, f"{word} never runs through agy: {name(picked)} instead ({why})" if picked else why
     return picked, why
+
+
+def no_model(why: str) -> NoModel:
+    return NoModel(f"no agy model now: {why}" if why else "no agy model now")
 
 
 def model_flags(model: str, options: tuple[str, ...] | list[str] = (), session_id: str = "",
@@ -718,8 +790,10 @@ def model_flags(model: str, options: tuple[str, ...] | list[str] = (), session_i
     """For an agy command line: (--model flags to add, the options with any --model in them made
     safe, a note when a model was replaced). A --model X or --model=X in the options goes through
     resolve() too. With no model of its own, a new session (no session_id) gets the chain's; a
-    resumed one keeps the model its transcript says it ran on, unless that is a Claude or GPT one
-    or not known, when it gets the chain's. "auto" never reaches agy."""
+    resumed one keeps the model its transcript says it ran on while that is one of the chain, else
+    (Argon from an older chain, a Claude or GPT one, not known) it gets the chain's. "auto" never
+    reaches agy. Raises NoModel when the chain is needed and all of it is out of quota: the tab
+    is not opened, and why is said, rather than another model run in its place."""
     opts, notes, found = list(options), [], False
     for index, word in enumerate(opts):
         value = opts[index + 1] if word == "--model" and index + 1 < len(opts) else (
@@ -728,6 +802,8 @@ def model_flags(model: str, options: tuple[str, ...] | list[str] = (), session_i
             continue
         found = True
         safe, note = resolve(value, usage, now)
+        if not safe:
+            raise no_model(note)
         notes += [note] if note and (barred(value) or chain_id(value)) else []
         if word == "--model":
             opts[index + 1] = safe
@@ -738,12 +814,18 @@ def model_flags(model: str, options: tuple[str, ...] | list[str] = (), session_i
     word = (model or "").strip()
     if not word and session_id:
         ran_on = str(_read_transcript(transcript_path(session_id)).get("model") or "")
-        if ran_on and not barred(ran_on):
+        if ran_on and chain_id(ran_on):
             return [], opts, ""  # it goes on with the model it ran on
         safe, why = resolve("", usage, now)
-        return ["--model", safe], opts, (f"it ran on {ran_on}, which never runs through agy: {why}" if ran_on
-                                         else "")
+        if not safe:
+            raise no_model(why)
+        if not ran_on:
+            return ["--model", safe], opts, ""
+        said = "never runs through agy" if barred(ran_on) else "is not in the chain"
+        return ["--model", safe], opts, f"it ran on {ran_on}, which {said}: {why}"
     safe, note = resolve(word, usage, now)
+    if not safe:
+        raise no_model(note)
     return ["--model", safe], opts, note if barred(word) or chain_id(word) else ""
 
 
@@ -759,17 +841,16 @@ def standing(model: str, usage: dict | None = None, now: datetime | None = None)
     """How a model stands: {'model', 'name', 'left': percent of its tightest limit left (None when
     not known), 'span': 'week' | '5 hours' | 'limit' | '', 'back': when it is back if it is out of
     quota now, else None}. Only what a fresh read (or a noted failure) says; never runs agy."""
-    model_id = chain_id(model) or (model or "").strip()
-    out = {"model": model_id, "name": CHAIN_NAMES.get(model_id, model_id), "left": None, "span": "", "back": None}
+    plain = chain_id(model) or (model or "").strip()
+    out = {"model": plain, "name": name(plain), "left": None, "span": "", "back": None}
     try:
-        quota = usage if usage is not None else load_quota()
-        quota = {"read_at": str(quota.get("read_at") or ""), "rows": list(quota.get("rows") or []),
-                 "out": dict(quota.get("out") or {}), "unreadable": str(quota.get("unreadable") or "")}
+        quota = _quota(usage)
         now = now or datetime.now(timezone.utc)
-        out["back"] = _local(_out_until(model_id, quota, now))
+        out["back"] = _local(_out_until(plain, quota, now))
         if _fresh(quota, now) is not None:
+            families = _families(plain, quota["rows"])
             found = [(limit, _percent(remaining)) for family, limit, remaining, *_ in quota["rows"]
-                     if _family_of(model_id, family)]
+                     if family.strip() in families]
             if found:
                 limit, left = min(found, key=lambda row: row[1] if row[1] is not None else 101)
                 out["left"] = left
@@ -783,7 +864,8 @@ def standing(model: str, usage: dict | None = None, now: datetime | None = None)
 
 def quota_view(usage: dict | None = None, now: datetime | None = None) -> dict:
     """agy's quota for the dashboard: {'read_at': local time of the /usage read or None, 'unreadable':
-    bool, 'chain': [standing() of each model in CHAIN], 'pick': the model a new session gets, 'why'};
+    bool, 'chain': [standing() of each model in chain()], 'pick': the model a new session gets ('' when
+    all are out), 'why'};
     {} when agy is not installed."""
     if not installed():
         return {}
@@ -793,18 +875,16 @@ def quota_view(usage: dict | None = None, now: datetime | None = None) -> dict:
     read_at = _utc(str(quota.get("read_at") or ""))
     unreadable = _utc(str(quota.get("unreadable") or ""))
     return {"read_at": _local(read_at), "unreadable": unreadable is not None and now - unreadable <= STALE,
-            "chain": [standing(model, quota, now) for model in CHAIN], "pick": pick, "why": why}
+            "chain": [standing(model, quota, now) for model in chain()], "pick": pick, "why": why}
 
 
 def all_out(usage: dict | None = None, now: datetime | None = None) -> datetime | None:
     """When the first model of the chain is back, if every one is out of quota now; else None.
     Reads only the saved quota."""
     try:
-        quota = usage if usage is not None else load_quota()
-        quota = {"read_at": str(quota.get("read_at") or ""), "rows": list(quota.get("rows") or []),
-                 "out": dict(quota.get("out") or {}), "unreadable": str(quota.get("unreadable") or "")}
+        quota = _quota(usage)
         now = now or datetime.now(timezone.utc)
-        backs = [_out_until(model, quota, now) for model in CHAIN]
+        backs = [_out_until(model, quota, now) for model in chain()]
     except Exception:  # noqa: BLE001 - not known to be out
         return None
     return None if any(back is None for back in backs) else min(b for b in backs if b is not None)
@@ -833,13 +913,13 @@ def resets_in(text: str) -> timedelta | None:
 def _quota_model(model: str) -> str:
     """The chain model whose quota a model draws on: its own id for a chain model, by its id or
     display name; the chain's model of the same name at another effort ('Gemini 4 Hydrogen (Low)');
-    else the name as written."""
+    else its id ('Gemini 3.8 Flash (High)' -> 'gemini-3.8-flash-high')."""
     found = chain_id(model)
     if found:
         return found
-    plain = (model or "").strip().lower()
-    for chain_model, name in CHAIN_NAMES.items():
-        if name.lower() in plain:
+    plain = model_id(model)
+    for chain_model in chain():
+        if name(chain_model).lower() in plain.split("-"):
             return chain_model
     return plain
 

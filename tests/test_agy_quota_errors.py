@@ -1,4 +1,5 @@
-"""agy out of quota: both windows of a family, the whole chain out, and a run's quota error noted."""
+"""agy out of quota: both windows of a family, the whole chain out (no model then), and a run's
+quota error noted."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -7,7 +8,8 @@ import pytest
 from tabmancer import agy
 
 NOW = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
-ARGON, HYDROGEN, FLASH = agy.CHAIN
+NEON, HYDROGEN = agy.DEFAULT_CHAIN
+ARGON, FLASH = "gemini-4-argon-high", "gemini-3.8-flash-high"
 # What research's retry met on 2026-11-20: Hydrogen failed with this, while /usage said the rows below.
 ERROR = ("RESOURCE_EXHAUSTED (429): Individual quota reached for gemini-4-hydrogen-high. "
          "Resets in 4h7m. Upgrade for more.")
@@ -33,27 +35,28 @@ def test_a_family_keeps_both_its_windows():
 
 @pytest.mark.parametrize(("week", "five"), [("40%", "0%"), ("0%", "40%"), ("0%", "0%")])
 def test_either_window_at_nothing_is_out(week, five):
-    assert agy.pick_model(usage(week=week, five=five, argon="37%"), NOW)[0] == ARGON  # Argon has its own
+    """Neon and Hydrogen both draw on "Gemini Models": either window at 0% takes both."""
+    assert agy.pick_model(usage(week=week, five=five, argon="37%"), NOW)[0] == ""  # Argon's row is not theirs
     assert agy.standing(HYDROGEN, usage(week=week, five=five), NOW)["left"] == 0.0
-    assert agy.standing(FLASH, usage(week=week, five=five), NOW)["back"] is not None  # Flash shares it
+    assert agy.standing(NEON, usage(week=week, five=five), NOW)["back"] is not None
 
 
 def test_the_live_state_is_all_out_and_says_until_when():
     seen = usage()  # Gemini Models' five hours at 0%, Argon's week at 0%: as on 2026-11-20
-    model, why = agy.pick_model(seen, NOW)
-    assert model == FLASH and not agy.barred(model)  # still never Claude, never empty
     first_back = datetime(2026, 11, 20, 16, 7, tzinfo=timezone.utc)
-    assert why.startswith(f"all agy models out of quota until {agy._when_back(first_back)}")
-    assert "Hydrogen back first" in why and "will likely fail" in why
+    model, why = agy.pick_model(seen, NOW)
+    assert model == ""  # none: never another model put in their place, never Claude
+    assert why == f"Neon and Hydrogen out until {agy._when_back(first_back)}: pick one or wait"
     assert agy.all_out(seen, NOW) == first_back
     assert agy.resolve("", seen, NOW) == (model, why)
-    assert agy.resolve("opus", seen, NOW)[0] == FLASH
+    assert agy.resolve("opus", seen, NOW) == ("", why)
+    assert agy.resolve(ARGON, seen, NOW) == (ARGON, "")  # typed: the user's choice, out or not
 
 
 def test_not_all_out_while_one_has_some():
-    assert agy.all_out(usage(five="12%"), NOW) is None  # Hydrogen has some: Argon out, Hydrogen next
-    assert agy.pick_model(usage(five="12%"), NOW)[0] == HYDROGEN
-    assert agy.all_out(usage(argon="5%"), NOW) is None
+    assert agy.all_out(usage(five="12%"), NOW) is None
+    assert agy.pick_model(usage(five="12%"), NOW)[0] == NEON
+    assert agy.all_out(usage(argon="5%"), NOW) is not None  # Argon has some, but it is not in the chain
     assert agy.all_out({}, NOW) is None  # nothing known: not out
 
 
@@ -88,27 +91,35 @@ def test_other_errors_are_not_noted(text):
 
 
 @pytest.mark.parametrize(("written", "noted"), [
-    ("Gemini 4 Hydrogen (High)", HYDROGEN), ("Gemini 4 Hydrogen (Low)", HYDROGEN), ("gemini-4-argon-medium", ARGON),
-    ("Gemini 3.8 Flash (High)", FLASH), ("gemini-4-neon-high", "gemini-4-neon-high"),
+    ("Gemini 4 Hydrogen (High)", HYDROGEN), ("Gemini 4 Hydrogen (Low)", HYDROGEN), ("gemini-4-neon-medium", NEON),
+    ("Gemini 3.8 Flash (High)", FLASH), ("gemini-4-argon-high", ARGON), ("Gemini 4 Argon (Medium)", "gemini-4-argon-medium"),
 ])
 def test_the_model_may_be_written_as_agy_names_it(written, noted):
     agy.note_quota_error(ERROR, written, NOW)
     assert list(agy.load_quota()["out"]) == [noted]
 
 
-def test_hydrogen_noted_out_takes_flash_with_it_not_argon():
-    agy.note_quota_error(ERROR, "Gemini 4 Hydrogen (High)", NOW)
+def test_one_models_429_takes_only_that_model():
+    """"Individual quota reached" for Neon: Hydrogen is tried next, not taken with it."""
+    agy.note_quota_error("Individual quota reached for gemini-4-neon-high, resets in 3h", "Gemini 4 Neon (High)", NOW)
     noted = agy.load_quota()
-    assert agy.pick_model(noted, NOW)[0] == ARGON  # Argon's own week is untouched
-    agy.note_quota_error("Individual quota reached, resets in 3h", ARGON, NOW)
-    noted = agy.load_quota()
-    assert agy.all_out(noted, NOW) == NOW + timedelta(hours=3)  # Argon back first
-    assert agy.pick_model(noted, NOW + timedelta(hours=3, minutes=1))[0] == ARGON
-
-
-def test_a_fresh_read_with_some_left_clears_the_note(monkeypatch):
+    assert list(noted["out"]) == [NEON]
+    assert agy.pick_model(noted, NOW)[0] == HYDROGEN
     agy.note_quota_error(ERROR, HYDROGEN, NOW)
-    monkeypatch.setattr(agy, "_run_usage", lambda timeout: TABLE.format(week="40%", five="3%", argon="0%"))
-    assert agy.refresh_quota(now=NOW + timedelta(minutes=10))
-    assert agy.load_quota()["out"] == {}
-    assert agy.pick_model(None, NOW + timedelta(minutes=10))[0] == HYDROGEN
+    noted = agy.load_quota()
+    assert agy.pick_model(noted, NOW)[0] == ""
+    assert agy.all_out(noted, NOW) == NOW + timedelta(hours=3)  # Neon back first
+    assert agy.pick_model(noted, NOW + timedelta(hours=3, minutes=1))[0] == NEON
+
+
+def test_a_fresh_read_clears_a_note_only_by_the_models_own_row(monkeypatch):
+    """The shared family with some left says nothing of one model's own quota: Hydrogen's note
+    holds until its time. Argon's own row with some left clears Argon's."""
+    agy.note_quota_error(ERROR, HYDROGEN, NOW)
+    agy.note_quota_error("Individual quota reached, resets in 3h", ARGON, NOW)
+    monkeypatch.setattr(agy, "_run_usage", lambda timeout: TABLE.format(week="40%", five="3%", argon="20%"))
+    later = NOW + timedelta(minutes=10)
+    assert agy.refresh_quota(now=later)
+    assert list(agy.load_quota()["out"]) == [HYDROGEN]
+    assert agy.pick_model(None, later)[0] == NEON
+    assert agy.pick_model(None, NOW + timedelta(hours=4, minutes=8))[0] == NEON

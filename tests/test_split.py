@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 
 import pytest
@@ -10,6 +11,29 @@ from test_team_tree import peer, plain, ready, send, shop, transcript
 from tabmancer.app import PANE_LEAST, PANE_MOST, SPLIT_FROM, TEAM_ROW, SessionPicker
 from tabmancer.config import read_json
 from tabmancer.teamview import TeamGraph
+
+
+async def until(pilot, check, what: str, seconds: float = 20.0) -> None:
+    """Until check holds, by the clock, the app idle at each look (pilot.pause() waits for its
+    messages, the refreshes a key queued with them). Fails naming what never came."""
+    end = time.monotonic() + seconds
+    while True:
+        await pilot.pause()
+        if check():
+            return
+        if time.monotonic() > end:
+            raise AssertionError(f"never: {what}")
+        await pilot.pause(0.05)
+
+
+async def settled(pilot) -> None:
+    """What a key set going is done: the app idle twice over, with a refresh between (V's
+    call_after_refresh steps, fit_title's columns made again), not a guess at how long that takes."""
+    for _ in range(3):
+        await pilot.pause()
+        await pilot.wait_for_scheduled_animations()
+    await pilot.pause(0.05)
+    await pilot.pause()
 
 
 def beside(app) -> bool:
@@ -303,31 +327,36 @@ async def test_a_key_that_makes_the_columns_again_keeps_the_cursor_on_its_row(fa
     app = SessionPicker(days=14)
     async with app.run_test(size=(200, 50)) as pilot:
         await ready(pilot, app)
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if f"{TEAM_ROW}docs" in app.table.rows:
-                break
         docs = f"{TEAM_ROW}docs"
+        # Both teams in, and done coming in: a teams poll landing after the cursor moved was a
+        # second rebuild the old 5 s loop let through (it went on even when docs never came).
+        await until(pilot, lambda: docs in app.table.rows and app.team_open("docs"), "the docs team's row")
+        await settled(pilot)
         app.table.move_cursor(row=app.table.get_row_index(docs))
-        await pilot.pause(0.1)
+        await until(pilot, lambda: app.cursor_key() == docs, "the cursor on docs")
         assert app.table.cursor_row > app.table.get_row_index(f"{TEAM_ROW}shop")  # not the first row
-        for _ in range(2):  # under the list, and beside it again
+        for split in (False, True):  # under the list, and beside it again
             await pilot.press("V")
-            await pilot.pause(0.3)
+            await until(pilot, lambda split=split: app.split_on is split, "V taken")
+            await settled(pilot)
             assert app.cursor_key() == docs
-        assert app.team_graph is not None and app.team_graph.team.name == "docs"
+        await until(pilot, lambda: app.team_graph is not None and app.team_graph.team.name == "docs",
+                    "docs's graph in the preview")
         await pilot.press("l")  # the live view: its rows are others (the members, unfolded)
-        await pilot.pause(0.3)
+        await until(pilot, lambda: app.live_mode, "the live view")
+        await settled(pilot)
         rows = [str(r.value) for r in app.table.rows]
         app.table.move_cursor(row=len(rows) - 1)
-        await pilot.pause(0.1)
+        await settled(pilot)
         here = app.cursor_key()
         assert app.table.cursor_row > 1
         await pilot.press("l")
-        await pilot.pause(0.3)
+        await until(pilot, lambda: not app.live_mode, "the list again")
+        await settled(pilot)
         assert here not in app.table.rows or app.cursor_key() == here
         await pilot.press("l")
-        await pilot.pause(0.3)
+        await until(pilot, lambda: app.live_mode, "the live view again")
+        await settled(pilot)
         assert app.cursor_key() == here  # the live view again: back on its row
 
 

@@ -14,7 +14,8 @@ from tabmancer import app as app_module
 from tabmancer import viewmodel as VM
 from tabmancer.sessions import Exit, Session, Status
 
-ARGON, HYDROGEN, FLASH = agy.CHAIN
+NEON, HYDROGEN = agy.DEFAULT_CHAIN
+ARGON, FLASH = "gemini-4-argon-high", "gemini-3.8-flash-high"
 SOON = datetime.now(timezone.utc) + timedelta(days=3)
 ARGON_OUT = [["Gemini Models", "Weekly Limit Remaining", "80%", SOON.isoformat()],
              ["Gemini 4 Argon", "Gemini 4 Argon Weekly Limit", "0%", SOON.isoformat()]]
@@ -34,7 +35,7 @@ def mixed_team(tmp_path) -> teams.Team:
 
 @pytest.fixture
 def quota(monkeypatch):
-    """The saved agy quota a test sets: Argon out, the Gemini models at 80%, read just now."""
+    """The saved agy quota a test sets: Argon out (not in the chain), the Gemini models at 80%, read just now."""
     monkeypatch.setattr(agy, "installed", lambda: True)
     data = {"read_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "rows": ARGON_OUT, "out": {},
             "unreadable": ""}
@@ -67,12 +68,12 @@ def test_a_mixed_teams_members_carry_cli_model_quota_and_state(tmp_path, quota):
     assert by["api"].last is not None and by["api"].last.text == "endpoint done" and by["api"].last.receiver == "lead"
     assert by["lead"].last == by["api"].last  # the newest to or from it
 
-    # agy, not started: the model it starts with, never Claude; Argon out, so Hydrogen, with why.
+    # agy, not started: the model it starts with, never Claude: Neon, with why.
     ui = by["ui"]
-    assert ui.cli == "agy" and ui.model == HYDROGEN and not agy.barred(ui.model) and ui.effort == ""
+    assert ui.cli == "agy" and ui.model == NEON and not agy.barred(ui.model) and ui.effort == ""
     assert "opus never runs through agy" in ui.model_note and ui.state == "not-started"
     assert ui.context is None and ui.quota is not None and ui.quota["left"] == 80.0 and ui.quota["span"] == "week"
-    assert by["qa"].model == FLASH and by["qa"].model_note == ""  # a chain model written for it: kept
+    assert by["qa"].model == FLASH and by["qa"].model_note == ""  # a model written for it: kept, Flash too
 
 
 def test_an_agy_member_out_of_quota_says_when_it_is_back(tmp_path, quota):
@@ -106,12 +107,13 @@ def test_a_claude_only_team_reads_no_bus(tmp_path, monkeypatch):
 
 
 def test_the_view_carries_agys_quota_and_goes_out_as_json(tmp_path, quota):
+    agy.note_out_of_quota(NEON, datetime.now(timezone.utc) + timedelta(hours=2))  # its own 429
     team = mixed_team(tmp_path)
     state = teams.TeamState(team, {m.name: None for m in team.members}, [])
     view = VM.build({}, hidden=set(), pinned=set(), git={}, team_states={}, tokens={}, limits=[], armed={},
                     queued={})
-    assert [s["model"] for s in view.agy_quota["chain"]] == list(agy.CHAIN)
-    assert view.agy_quota["pick"] == HYDROGEN and view.agy_quota["chain"][0]["left"] == 0.0
+    assert [s["model"] for s in view.agy_quota["chain"]] == list(agy.DEFAULT_CHAIN)
+    assert view.agy_quota["pick"] == HYDROGEN and view.agy_quota["chain"][0]["left"] == 0.0  # Neon noted out
     team_view = VM.team_view(state, {}, {}, bus=({}, {}))
     data = json.loads(json.dumps(VM.to_json(VM.View(datetime.now(), [], [], [team_view], [], {},
                                                     agy_quota=view.agy_quota))))

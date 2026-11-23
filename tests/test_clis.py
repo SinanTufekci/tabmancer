@@ -20,7 +20,7 @@ def test_only_claude_is_on_until_you_choose():
     assert clis.set_enabled([]) == ["claude"]  # never none at all
 
 
-ARGON = agy.CHAIN[0]  # agy never runs on its own default: the chain's first, quota unread
+NEON = agy.DEFAULT_CHAIN[0]  # agy never runs on its own default: the chain's first (Neon), quota unread
 
 
 @pytest.mark.parametrize(("cli", "mode", "prompt", "argv"), [
@@ -29,10 +29,10 @@ ARGON = agy.CHAIN[0]  # agy never runs on its own default: the chain's first, qu
     ("codex", Mode.FORK, None, ["codex", "fork", "id1"]),
     ("codex", Mode.NEW, "start here", ["codex", "start here"]),
     ("codex", Mode.CONTINUE, None, ["codex", "resume", "--last"]),
-    ("agy", Mode.RESUME, None, ["agy", "--conversation", "id1", "--model", ARGON]),  # no transcript: the chain
-    ("agy", Mode.RESUME, "go on", ["agy", "--conversation", "id1", "--model", ARGON, "-i", "go on"]),
-    ("agy", Mode.NEW, None, ["agy", "--model", ARGON]),  # agy.model_flags
-    ("agy", Mode.NEW, "start here", ["agy", "--model", ARGON, "-i", "start here"]),
+    ("agy", Mode.RESUME, None, ["agy", "--conversation", "id1", "--model", NEON]),  # no transcript: the chain
+    ("agy", Mode.RESUME, "go on", ["agy", "--conversation", "id1", "--model", NEON, "-i", "go on"]),
+    ("agy", Mode.NEW, None, ["agy", "--model", NEON]),  # agy.model_flags
+    ("agy", Mode.NEW, "start here", ["agy", "--model", NEON, "-i", "start here"]),
     ("claude", Mode.NEW, "start here", ["claude", "start here"]),
 ])
 def test_each_cli_gets_its_own_command(cli, mode, prompt, argv):
@@ -42,7 +42,7 @@ def test_each_cli_gets_its_own_command(cli, mode, prompt, argv):
 def test_auto_continue_sends_the_continue_prompt_to_any_cli(monkeypatch):
     monkeypatch.setenv("TABMANCER_CONTINUE_PROMPT", "devam et")
     assert Launch("t", "", Mode.AUTO, "id1", cli="codex").argv == ["codex", "resume", "id1", "devam et"]
-    assert Launch("t", "", Mode.AUTO, "id1", cli="agy").argv == ["agy", "--conversation", "id1", "--model", ARGON,
+    assert Launch("t", "", Mode.AUTO, "id1", cli="agy").argv == ["agy", "--conversation", "id1", "--model", NEON,
                                                                         "-i", "devam et"]
 
 

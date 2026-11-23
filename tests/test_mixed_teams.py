@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import threading
@@ -10,12 +11,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from tabmancer import agy, cli, handover, sessions, summarize, teambus, teams, teamview, tokens
 from tabmancer.launch import Launch, Mode
 from tabmancer.sessions import Exit, Session
 
 # Every bus tool but team_request, which asks the user each time
-ALLOWED = ("--allowedTools=Bash(tabmancer team:*),mcp__tabmancer__team_send,mcp__tabmancer__team_inbox,"
+ALLOWED = ("--allowedTools=Bash(tabmancer team send shop:*),Bash(tabmancer team listen shop api:*),"
+           "Bash(tabmancer team who shop:*),mcp__tabmancer__team_send,mcp__tabmancer__team_inbox,"
            "mcp__tabmancer__team_wait,mcp__tabmancer__team_who,mcp__tabmancer__team_status")
 
 WRITE_ITSELF = handover.write_itself  # the real one: conftest keeps tests off claude/agy -p
@@ -101,7 +105,7 @@ def test_mixed_team_launches_claude_and_agy_with_bus_and_auto_mode(tmp_path):
     agy_idx = argv.index("agy")
     agy_args = argv[agy_idx:]
     assert "--mode" in agy_args and agy_args[agy_args.index("--mode") + 1] == "auto"
-    assert "--effort" not in agy_args and agy_args[agy_args.index("--model") + 1] == "gemini-4-argon-high"
+    assert "--effort" not in agy_args and agy_args[agy_args.index("--model") + 1] == "gemini-4-neon-high"
     assert "--add-dir" in agy_args and agy_args[agy_args.index("--add-dir") + 1] == str(teambus.team_dir("shop"))
     assert "-i" in agy_args
     prompt = agy_args[agy_args.index("-i") + 1]
@@ -269,6 +273,12 @@ def test_cli_team_bus_commands_and_add_start(tmp_path, monkeypatch, capsys):
     assert cli.team_who("shop") == 0
     who_out = capsys.readouterr().out
     assert "lead (shop-lead) · claude" in who_out and "ui (shop-ui) · agy" in who_out
+    assert "delivery" not in who_out
+    teambus.write_presence("shop", "ui", cli="agy", pid=os.getpid())
+    teambus.update_presence("shop", "ui", delivery="queued")  # as codexbus notes it for a Codex member
+    assert cli.team_who("shop") == 0
+    assert "· delivery: queued" in capsys.readouterr().out
+    teambus.clear_presence("shop", "ui")
 
     # add @agy member
     assert cli.add_to_team("shop", "docs: write guide @agy @medium") == 0
@@ -372,3 +382,41 @@ def test_claude_members_of_a_bus_team_get_the_bus_as_mcp_tools(tmp_path):
     replies = [json.loads(line) for line in done.stdout.splitlines()]
     assert [r["id"] for r in replies] == [1, 2] and replies[1]["result"]["isError"] is False, done.stderr
     assert [(m["from"], m["text"]) for m in teambus.unread("shop", "ui")] == [("api", "from the config")]
+
+
+@pytest.mark.parametrize(("text", "said"), [
+    ("Build checkout", "Build checkout."), ("Build checkout.", "Build checkout."), ("Ship it!", "Ship it!"),
+    ("Is it fast?", "Is it fast?"), ("Fix the bug (the one in api.)", "Fix the bug (the one in api.)"),
+    ('Say "done."', 'Say "done."'), ("Wait…", "Wait…"), ("Build checkout.  ", "Build checkout."), ("", ""),
+    ("Use v1.2", "Use v1.2."), ("Fix it (soon)", "Fix it (soon)."),
+])
+def test_a_goal_ends_one_sentence_whether_written_with_its_period_or_not(text, said):
+    assert teams.sentence(text) == said
+
+
+@pytest.mark.parametrize("cli", ["claude", "agy"])
+def test_a_goal_written_with_its_period_gets_no_second_one_in_the_role(tmp_path, cli):
+    folder = tmp_path / "shop"
+    folder.mkdir()
+    team = teams.new_team("shop", str(folder), "Build checkout.",
+                          teams.parse_members(f"lead: plans\nui: screens @{cli}", lead_ok=True))
+    role = teams.role(team, team.members[1])
+    assert "Team goal: Build checkout. " in role and "checkout.." not in role
+
+
+def test_a_claude_members_unasked_commands_are_for_its_own_team_only(tmp_path):
+    """Bash(tabmancer team:*) let a member of shop send on, listen to, start or add to any team."""
+    team = _mixed_team(tmp_path)
+    lead, api, _ui = team.members
+    assert teams.bash_rules(team, api) == ["tabmancer team send shop", "tabmancer team listen shop api",
+                                           "tabmancer team who shop"]  # listens as itself; no start, no add
+    assert teams.bash_rules(team, lead)[-1] == "tabmancer team start shop"
+    team.decide = 3
+    assert teams.bash_rules(team, lead)[-2:] == ["tabmancer team start shop", "tabmancer team add shop"]
+    for member in (lead, api):
+        tools = next(a for a in teams.launch(team, member).argv if a.startswith("--allowedTools="))
+        assert "Bash(tabmancer team:*)" not in tools and "Bash(tabmancer team " in tools
+        rules = [r for r in tools.split("=", 1)[1].split(",") if r.startswith("Bash(")]
+        assert all(r.startswith(("Bash(tabmancer team send shop:", "Bash(tabmancer team listen shop ",
+                                 "Bash(tabmancer team who shop:", "Bash(tabmancer team start shop:",
+                                 "Bash(tabmancer team add shop:")) for r in rules), rules

@@ -224,7 +224,8 @@ class NewSessions(ModalScreen[Request | None]):
                         # The card's title names the rows: the model above, the effort under it.
                         yield Choice([picks.DEFAULT, *picks.MODELS], id="new-model", labels=SHORT)
                         # agy's own: its chain, no Claude model (agy.resolve), shown in its place.
-                        yield Choice([AGY_CHAIN, *agy.CHAIN], id="new-agy-model", labels=AGY_SHORT)
+                        yield Choice([AGY_CHAIN, *agy.chain()], id="new-agy-model",
+                                     labels={**AGY_SHORT, **{m: agy.name(m).lower() for m in agy.chain()}})
                         yield Choice([picks.DEFAULT, *picks.EFFORTS], id="new-effort", labels=SHORT)
                         yield Choice([*picks.CAPS, picks.NO_CAP], value=picks.default_cap(), id="new-cap",
                                      labels=CAP_SHORT)
@@ -471,9 +472,10 @@ class NewSessions(ModalScreen[Request | None]):
         if self.cli == "agy":
             chosen = self.query_one("#new-agy-model", Choice).value
             model, why = self.agy_model()
-            about = ("Argon while its quota lasts, then Hydrogen, then Flash; never a Claude model"
-                     if chosen == AGY_CHAIN else f"{AGY_SHORT[chosen]}, {agy.CHAIN_WORDS[chosen]}")
-            words.update(f"{about}. Now: {agy.CHAIN_NAMES[model]}" + (f" ({why})" if why else "") + ".")
+            about = (agy.chain_line() if chosen == AGY_CHAIN
+                     else f"{agy.name(chosen).lower()}, {agy.chain_words(chosen)}")
+            now = f"Now: {agy.name(model)}" + (f" ({why})" if why else "") if model else f"Now: none, {why}"
+            words.update(f"{about}. {now}.")
         elif self.cli != "claude":
             words.update(f"Model and effort are for Claude Code sessions; {clis.label(self.cli)} uses its own settings.")
         else:
@@ -587,7 +589,7 @@ class NewSessions(ModalScreen[Request | None]):
         so the sessions still follow the quota when they open; another CLI's pick is only said."""
         self.take_route = False
         if route.cli == "agy":
-            if route.pick.model in agy.CHAIN:
+            if route.pick.model in agy.chain():
                 chained = route.pick.model == agy.resolve("")[0]
                 self.query_one("#new-agy-model", Choice).pick(AGY_CHAIN if chained else route.pick.model)
             return
@@ -822,7 +824,7 @@ SHORT = {picks.DEFAULT: "default"}  # "your default" as the Model and Effort row
 CAP_SHORT = {picks.NO_CAP: "Claude's own"}  # no cap, as the Context row shows it
 ADVISOR_SHORT = {picks.NO_ADVISOR: "no advisor"}  # as the Advisor row shows it
 AGY_CHAIN = "chain"  # agy's Model row: the chain decides by quota (agy.pick_model)
-AGY_SHORT = {AGY_CHAIN: "chain", **{model: name.lower() for model, name in agy.CHAIN_NAMES.items()}}
+AGY_SHORT = {AGY_CHAIN: "chain", **{model: agy.name(model).lower() for model in agy.DEFAULT_CHAIN}}
 
 
 def _seps(text: str) -> str:

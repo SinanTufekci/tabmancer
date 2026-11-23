@@ -173,9 +173,57 @@ def test_doctor_offers_the_agy_plugin_and_never_installs_it(monkeypatch):
     assert doctor.agy_plugin_check() is None  # no agy, nothing to say
 
     monkeypatch.setattr(agyplugin, "_agy", lambda: "agy")
-    for state, level, words in [("missing", "ok", "tabmancer agy-plugin install"),
-                                ("outdated", "warn", "older than this tabmancer"),
-                                ("installed", "ok", "is installed")]:
+    monkeypatch.setattr(agyplugin, "status", lambda: "missing")
+    monkeypatch.setattr(doctor, "_an_agy_member", lambda: False)
+    assert doctor.agy_plugin_check() is None  # nothing offered while no team has an agy member
+    monkeypatch.setattr(doctor, "_an_agy_member", lambda: True)
+    monkeypatch.setattr(agyplugin, "installed_version", lambda: "0.1.9")
+    monkeypatch.setattr(agyplugin, "asked_tools", list)
+    for state, switch, level, words in [("missing", None, "ok", "tabmancer agy-plugin install"),
+                                         ("outdated", None, "warn", "older than this tabmancer (0.1.9, now"),
+                                         ("installed", None, "ok", "plugin 0.1.9 is installed"),
+                                         ("installed", True, "ok", "plugin 0.1.9 is installed"),
+                                         ("installed", False, "warn", "agy plugin enable tabmancer"),
+                                         ("outdated", False, "warn", "turned off in agy")]:
         monkeypatch.setattr(agyplugin, "status", lambda state=state: state)
+        monkeypatch.setattr(agyplugin, "enabled", lambda switch=switch: switch)
         found = doctor.agy_plugin_check()
-        assert found is not None and found[0] == level and words in found[1]
+        assert found is not None and found[0] == level and words in found[1], (state, switch, found)
+    monkeypatch.setattr(agyplugin, "status", lambda: "installed")
+    monkeypatch.setattr(agyplugin, "enabled", lambda: True)
+    monkeypatch.setattr(agyplugin, "asked_tools", lambda: ["team_who", "team_wait"])
+    found = doctor.agy_plugin_check()
+    assert found is not None and found[0] == "warn" and "agy will ask for team_who, team_wait" in found[1]
+
+
+def test_doctor_sees_an_agy_member_in_a_saved_team(tmp_path):
+    from tabmancer import teams
+
+    assert doctor._an_agy_member() is False
+    folder = tmp_path / "shop"
+    folder.mkdir()
+    team = teams.new_team("shop", str(folder), "Build checkout",
+                          teams.parse_members("lead: plans" + chr(10) + "ui: screens", lead_ok=True))
+    teams.save({"shop": team})
+    assert doctor._an_agy_member() is False  # a Claude-only team wants no agy plugin
+    team.members[1].cli = "agy"
+    teams.save({"shop": team})
+    assert doctor._an_agy_member() is True
+
+
+def test_the_plugins_version_and_agys_switch_are_read_not_written(tmp_path, monkeypatch):
+    from tabmancer import agyplugin
+
+    monkeypatch.setattr(agyplugin, "gemini_dir", lambda: tmp_path)
+    assert agyplugin.installed_version() == "" and agyplugin.enabled() is None
+    (tmp_path / "config" / "plugins" / "tabmancer").mkdir(parents=True)
+    (tmp_path / "config" / "plugins" / "tabmancer" / "plugin.json").write_text('{"version": "0.1.9"}', encoding="utf-8")
+    assert agyplugin.installed_version() == "0.1.9"
+    config = tmp_path / "config" / "config.json"
+    for text, switch in [("{}", None), ('{"plugins": []}', None), ('{"plugins": {"tabmancer": {}}}', None),
+                         ('{"plugins": {"tabmancer": {"enabled": "yes"}}}', None), ("not json", None),
+                         ('{"plugins": {"tabmancer": {"enabled": false}}}', False),
+                         ('{"plugins": {"tabmancer": {"enabled": true}}}', True)]:
+        config.write_text(text, encoding="utf-8")
+        assert agyplugin.enabled() is switch, text
+        assert config.read_text(encoding="utf-8") == text

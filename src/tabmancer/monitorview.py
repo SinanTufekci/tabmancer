@@ -70,8 +70,7 @@ def _percent_style(percent: float) -> str:
 
 def quota_line(limits: list, agy_view: dict, with_agy: bool, now: datetime | None = None) -> Text:
     """The plan limits as the dashboard read them last ('session 42% · week 18%') and, for a team
-    with agy members, where agy's chain stands ('Argon out till Tue 09:02 · Hydrogen 31% · Flash
-    31%'). A quota read longer ago than agy.STALE says so instead: it tells nothing of now."""
+    with agy members, where agy's chain stands ('Neon out till Tue 09:02 · Hydrogen 31%'). A quota read longer ago than agy.STALE says so instead: it tells nothing of now."""
     now = now or datetime.now()
     out = Text()
     for i, limit in enumerate(limits):
@@ -119,7 +118,7 @@ def needs_line(view: VM.TeamView, palette: dict[str, str]) -> Text | None:
 def _model_of(member: VM.MemberView) -> str:
     model = member.model or "default model"
     if member.cli == "agy":
-        model = agy.CHAIN_NAMES.get(model, model)
+        model = agy.name(member.model) if member.model else "no model now"
     return f"{member.cli} · {model}" + (f" {member.effort}" if member.effort else "")
 
 

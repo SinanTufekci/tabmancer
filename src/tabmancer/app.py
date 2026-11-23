@@ -1989,10 +1989,14 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if session.status is not Status.RUNNING:
             launch = self.launch_for(session)
             grid.add_row("Opens as", self.mode_cell(session, plain=True))
-            argv = replace(launch, options=()).argv  # a member's flags are long: said in words below
-            if launch.mode is Mode.AUTO:  # the prompt is long; its start is enough here
-                argv = [*argv[:-1], _clip(argv[-1], 28)]
-            grid.add_row("", Text(subprocess.list2cmdline(argv), style=MUTED))
+            try:
+                argv = replace(launch, options=()).argv  # a member's flags are long: said in words below
+            except agy.NoModel as why:  # agy's chain all out of quota: it would not open
+                grid.add_row("", Text(str(why), style=AMBER))
+            else:
+                if launch.mode is Mode.AUTO:  # the prompt is long; its start is enough here
+                    argv = [*argv[:-1], _clip(argv[-1], 28)]
+                grid.add_row("", Text(subprocess.list2cmdline(argv), style=MUTED))
             if launch.options:
                 grid.add_row("", Text(f"as {launch.title}, with its role and the team's messages let in",
                                       style=MUTED))

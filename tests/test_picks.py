@@ -176,8 +176,8 @@ async def test_the_n_dialog_picks_a_model_and_an_effort(fake_home, tmp_path, mon
 @pytest.mark.parametrize("asked", ["", "auto", "opus", "claude-sonnet-5-5-high", "gpt-oss-120b-medium"])
 def test_a_new_agy_session_gets_the_chains_model_and_no_effort(asked):
     launch = picks.fresh(Launch("x", "C:/work", Mode.NEW, "", cli="agy"), Pick(asked, "max"))
-    assert (launch.model, launch.effort, launch.new_id) == ("gemini-4-argon-high", "", "")
-    assert launch.argv[:3] == ["agy", "--model", "gemini-4-argon-high"]
+    assert (launch.model, launch.effort, launch.new_id) == ("gemini-4-neon-high", "", "")
+    assert launch.argv[:3] == ["agy", "--model", "gemini-4-neon-high"]
     assert not any("claude" in word.lower() for word in launch.argv)
 
 

@@ -391,6 +391,12 @@ def test_windows_keeps_its_temp_folder(monkeypatch, tmp_path):
     assert teambus.bus_root() == tmp_path / "tabmancer-bus"
 
 
+def test_windows_keeps_the_bus_in_temp():
+    """Pinned: agy's sandbox refuses --add-dir writes outside %TEMP% too (2026-11-23 retest), and a flip
+    moves every new team's bus, so it is a decision, not an edit."""
+    assert teambus.WINDOWS_BUS_IN_TEMP is True
+
+
 def test_windows_can_keep_the_bus_out_of_its_temp_folder(monkeypatch, tmp_path):
     """Ready for the retest's outcome: a sandbox that refuses writes under %TEMP% only."""
     monkeypatch.delenv(teambus.BUS_ENV, raising=False)

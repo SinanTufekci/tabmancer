@@ -28,6 +28,9 @@ MODEL = os.environ.get("TABMANCER_ROUTER_MODEL", "haiku")
 EFFORT = "low"
 TIMEOUT = 90
 AGY_QUOTA_TIMEOUT = 25  # seconds for agy's /usage, read before an agy pick
+# When agy's chain has no model to give (every one out of quota, or no agy): what to do instead,
+# first, as the dialog's router line keeps a failure's first 80 characters.
+AGY_NONE = "no agy model now: pick one in agy's row, or wait"
 MIN_WORDS = 3  # a first message shorter than this says too little to route
 MAX_CHARS = 4000  # of the first message sent: its start says what the work is
 
@@ -172,8 +175,11 @@ def _agy_route() -> Route:
 
     agy.refresh_quota(timeout=AGY_QUOTA_TIMEOUT)
     model, why = agy.pick_model()
-    if not model:
-        raise summarize.SummaryError(why or "No Antigravity model is usable now.")
+    if not model:  # said on the router's line, never a model put in its place
+        # agy's own reason says when the quota comes back and what to do ("...: pick one or wait"):
+        # as it is; any other (no agy, say) gets what to do put first.
+        said = why.strip() if "wait" in why.lower() else f"{AGY_NONE} ({(why or 'none is usable').rstrip('. ')})"
+        raise summarize.SummaryError(said)
     if agy.is_claude(model):
         raise summarize.SummaryError(f"{model} is a Claude model: tabmancer never runs Claude through agy.")
     return Route(Pick(model), why, cli="agy")

@@ -4,6 +4,7 @@ them, project counts lined up, and a preview whose words are indented beside the
 from __future__ import annotations
 
 import io
+import time
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 
@@ -33,12 +34,17 @@ def rgb(colour: str) -> str:
     return ";".join(str(int(colour[i:i + 2], 16)) for i in (1, 3, 5))
 
 
-async def wait_for(pilot, condition, tries=60):
-    for _ in range(tries):
+async def wait_for(pilot, condition, seconds=20.0):
+    """Until condition holds, by the clock: a loaded machine (the whole suite, a CI runner) took
+    longer than 60 pauses of 50 ms to load the sessions once. Fails as soon as it holds, so no slower
+    when all is well."""
+    end = time.monotonic() + seconds
+    while True:
         await pilot.pause(0.05)
         if condition():
             return
-    raise AssertionError("condition never became true")
+        if time.monotonic() > end:
+            raise AssertionError("condition never became true")
 
 
 def test_each_colour_means_one_thing():

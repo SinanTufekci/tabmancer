@@ -156,6 +156,10 @@ def _standings(info: TeamInfo) -> dict[str, str]:
             state = "listening" if bus["listening"] else "running" if bus["runner"] else ""
             if state:
                 parts.append(state + (f" since {bus['since']:%H:%M}" if bus["since"] else ""))
+        delivery = teambus.delivery_words(presence.get(member.name)
+                                          or presence.get(teambus.normalize_member(team.name, member.name)))
+        if delivery:
+            parts.append(delivery)
         if member.cli == "agy" and model:
             quota = agy.standing(model)
             if quota["back"] is not None:
@@ -198,7 +202,10 @@ class Server:
         self.me = identity
         self.out = out
         self.run = run
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()  # one line on the wire at a time
+        # cancels and threads, touched by the reader, the call threads and serve's end. Not the
+        # wire's lock: a write blocked on a full pipe must not stop the reader taking a cancel.
+        self.calls_lock = threading.Lock()
         self.closed = threading.Event()
         self.cancels: dict[Any, threading.Event] = {}
         self.threads: list[threading.Thread] = []
@@ -245,7 +252,9 @@ class Server:
                         self.write(self.error(None, INTERNAL_ERROR, f"Internal error: {problem}"))
         finally:
             self.closed.set()
-            for thread in list(self.threads):
+            with self.calls_lock:
+                threads = list(self.threads)
+            for thread in threads:
                 thread.join(timeout=3)
 
     def receive(self, line: str) -> None:
@@ -261,7 +270,7 @@ class Server:
             # On a thread of its own, as a lone call is: a team_wait in it must not stop the reading
             # (of its cancel, say). Its answers go out together once all are in.
             thread = threading.Thread(target=self._batch_thread, args=(message,), daemon=True)
-            with self.lock:
+            with self.calls_lock:
                 self.threads.append(thread)
             thread.start()
             return
@@ -282,7 +291,7 @@ class Server:
             if answers:
                 self.write(answers)
         finally:
-            with self.lock:
+            with self.calls_lock:
                 if threading.current_thread() in self.threads:
                     self.threads.remove(threading.current_thread())
 
@@ -298,7 +307,8 @@ class Server:
         params = message.get("params") or {}
         if "id" not in message:  # a notification
             if method == "notifications/cancelled" and isinstance(params, dict):
-                event = self.cancels.get(params.get("requestId"))
+                with self.calls_lock:
+                    event = self.cancels.get(params.get("requestId"))
                 if event is not None:
                     event.set()
             return None
@@ -320,21 +330,26 @@ class Server:
                 return self.error(msg_id, INVALID_PARAMS, "arguments must be an object")
             if not threaded:  # in a batch, on the batch's thread: still cancellable
                 cancel = threading.Event()
-                self.cancels[msg_id] = cancel
+                with self.calls_lock:
+                    self.cancels[msg_id] = cancel
                 try:
                     value, after = self.call(name, arguments, cancel)
                 finally:
-                    self.cancels.pop(msg_id, None)
+                    with self.calls_lock:
+                        self.cancels.pop(msg_id, None)
                 if cancel.is_set() and name == "team_wait":
                     return None  # cancelled: no answer, and nothing marked read
+                # Any other tool answers even when cancelled: it is quick and what it did (a message
+                # sent, a request made) is done, so its answer is the truth, which the client may drop.
                 if after is not None:
                     after()
                 return self.result(msg_id, value)
             meta = params.get("_meta")
             cancel = Call(meta.get("progressToken") if isinstance(meta, dict) else None)
-            self.cancels[msg_id] = cancel
             thread = threading.Thread(target=self._call_thread, args=(msg_id, name, arguments, cancel), daemon=True)
-            self.threads.append(thread)
+            with self.calls_lock:
+                self.cancels[msg_id] = cancel
+                self.threads.append(thread)
             thread.start()
             return None
         if method in ("resources/list", "prompts/list"):  # asked by some clients whatever we offer
@@ -354,11 +369,12 @@ class Server:
             value, after = self.call(name, arguments, cancel)
             if cancel.is_set() and name == "team_wait":
                 return  # cancelled: the client wants no answer, and nothing it did not see is marked read
+            # Any other tool answers even when cancelled (see answer).
             if self.write(self.result(msg_id, value)) and after is not None:
                 after()  # marked read only once the answer is out
         finally:
-            self.cancels.pop(msg_id, None)
-            with self.lock:
+            with self.calls_lock:
+                self.cancels.pop(msg_id, None)
                 if threading.current_thread() in self.threads:
                     self.threads.remove(threading.current_thread())
 
@@ -449,7 +465,9 @@ class Server:
             where = ("listening" if state and state.get("listening") else
                      "running" if state and state.get("runner_alive") else "not seen")
             tags = [t for t, on in (("lead", name == info.lead), ("you", name == self.me.member)) if on]
-            lines.append(f"{name}{' (' + ', '.join(tags) + ')' if tags else ''}: {where}")
+            delivery = teambus.delivery_words(state)  # a Codex member's last `codex queue`
+            lines.append(f"{name}{' (' + ', '.join(tags) + ')' if tags else ''}: {where}"
+                         + (f", {delivery}" if delivery else ""))
         return f"Team {team}:\n" + "\n".join(lines) if lines else f"Team {team} has no members yet.", None
 
     def tool_team_status(self, arguments: dict, cancel: threading.Event) -> tuple[str, None]:
