@@ -164,3 +164,59 @@ def test_an_export_names_no_account_by_its_ids(fake_home):
     text = json.dumps(data)
     assert not re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text)
     assert not any(one in text for one in ids)
+
+
+# --- F3: a limit's note says how the other account stood -----------------------------------------
+def clock(moment: datetime) -> str:
+    return f"{moment:%H:%M}"
+
+
+def test_a_limits_note_names_the_other_account_with_room():
+    opens = NOW.replace(hour=16)
+    room = ("b@example.com", NOW - timedelta(minutes=45), [Limit("session", 12, NOW + timedelta(hours=2), ""),
+                                                           Limit("week", 40, NOW + timedelta(days=2), "")])
+    full = ("c@example.com", NOW - timedelta(hours=1), [Limit("session", 100, NOW.replace(hour=14), "")])
+    line, part = usage.other_accounts("a@example.com", opens, [full, room], clock, NOW)
+    assert line == "a@example.com: limit reached (opens 16:00) · b@example.com has room (session 12%, 45m ago): A to switch"
+    assert part == "b@example.com has room (session 12%, 45m ago): A to switch"
+    lifted = ("c@example.com", NOW - timedelta(hours=6), [Limit("session", 100, NOW - timedelta(hours=1), "")])
+    assert usage.other_accounts("a@example.com", opens, [lifted], clock, NOW)[1] == \
+        "c@example.com has room (session probably open, 6h00m ago): A to switch"  # its reset has passed
+
+
+def test_a_limits_note_says_when_all_are_full_and_nothing_with_no_reading():
+    opens = NOW.replace(hour=16)
+    full = ("c@example.com", NOW - timedelta(hours=1), [Limit("session", 100, NOW.replace(hour=14), "")])
+    assert usage.other_accounts("a@example.com", opens, [full], clock, NOW) == ("both full · earliest 14:00",) * 2
+    week = ("d@example.com", NOW, [Limit("week", 100, NOW + timedelta(days=1), "")])
+    assert usage.other_accounts("a@example.com", opens, [full, week], clock, NOW)[0] == "all full · earliest 14:00"
+    assert usage.other_accounts("a@example.com", opens, [], clock, NOW) == ("", "")
+
+
+async def test_bit_and_the_desktop_note_say_the_other_account_has_room(fake_home, monkeypatch):
+    from tabmancer import toast
+    from tabmancer.app import SessionPicker
+    from tabmancer.viewmodel import lifts
+
+    claude_in(fake_home)  # the Team seat, at its limit
+    accounts.remember(PERSONAL, "2026-11-23T09:00:00")
+    now = datetime.now()
+    usage.record([Limit("session", 12, now + timedelta(hours=3), "")], now=now - timedelta(minutes=45),
+                 account=PERSONAL.key)
+    monkeypatch.setattr(usage, "read_all", list)
+    resets = (now + timedelta(hours=2)).strftime("%I:%M%p").lstrip("0").lower()
+    write(fake_home, "lim", stopped_at(f"You've hit your session limit · resets {resets}"))
+    sent = []
+    monkeypatch.setattr(toast, "enabled", lambda: True)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(160, 44)) as pilot:
+        await wait_for(pilot, lambda: "lim" in app.sessions and app.told_limit)
+        said = " ".join(saying.text for saying in app.mascot.bubbles)
+        assert "s@example.com · personal has room (session 12%, 45m ago): A to switch" in said
+        app.send_toast = lambda _title, body: sent.append(body)  # the dashboard's own, set on it alone
+        app.app_focus = False  # not in front (asked outside Windows only)
+        app.tell_desktop([app.sessions["lim"]])
+        opens = lifts(app.sessions["lim"].resets)
+    (body,) = sent
+    assert body.splitlines()[1] == (f"s@example.com · Example Labs: limit reached (opens {opens}) · "
+                                    "s@example.com · personal has room (session 12%, 45m ago): A to switch")

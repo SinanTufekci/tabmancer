@@ -3145,6 +3145,20 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.push_screen(AccountsDialog(current, seen, stopped, places, accounts.opens_in(), usage.last_by_account()),
                          chosen)
 
+    def other_accounts_note(self, opens: datetime | None) -> tuple[str, str]:
+        """For a limit's note: how the other Claude accounts stood when last read (usage.other_accounts),
+        named as the top bar names them. ("", "") with none read."""
+        last = usage.last_by_account()
+        shared = accounts.shared_emails()
+
+        def name(account: accounts.Account) -> str:
+            return accounts.words(replace(account, plan=""), 60, org=account.email in shared)  # no plan
+
+        others = [(name(account), *last[account.key]) for account, _ in accounts.known()
+                  if account.key != self.signed_as and account.key in last]
+        this = name(self.account) if self.account is not None else "this account"
+        return usage.other_accounts(this, opens, others, lifts)
+
     def other_accounts_words(self) -> list[str]:
         """How the other Claude accounts' limits stood when last read, one line each, for where you
         choose to go on: 'b@example.com: session 12% · week 40% · read 45m ago'. None read: nothing."""
@@ -3656,7 +3670,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         names = ", ".join(sorted({s.project for s in stopped})[:3])
         soon = min((VM.free_at(s) for s in stopped if VM.free_at(s)), default=None)
         if soon and soon > datetime.now():
-            self.mascot.say(f"{names}: limit until {lifts(soon)}. c continues then", AMBER, seconds=10)
+            _, others = self.other_accounts_note(soon)
+            self.mascot.say(f"{names}: limit until {lifts(soon)}. {others or 'c continues then'}", AMBER,
+                            seconds=12 if others else 10)
         elif any(s.signed_in_again for s in stopped):
             self.mascot.react("lifted", f"{names}: signed in again. c continues now", AMBER, seconds=10)
         else:
@@ -3906,8 +3922,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         elif at_limit(turned[0]):
             session = turned[0]
             title = f"{session.project} stopped at the usage limit"
-            when = f"at {lifts(session.resets)}" if session.resets and session.resets > datetime.now() else "now"
+            ahead = session.resets and session.resets > datetime.now()
+            when = f"at {lifts(session.resets)}" if ahead else "now"
             body = f"It lifts {when}. c in the dashboard continues it then."
+            note, _ = self.other_accounts_note(session.resets if ahead else None)
+            if note:
+                body += f"\n{note}"
         else:
             session = turned[0]
             title = f"{session.project}: {state_of(session)[0]}"

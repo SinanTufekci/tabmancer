@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -368,6 +369,39 @@ def forecast(readings: list[Reading], label: str, now: datetime | None = None,
     if slope > 0.01 and latest.percent < 100:
         full_at = now + timedelta(hours=(100 - latest.percent) / slope)
     return Forecast(label, latest.percent, max(0.0, slope), full_at, latest.resets)
+
+
+def full_until(limits: list[Limit], now: datetime | None = None) -> datetime | None:
+    """When an account's last reading has room again: the latest reset of its limits that were full
+    and have not reset since; None when none of them stands in the way (or when it does not say)."""
+    now = now or datetime.now()
+    resets = [limit.resets for limit in limits if limit.percent >= 100 and limit.resets and limit.resets > now]
+    return max(resets, default=None)
+
+
+def other_accounts(this: str, opens: datetime | None, others: list[tuple[str, datetime, list[Limit]]],
+                   when: Callable[[datetime], str], now: datetime | None = None) -> tuple[str, str]:
+    """What a limit's note says of the other accounts, from their last readings (others: name, when
+    read, limits): (the whole line, the part after this account's own). One with room: 'a@x has room
+    (session 12%, 45m ago): A to switch', after 'this: limit reached (opens 16:00)'. All full: 'both
+    full · earliest 16:00' ('all' past two). None read: ("", "")."""
+    now = now or datetime.now()
+    if not others:
+        return "", ""
+    room = [(name, at, limits) for name, at, limits in others if full_until(limits, now) is None]
+    if room:
+        name, at, limits = min(room, key=lambda o: next((lim.percent for lim in o[2] if lim.label == "session"), 0))
+        session = next((lim for lim in limits if lim.label == "session"), None)
+        left = ("session probably open" if session.resets and session.resets <= now and session.percent >= 100
+                else f"session {session.percent}%") if session else ""
+        ago = until(now, at) if at <= now else ""
+        said = ", ".join(part for part in (left, f"{ago} ago" if ago and ago != "0m" else "just now") if part)
+        part = f"{name} has room ({said}): A to switch"
+        own = f"{this}: limit reached{f' (opens {when(opens)})' if opens else ''}"
+        return f"{own} · {part}", part
+    back = [moment for moment in (opens, *(full_until(limits, now) for _, _, limits in others)) if moment]
+    part = f"{'both' if len(others) == 1 else 'all'} full{f' · earliest {when(min(back))}' if back else ''}"
+    return part, part
 
 
 def short_window(label: str) -> bool:
