@@ -36,6 +36,7 @@ from textual.widgets.selection_list import Selection
 from . import (
     __version__,
     accounts,
+    actions,
     actor,
     agy,
     background,
@@ -2235,27 +2236,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         "transcript", as act() may), it starts straight away, after the same checks."""
         if session is None:
             return
-        if session.status is Status.BACKGROUND:
-            self.notify("Background sessions cannot be handed over from here: attach to it first.",
-                        severity="warning")
-            return
-        if session.cli == "agy" and not (session.path and session.path.suffix == ".jsonl" and session.path.is_file()) and not clis.installed("agy"):
-            self.notify("Antigravity has no readable transcript for this session and agy is not on PATH.",
-                        severity="warning")
+        refusal = actions.handover_refusal(session, self.open_ones(), session.session_id in self.queued)
+        if refusal:
+            self.notify(refusal.words, severity="warning", **({"timeout": refusal.seconds} if refusal.seconds else {}))
             return
         if session.session_id in self.queued:  # h again: not after all
             del self.queued[session.session_id]
             self.notify(f"{session.project} will not be handed over when it finishes.", timeout=5)
             self.update_row(session)
             return
-        if session.exit is Exit.RUNNING:
-            # A busy one is handed over once it finishes; only a reason that stays stops it now.
-            reason = handover.cannot_close(replace(session, live_state="idle"), self.open_ones())
-            if reason:
-                self.notify(f"{session.project} cannot be handed over now: {reason}.", severity="warning",
-                            timeout=10)
-                return
-
         if how is not None:
             self.start_handover(session, how)
             return
@@ -2284,37 +2273,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     @work(thread=True, group="handover")
     def hand_over(self, session: Session, how: str) -> None:
-        """Write the handover, close the old session if it is open, then open the fresh one.
-
-        The session writing it itself needs it closed first. Written from the transcript, the
-        handover is there before the old session closes, so a failed close only leaves it open.
-        """
-        written, left_open, closed = None, "", False
+        """Write the handover, close the old session if it is open (actions.write_handover), then open
+        the fresh one."""
         try:
-            if how == "transcript":
-                written = handover.from_transcript(session)
-            if session.exit is Exit.RUNNING:
-                # As it is now, in case it got busy again while the handover was written.
-                now, open_ones = self.call_from_thread(
-                    lambda: (self.sessions.get(session.session_id, session), self.open_ones()))
-                try:
-                    handover.close(now, open_ones)
-                    closed = True
-                except handover.HandoverError as error:
-                    # A team member's fresh session takes its name: with the old one still open, a
-                    # message to <team>-<member> had two sessions to go to.
-                    if written is None or teams.member_of(session) is not None:
-                        raise
-                    left_open = str(error)
-            if written is None:
-                written = handover.write_itself(session)
-        except (handover.HandoverError, summarize.SummaryError, OSError) as error:
+            handed = actions.write_handover(session, how, lambda: self.call_from_thread(
+                lambda: (self.sessions.get(session.session_id, session), self.open_ones())), teams.member_of)
+        except actions.ActionError as error:
             actor.let_go(f"handover-{session.session_id}")  # a queued one: h again may queue it afresh
-            after = " It is closed now; Enter on it resumes it." if closed else ""
-            self.call_from_thread(self.notify, f"{session.project} was not handed over: {str(error).rstrip('.')}."
-                                               f"{after}", severity="error", timeout=15)
+            self.call_from_thread(self.notify, error.words, severity="error", timeout=15)
             return
-        self.call_from_thread(self.handover_ready, session, written, left_open)
+        self.call_from_thread(self.handover_ready, session, handed.written, handed.left_open)
 
     def handover_ready(self, session: Session, written: str, left_open: str = "") -> None:
         fresh = [handover.fresh(session, written)]
