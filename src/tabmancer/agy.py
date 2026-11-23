@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -246,6 +247,65 @@ def step_state(session_id: str) -> str:
     return "permission" if status == STEP_WAITING else "busy" if status in STEP_AT_WORK else ""
 
 
+# Live state for any agy conversation in the list, a team's or not: agy keeps no record of the
+# conversations open right now, so its own db says. Only one written to lately is asked (a stat of
+# its db and WAL, then step_state): a conversation is at work, or waits for your OK, only while its
+# db moves, and a step left running by an agy that was killed is no longer believed after LIVE_WITHIN.
+# A command that runs longer than that without a step written shows as not at work.
+LIVE_WITHIN = timedelta(minutes=10)
+LIVE_STATES = ("busy", "permission")
+
+
+def _db_touched(session_id: str) -> datetime | None:
+    """When the conversation's db (or its write-ahead log) was last written, or None."""
+    if not _CONVERSATION_ID.fullmatch(session_id or ""):
+        return None
+    base = home() / "conversations" / f"{session_id}.db"
+    times = []
+    for path in (base, base.with_name(base.name + "-wal")):
+        try:
+            times.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    return datetime.fromtimestamp(max(times)) if times else None
+
+
+def live_state(session_id: str, now: datetime | None = None) -> str:
+    """"busy" or "permission" for a conversation written to within LIVE_WITHIN, else ""."""
+    touched = _db_touched(session_id)
+    if touched is None or (now or datetime.now()) - touched > LIVE_WITHIN:
+        return ""
+    return step_state(session_id)
+
+
+def with_live_state(session: Session, now: datetime | None = None) -> Session:
+    """The agy session with what it is doing now put on it, as a Claude session's live state is:
+    at work or waiting for your OK, it is open (Exit.RUNNING, "busy" or "permission"); one marked so
+    before and no longer is back to done. Any other session, or one with nothing new, is returned
+    as it is (the same object), so a caller can tell a change by identity."""
+    if session.cli != "agy":
+        return session
+    state = live_state(session.session_id, now)
+    if state:
+        if (session.exit, session.status, session.live_state) == (Exit.RUNNING, Status.RUNNING, state):
+            return session
+        return replace(session, exit=Exit.RUNNING, status=Status.RUNNING, live_state=state)
+    if session.exit is Exit.RUNNING and session.live_state in LIVE_STATES:
+        return replace(session, exit=Exit.UNKNOWN, status=Status.DONE, live_state="")
+    return session
+
+
+def live_updates(known: dict[str, Session], now: datetime | None = None) -> dict[str, Session]:
+    """For a live poll (the dashboard's, the desktop store's): session id -> the agy sessions among
+    `known` whose live state changed (with_live_state), and only those."""
+    changed = {}
+    for sid, old in known.items():
+        fresh = with_live_state(old, now)
+        if fresh is not old:
+            changed[sid] = fresh
+    return changed
+
+
 def user_events(path: Path) -> list[dict]:
     """User prompts from an agy transcript.jsonl, for team conversation logs."""
     if path.suffix != ".jsonl" or not path.is_file():
@@ -396,7 +456,7 @@ def find(days: float = 14) -> list[Session]:
             session.status = Status.CUT_OFF  # stopped while it was still working
         elif status.endswith("IDLE"):
             session.status = Status.DONE
-        sessions.append(session)
+        sessions.append(with_live_state(session))
     return sessions
 
 

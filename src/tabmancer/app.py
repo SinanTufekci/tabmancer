@@ -3891,6 +3891,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 continue
             mark_live(fresh, live.get(sid))
             updates[sid] = fresh
+        # agy keeps no record of what is open: its own db says.
+        updates |= agy.live_updates({sid: s for sid, s in known.items() if sid not in updates})
         self.call_from_thread(self.apply_live_updates, updates, full)
 
     def apply_live_updates(self, updates: dict[str, Session], full: bool = False) -> None:
