@@ -6,7 +6,8 @@ end (the Textual dashboard, the desktop window), and so does the actor lock: an 
 or checks it, so a window that only watches cannot act by calling one. What only the front end
 knows (the open sessions, how a session stands now) comes in as an argument.
 
-Slice 1: the handover of one session (h). Slice 2: a whole team's (h twice on a team).
+Slice 1: the handover of one session (h). Slice 2: a whole team's (h twice on a team). Slice 3:
+opening sessions (Enter, o) and going to an open one's tab.
 """
 
 from __future__ import annotations
@@ -14,7 +15,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from . import clis, focus, handover, summarize, teams
+from . import clis, focus, handover, picks, summarize, teams, wrapped
+from .launch import Launch, Mode, continue_prompt
 from .sessions import Exit, Session, Status
 
 
@@ -185,3 +187,132 @@ def write_team_handover(team: teams.Team, members: dict[str, Session | None],
         raise ActionError(f"{team.name} was not handed over: {str(error).rstrip('.')}. Members closed on the way "
                           "stay closed: s in the team's view starts them again.") from error
     return TeamHanded(lead, written, lineup or handover.current_lineup(team), bool(lineup))
+
+
+# --- opening sessions -----------------------------------------------------------------------------
+
+OPENING_SECONDS = 30  # a session just opened is not opened again while it starts up
+
+
+def clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def resumes(launch: Launch) -> bool:
+    """Whether it takes up a Claude Code session as it is (resume, auto-continue), where a second
+    process would write to the same transcript. A fork or a fresh session gets one of its own."""
+    return launch.cli == "claude" and launch.mode in (Mode.RESUME, Mode.AUTO) and bool(launch.session_id)
+
+
+def launch_for(session: Session, mode: Mode, job: dict | None = None,
+               saved: dict[str, teams.Team] | None = None) -> Launch:
+    """How a closed session opens, in `mode` (the front end's pick for it): a team member's as that
+    member (teams.as_member), one tabmancer opened with an effort at that effort again (picks.resumed).
+    One running in the background (`job`, its entry in `claude agents`) is attached to, as its preview
+    says: resumed, it was dropped as open already, and nothing opened."""
+    title = clip(f"{session.project}: {session.title}", 48)
+    if session.status is Status.BACKGROUND and job and job.get("id"):
+        return Launch(title=title, cwd=session.cwd, mode=Mode.ATTACH, session_id=str(job["id"]), cli=session.cli)
+    return picks.resumed(teams.as_member(session, Launch(
+        title=title, cwd=session.cwd, mode=mode, session_id=session.session_id, cli=session.cli,
+        prompt=continue_prompt(session.status) if mode is Mode.AUTO else None), saved),
+        context=session.context or 0)
+
+
+def still_opening(opening: dict[str, float], now: float) -> set[str]:
+    """The sessions opened from here in the last OPENING_SECONDS (`opening`: id -> when, on the clock
+    `now` is read from): they are not opened again while they start up."""
+    return {sid for sid, when in opening.items() if now - when < OPENING_SECONDS}
+
+
+def open_elsewhere(launches: list[Launch], live: Callable[[], set[str]]) -> set[str]:
+    """Which of these sessions to resume a Claude process has open right now. Two processes on one
+    transcript would both write to it, so it is asked afresh: `live()` gives the ids open now, and is
+    only called when one of them resumes."""
+    wanted = {launch.session_id for launch in launches if resumes(launch)}
+    return wanted & live() if wanted else set()
+
+
+@dataclass
+class Opened:
+    """What came of opening sessions: the ones opened, the ones left out as open already, the commands
+    left to run by hand (no terminal that opens tabs) or why the terminal would not start."""
+
+    opened: list[Launch]
+    skipped: list[Launch]
+    leftover: list[str]
+    error: str = ""
+
+    @property
+    def opened_ids(self) -> set[str]:
+        return {launch.session_id for launch in self.opened}
+
+    @property
+    def resumed_ids(self) -> set[str]:
+        """The opened ones that take up a session as it is: each should show up open in a while."""
+        return {launch.session_id for launch in self.opened if resumes(launch)}
+
+    @property
+    def skipped_ids(self) -> set[str]:
+        return {launch.session_id for launch in self.skipped}
+
+    @property
+    def skipped_words(self) -> str:
+        return f"Open already, so not opened again: {', '.join(launch.title for launch in self.skipped)}."
+
+    @property
+    def words(self) -> str:
+        what = self.opened[0].title if len(self.opened) == 1 else f"{len(self.opened)} sessions"
+        return f"Opened {what} in {'a new tab' if len(self.opened) == 1 else 'new tabs'}."
+
+
+def open_launches(launches: list[Launch], live: Callable[[], set[str]],
+                  open_tabs: Callable[[list[Launch]], list[str]]) -> Opened:
+    """Open sessions in new tabs (`open_tabs`: launch.open_tabs aimed at a window), leaving out the ones
+    a Claude process has open now (open_elsewhere). The ones brought back as they were, or told to carry
+    on, are counted on the week's card (wrapped.note_opened). The front end keeps its own bookkeeping
+    (what is opening, what came up) from the result."""
+    taken = open_elsewhere(launches, live)
+    skipped = [launch for launch in launches if resumes(launch) and launch.session_id in taken]
+    rest = [launch for launch in launches if launch not in skipped]
+    if not rest:
+        return Opened([], skipped, [])
+    try:
+        leftover = open_tabs(rest)
+    except OSError as error:  # the terminal would not start: said, rather than the front end falling over
+        return Opened([], skipped, [], f"Could not open {'the tab' if len(rest) == 1 else 'the tabs'}: {error}")
+    if leftover:
+        return Opened([], skipped, leftover)
+    wrapped.note_opened([(launch.session_id, "auto" if launch.mode is Mode.AUTO else "resume")
+                         for launch in rest if resumes(launch)])
+    return Opened(rest, skipped, [])
+
+
+def came_up_missing(ids: set[str], came_up: set[str], sessions: dict[str, Session]) -> str | None:
+    """The words for the sessions opened a while ago (`ids`) that never showed up open (`came_up`: the
+    ones seen open since): Claude Code would not resume one (its folder gone, say), and its tab says
+    why. After a reboot, with a dozen tabs opening at once, one is easy to miss. None when all came up."""
+    missing = [sessions[sid] for sid in ids if sid not in came_up and sid in sessions
+               and sessions[sid].exit is not Exit.RUNNING]
+    if not missing:
+        return None
+    names = ", ".join(dict.fromkeys(s.project for s in missing))
+    return f"{names} did not come up: {'its tab says' if len(missing) == 1 else 'their tabs say'} why."
+
+
+@dataclass
+class Note:
+    """Words for the front end to show: how, and for how long (seconds; None: the default)."""
+
+    words: str
+    severity: str = "information"
+    seconds: float | None = None
+
+
+def go_to_tab(session: Session) -> Note:
+    """Switch to the Windows Terminal tab where this session is open (focus.focus_tab). Blocks for a
+    moment: not on a screen's thread."""
+    if focus.focus_tab(session.title):
+        return Note(f"Switched to {session.project}. Type your prompt there.", seconds=4)
+    return Note(f"Could not find the tab of {session.project}. It may be open outside Windows Terminal, or its tab "
+                "has been renamed.", "warning", 8)

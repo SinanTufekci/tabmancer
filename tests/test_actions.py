@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import replace
 
 import pytest
 
@@ -158,3 +159,85 @@ def test_a_tab_that_would_not_close_stops_the_team_handover(team_calls):
     assert raised.value.words == ("shop was not handed over: Could not find the tab of shop-api: close it yourself "
                                   "(/exit). Members closed on the way stay closed: s in the team's view starts them again.")
     assert not any(call[0] in ("close", "write") for call in team_calls if isinstance(call, tuple))
+
+
+# --- opening sessions ---------------------------------------------------------------------------------
+
+def test_how_a_closed_session_opens():
+    from tabmancer.launch import Mode
+    closed = replace(one(title="A rather long title that goes on well past the tab"), exit=Exit.CLEAN)
+    launch = actions.launch_for(closed, Mode.RESUME, saved={})
+    assert (launch.mode, launch.session_id, launch.cwd) == (Mode.RESUME, "a", "C:/work/shop")
+    assert len(launch.title) == 48 and launch.title.endswith("…")
+    background = replace(one(status=Status.BACKGROUND), exit=Exit.CLEAN)
+    attached = actions.launch_for(background, Mode.RESUME, {"id": "job-7"}, {})
+    assert (attached.mode, attached.session_id) == (Mode.ATTACH, "job-7")
+    auto = actions.launch_for(closed, Mode.AUTO, saved={})
+    assert auto.prompt  # told to carry on
+
+
+def test_still_opening_counts_by_the_clock_it_is_given():
+    assert actions.still_opening({"a": 100.0, "b": 50.0}, 120.0) == {"a"}
+
+
+def opening(monkeypatch):
+    from tabmancer import wrapped
+    from tabmancer.launch import Launch, Mode
+    noted = []
+    monkeypatch.setattr(wrapped, "note_opened", noted.extend)
+    resume = Launch(title="shop: Checkout", cwd="C:/s", mode=Mode.RESUME, session_id="a", cli="claude")
+    fresh = Launch(title="web: New", cwd="C:/w", mode=Mode.NEW, session_id="", cli="claude")
+    return noted, resume, fresh
+
+
+def test_one_open_elsewhere_is_left_out_and_the_rest_open(monkeypatch):
+    noted, resume, fresh = opening(monkeypatch)
+    asked, tabs = [], []
+    opened = actions.open_launches([resume, fresh], lambda: asked.append(1) or {"a"},
+                                   lambda rest: tabs.append(rest) or [])
+    assert asked == [1] and tabs == [[fresh]]
+    assert opened.skipped == [resume] and opened.skipped_ids == {"a"}
+    assert opened.skipped_words == "Open already, so not opened again: shop: Checkout."
+    assert opened.words == "Opened web: New in a new tab." and opened.resumed_ids == set() and noted == []
+
+    asked.clear()
+    opened = actions.open_launches([fresh], lambda: asked.append(1) or set(), lambda rest: [])
+    assert asked == []  # nothing resumes: the live sessions are not asked for
+
+
+def test_a_resumed_one_is_counted_and_said(monkeypatch):
+    noted, resume, fresh = opening(monkeypatch)
+    opened = actions.open_launches([resume, fresh], set, lambda rest: [])
+    assert opened.opened_ids == {"a", ""} and opened.resumed_ids == {"a"}
+    assert opened.words == "Opened 2 sessions in new tabs." and noted == [("a", "resume")]
+
+
+def test_a_terminal_that_will_not_start_or_open_tabs(monkeypatch):
+    noted, resume, fresh = opening(monkeypatch)
+
+    def broken(rest):
+        raise OSError("wt.exe not found")
+    assert actions.open_launches([fresh], set, broken).error == "Could not open the tab: wt.exe not found"
+    left = actions.open_launches([resume, fresh], set, lambda rest: ["claude --resume a", "claude"])
+    assert left.leftover == ["claude --resume a", "claude"] and left.opened == [] and noted == []
+
+
+def test_which_did_not_come_up():
+    shop, web = replace(one(), exit=Exit.CLEAN), replace(one("b"), exit=Exit.CLEAN, cwd="C:/work/web")
+    sessions = {"a": shop, "b": web, "c": one("c")}
+    assert actions.came_up_missing({"a"}, set(), sessions) == f"{shop.project} did not come up: its tab says why."
+    assert actions.came_up_missing({"a", "b", "c"}, {"a"}, sessions) == "web did not come up: its tab says why."
+    assert actions.came_up_missing({"c", "gone"}, set(), sessions) is None
+    both = actions.came_up_missing({"a", "b"}, set(), sessions)
+    assert both.endswith("did not come up: their tabs say why.")
+
+
+def test_going_to_a_tab(monkeypatch):
+    from tabmancer import focus
+    monkeypatch.setattr(focus, "focus_tab", lambda title: True)
+    session = one()
+    assert actions.go_to_tab(session) == actions.Note(f"Switched to {session.project}. Type your prompt there.",
+                                                       seconds=4)
+    monkeypatch.setattr(focus, "focus_tab", lambda title: False)
+    note = actions.go_to_tab(session)
+    assert (note.severity, note.seconds) == ("warning", 8) and note.words.startswith("Could not find the tab of")

@@ -67,7 +67,8 @@ from . import (
     wrapped,
 )
 from . import viewmodel as VM
-from .actions import close_tabs, handing_note, open_names, team_handover_problem
+from .actions import clip as _clip
+from .actions import close_tabs, handing_note, open_names, still_opening, team_handover_problem
 from .clisettings import CliSettings
 from .config import merge_json, read_json
 from .dialogs import frame, title
@@ -193,7 +194,6 @@ WRAPPED_AFTER, WRAPPED_SECONDS = 8, 600  # Friday's word on the week: after Bit'
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
 FLASH_SECONDS = 1.6  # how long a row stays lit after its state changes
-OPENING_SECONDS = 30  # a session just opened is not opened again while it starts up
 CAME_UP_SECONDS = 45  # by then a session opened from here has shown up open, or it is said that it did not
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
 QUIET_SECONDS = 5 * 60
@@ -249,10 +249,6 @@ def limit_cell(session: Session) -> Text:
 def by_project(sessions: list[Session], style: str) -> list[tuple[str, str]]:
     """'web-app ×2', 'api-server': the projects of these sessions, the busiest first."""
     return [(name, style) for name in VM.by_project(sessions)]
-
-
-def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 class NamePrompt(ModalScreen[str | None]):
@@ -542,12 +538,6 @@ class WorkspaceList(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
-
-
-def resumes(launch: Launch) -> bool:
-    """Whether it takes up a Claude Code session as it is (resume, auto-continue), where a second
-    process would write to the same transcript. A fork or a fresh session gets one of its own."""
-    return launch.cli == "claude" and launch.mode in (Mode.RESUME, Mode.AUTO) and bool(launch.session_id)
 
 
 def settle_memory() -> None:
@@ -2052,15 +2042,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         opened with an effort at that effort again (picks.resumed). One running in the background is
         attached to, as its preview says: resumed, it was dropped as open already, and nothing opened."""
         job = self.background_live.get(session.session_id) if session.status is Status.BACKGROUND else None
-        if job and job.get("id"):
-            return Launch(title=_clip(f"{session.project}: {session.title}", 48), cwd=session.cwd, mode=Mode.ATTACH,
-                          session_id=str(job["id"]), cli=session.cli)
-        mode = self.mode(session)
-        return picks.resumed(teams.as_member(session, Launch(
-            title=_clip(f"{session.project}: {session.title}", 48), cwd=session.cwd, mode=mode,
-            session_id=session.session_id, cli=session.cli,
-            prompt=continue_prompt(session.status) if mode is Mode.AUTO else None), saved),
-            context=session.context or 0)
+        return actions.launch_for(session, self.mode(session), job, saved)
 
     # --- events and actions -------------------------------------------------------
 
@@ -2609,7 +2591,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if session.status is Status.RUNNING:
                 self.go_to_tab(session)
                 return "going to its tab"
-            if time.monotonic() - self.opening.get(session_id, -OPENING_SECONDS) < OPENING_SECONDS:
+            if session_id in still_opening(self.opening, time.monotonic()):
                 return "already opening"
             self.open_sessions([self.launch_for(session)])
             return "opening"
@@ -2864,10 +2846,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """Every member not open: a closed one resumed as itself, one never started new; the lead last."""
         sessions = {name: self.sessions.get(s.session_id, s) if s is not None else None
                     for name, s in state.sessions.items()}
-        now = time.monotonic()
+        recent = still_opening(self.opening, time.monotonic())
         launches = [launch for launch in teams.start(state.team, sessions)
-                    if not launch.session_id or now - self.opening.get(launch.session_id, -OPENING_SECONDS)
-                    >= OPENING_SECONDS]
+                    if not launch.session_id or launch.session_id not in recent]
         if not launches:
             self.notify(f"Every member of {state.team.name} is open already, or opening.", timeout=3)
             return
@@ -4039,7 +4020,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.go_to_tab(session)
                 return
             chosen = [session]
-        recent = {sid for sid, when in self.opening.items() if time.monotonic() - when < OPENING_SECONDS}
+        recent = still_opening(self.opening, time.monotonic())
         chosen = [s for s in chosen if s.session_id not in recent]
         if not chosen:
             self.notify("Already opening: it shows as open in a moment.", severity="warning")
@@ -4066,78 +4047,58 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                                  else f"the {len(launches)} sessions open",
                                  lambda: self.open_sessions(launches, window, True)):
                 return
-        taken = self.open_elsewhere(launches)
-        if taken:
-            again = [launch for launch in launches if resumes(launch) and launch.session_id in taken]
-            self.notify(f"Open already, so not opened again: {', '.join(launch.title for launch in again)}.",
-                        severity="warning", timeout=10)
-            self.selected -= taken
+        opened = actions.open_launches(
+            launches, self.live_ids, lambda rest: open_tabs(rest) if window is None else open_tabs(rest, window))
+        if opened.skipped:
+            self.notify(opened.skipped_words, severity="warning", timeout=10)
+            self.selected -= opened.skipped_ids
             self.poll_live()  # show them as open
-            launches = [launch for launch in launches if launch not in again]
-            if not launches:
-                return
-        try:
-            leftover = open_tabs(launches) if window is None else open_tabs(launches, window)
-        except OSError as error:  # the terminal would not start: said, rather than the dashboard falling over
-            self.notify(f"Could not open {'the tab' if len(launches) == 1 else 'the tabs'}: {error}",
-                        severity="error", timeout=15)
+        if opened.error:
+            self.notify(opened.error, severity="error", timeout=15)
             return
-        if leftover:
+        if opened.leftover:
             # No terminal that can open tabs: close, and leave the commands to run by hand.
-            self.exit(leftover)
+            self.exit(opened.leftover)
             return
-        # Brought back where they left off, or told to carry on: counted on the week's card (W).
-        wrapped.note_opened([(launch.session_id, "auto" if launch.mode is Mode.AUTO else "resume")
-                             for launch in launches if resumes(launch)])
-        ids = {launch.session_id for launch in launches}
+        if not opened.opened:
+            return
+        ids = opened.opened_ids
         self.opening.update(dict.fromkeys(ids, time.monotonic()))
-        resumed = {launch.session_id for launch in launches if resumes(launch)}
+        resumed = opened.resumed_ids
         self.came_up -= resumed
         self.set_timer(CAME_UP_SECONDS, lambda: self.check_came_up(resumed))
         self.selected -= ids
         for sid in ids & self.sessions.keys():
             self.update_row(self.sessions[sid])
         self.update_status()
-        what = launches[0].title if len(launches) == 1 else f"{len(launches)} sessions"
-        self.notify(f"Opened {what} in {'a new tab' if len(launches) == 1 else 'new tabs'}.", timeout=4)
+        self.notify(opened.words, timeout=4)
         self.set_timer(5, lambda: self.poll_live(full=True))  # show them as open once started
 
     def check_came_up(self, ids: set[str]) -> None:
         """Say which of the sessions opened a while ago never showed up open: Claude Code would not
         resume one (its folder gone, say), and its tab says why. After a reboot, with a dozen tabs
         opening at once, one of them is easy to miss."""
-        missing = [self.sessions[sid] for sid in ids if sid not in self.came_up and sid in self.sessions
-                   and self.sessions[sid].exit is not Exit.RUNNING]
-        if missing:
-            names = ", ".join(dict.fromkeys(s.project for s in missing))
-            where = "its tab says" if len(missing) == 1 else "their tabs say"
-            self.notify(f"{names} did not come up: {where} why.", severity="warning", timeout=15)
+        words = actions.came_up_missing(ids, self.came_up, self.sessions)
+        if words:
+            self.notify(words, severity="warning", timeout=15)
 
     def open_elsewhere(self, launches: list[Launch]) -> set[str]:
-        """Which of these sessions to resume a Claude process has open right now. Two processes on
-        one transcript would both write to it, so this is asked afresh, not taken from the list:
-        the pid files, and the background sessions of the last full poll (they have no pid file),
-        or before the first full poll has come back, `claude agents --json` itself (half a second)."""
-        wanted = {launch.session_id for launch in launches if resumes(launch)}
-        if not wanted:
-            return set()
+        """Which of these sessions to resume a Claude process has open right now (actions.open_elsewhere)."""
+        return actions.open_elsewhere(launches, self.live_ids)
+
+    def live_ids(self) -> set[str]:
+        """The sessions a Claude process has open right now, asked afresh, not taken from the list: the
+        pid files, and the background sessions of the last full poll (they have no pid file), or before
+        the first full poll has come back, `claude agents --json` itself (half a second)."""
         if self.full_polls:
-            live = {entry["sessionId"] for entry in _registry_sessions()} | set(self.background_live)
-        else:
-            live = set(live_sessions())
-        return wanted & live
+            return {entry["sessionId"] for entry in _registry_sessions()} | set(self.background_live)
+        return set(live_sessions())
 
     @work(thread=True, exclusive=True, group="focus")
     def go_to_tab(self, session: Session) -> None:
-        """Switch to the Windows Terminal tab where this session is open."""
-        found = focus.focus_tab(session.title)
-        if found:
-            self.call_from_thread(self.notify, f"Switched to {session.project}. Type your prompt there.",
-                                  timeout=4)
-        else:
-            self.call_from_thread(
-                self.notify, f"Could not find the tab of {session.project}. It may be open outside "
-                             "Windows Terminal, or its tab has been renamed.", severity="warning", timeout=8)
+        """Switch to the Windows Terminal tab where this session is open (actions.go_to_tab)."""
+        note = actions.go_to_tab(session)
+        self.call_from_thread(self.notify, note.words, severity=note.severity, timeout=note.seconds)
 
 
 def read_armed() -> dict[str, datetime]:
