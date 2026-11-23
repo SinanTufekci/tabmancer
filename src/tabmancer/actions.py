@@ -6,7 +6,7 @@ end (the Textual dashboard, the desktop window), and so does the actor lock: an 
 or checks it, so a window that only watches cannot act by calling one. What only the front end
 knows (the open sessions, how a session stands now) comes in as an argument.
 
-Slice 1: the handover of one session (h).
+Slice 1: the handover of one session (h). Slice 2: a whole team's (h twice on a team).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from . import clis, handover, summarize, teams
+from . import clis, focus, handover, summarize, teams
 from .sessions import Exit, Session, Status
 
 
@@ -89,3 +89,99 @@ def write_handover(session: Session, how: str, now: Callable[[], tuple[Session, 
         raise ActionError(f"{session.project} was not handed over: {str(error).rstrip('.')}.{after}",
                           closed=closed) from error
     return Handed(written, left_open)
+
+
+# --- a whole team's handover ----------------------------------------------------------------------
+
+def open_names(team: teams.Team, sessions: dict[str, Session | None]) -> list[str]:
+    """The session names of the members open now, the tabs x closes."""
+    return [team.session_name(m) for m in team.members
+            if (s := sessions.get(m.name)) is not None and s.exit is Exit.RUNNING]
+
+
+def close_tabs(names: list[str]) -> tuple[str, str]:
+    """Close the members' tabs (Claude exits as on /exit), and stop the ones running in the background,
+    which have none (claude stop: the session stays): what to say, and how loud. Slow: a worker's."""
+    missed = [name for name in names if not focus.close_tab(name)]
+    stopped = 0
+    if missed:
+        from . import background  # here: it holds the B screen too, and actions loads no UI
+
+        running = {job.name: job for job in background.jobs() or [] if job.running}
+        for name in list(missed):
+            if name in running:
+                try:
+                    background.stop(running[name].id)
+                except OSError:
+                    continue
+                missed.remove(name)
+                stopped += 1
+    if missed:
+        return f"Could not find the tab of {', '.join(missed)}: close it yourself (/exit).", "warning"
+    closed = len(names) - stopped
+    said = [f"closed {closed} tab{'s' if closed != 1 else ''}"] if closed else []
+    said += [f"stopped {stopped} in the background"] if stopped else []
+    return f"The team's members: {' and '.join(said)}.", "information"
+
+
+def team_handover_problem(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:
+    """Why the team cannot be handed over now; None when it can."""
+    if team.lead is None:
+        return "A team of peers has no lead to write the handover: H hands the picked member over by itself."
+    lead = sessions.get(team.lead.name)
+    if lead is None or lead.path is None:
+        return "The lead has no session yet: there is nothing to hand over."
+    busy = [m.name for m in team.members if (s := sessions.get(m.name)) is not None and s.exit is Exit.RUNNING
+            and s.live_state not in handover.IDLE]
+    if busy:
+        return (f"{', '.join(busy)} {'is' if len(busy) == 1 else 'are'} working: hand the team over once "
+                f"{'it waits' if len(busy) == 1 else 'they wait'} for you.")
+    return None
+
+
+def handing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str:
+    """What h once says: what a second h does."""
+    names = open_names(team, sessions)
+    closing = f"closes {len(names)} open member{'s' if len(names) != 1 else ''}, " if names else ""
+    return (f"h again hands {team.name} over: it {closing}its lead writes the handover and the line-up the rest of "
+            "the work needs, and you see both before the new team opens.")
+
+
+@dataclass
+class TeamHanded:
+    """A team's handover written by its lead: the fresh lead's first message and the line-up for the rest
+    (the lead's suggestion, else the team's line-up as it is)."""
+
+    lead: Session
+    written: str
+    lineup: str
+    suggested: bool  # the line-up is the lead's suggestion
+
+
+def write_team_handover(team: teams.Team, members: dict[str, Session | None],
+                        now: Callable[[Session], tuple[Session, list[Session]]],
+                        close: Callable[[list[str]], tuple[str, str]] | None = None) -> TeamHanded | None:
+    """A whole team handed over: its open members' tabs closed, its lead closed and resumed once to write
+    the handover and the line-up for the rest (handover.write_team). Blocks for minutes: never on a
+    screen's thread. None for a team with no lead session. `now(lead)` gives the lead as the list has
+    it now and the open sessions; `close` closes the members' tabs (close_tabs). Members closed on the
+    way stay closed when it fails."""
+    lead = members.get(team.lead.name) if team.lead is not None else None
+    if lead is None:
+        return None
+    try:
+        left = handover.work_left(team, members)  # before anyone closes: what git shows still lying about
+        others = [team.session_name(m) for m in team.members if not m.lead
+                  and (s := members.get(m.name)) is not None and s.exit is Exit.RUNNING]
+        if others:
+            said, severity = (close or close_tabs)(others)
+            if severity == "warning":
+                raise handover.HandoverError(said.rstrip("."))
+        if lead.exit is Exit.RUNNING:
+            fresh, open_ones = now(lead)
+            handover.close(fresh, open_ones, again="Close the lead's tab yourself (/exit), then h twice again")
+        written, lineup = handover.write_team(lead, team, left)
+    except (handover.HandoverError, summarize.SummaryError, OSError) as error:
+        raise ActionError(f"{team.name} was not handed over: {str(error).rstrip('.')}. Members closed on the way "
+                          "stay closed: s in the team's view starts them again.") from error
+    return TeamHanded(lead, written, lineup or handover.current_lineup(team), bool(lineup))

@@ -22,10 +22,7 @@ from textual.widgets.option_list import Option
 
 from . import (
     agy,
-    background,
     context,
-    focus,
-    handover,
     improve,
     newsessions,
     picks,
@@ -35,6 +32,7 @@ from . import (
     teamtree,
     viewmodel,
 )
+from .actions import close_tabs, handing_note, open_names, team_handover_problem  # noqa: F401  (re-exported)
 from .dialogs import Choice, FolderSuggester, cards, frame, light_rows, pill, pills, tilde, title
 from .safework import work
 from .sessions import Exit, Session, Status, folder_key
@@ -437,58 +435,6 @@ def closing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str |
     at_work = f" {busy} of them {'is' if busy == 1 else 'are'} working and would stop." if busy else ""
     return (f"Press x again to close the {len(open_now)} open members' tabs.{at_work} Their sessions stay, and "
             "s starts them again.")
-
-
-def open_names(team: teams.Team, sessions: dict[str, Session | None]) -> list[str]:
-    """The session names of the members open now, the tabs x closes."""
-    return [team.session_name(m) for m in team.members
-            if (s := sessions.get(m.name)) is not None and s.exit is Exit.RUNNING]
-
-
-def close_tabs(names: list[str]) -> tuple[str, str]:
-    """Close the members' tabs (Claude exits as on /exit), and stop the ones running in the background,
-    which have none (claude stop: the session stays): what to say, and how loud. Slow: a worker's."""
-    missed = [name for name in names if not focus.close_tab(name)]
-    stopped = 0
-    if missed:
-        running = {job.name: job for job in background.jobs() or [] if job.running}
-        for name in list(missed):
-            if name in running:
-                try:
-                    background.stop(running[name].id)
-                except OSError:
-                    continue
-                missed.remove(name)
-                stopped += 1
-    if missed:
-        return f"Could not find the tab of {', '.join(missed)}: close it yourself (/exit).", "warning"
-    closed = len(names) - stopped
-    said = [f"closed {closed} tab{'s' if closed != 1 else ''}"] if closed else []
-    said += [f"stopped {stopped} in the background"] if stopped else []
-    return f"The team's members: {' and '.join(said)}.", "information"
-
-
-def team_handover_problem(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:
-    """Why the team cannot be handed over now; None when it can."""
-    if team.lead is None:
-        return "A team of peers has no lead to write the handover: H hands the picked member over by itself."
-    lead = sessions.get(team.lead.name)
-    if lead is None or lead.path is None:
-        return "The lead has no session yet: there is nothing to hand over."
-    busy = [m.name for m in team.members if (s := sessions.get(m.name)) is not None and s.exit is Exit.RUNNING
-            and s.live_state not in handover.IDLE]
-    if busy:
-        return (f"{', '.join(busy)} {'is' if len(busy) == 1 else 'are'} working: hand the team over once "
-                f"{'it waits' if len(busy) == 1 else 'they wait'} for you.")
-    return None
-
-
-def handing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str:
-    """What h once says: what a second h does."""
-    names = open_names(team, sessions)
-    closing = f"closes {len(names)} open member{'s' if len(names) != 1 else ''}, " if names else ""
-    return (f"h again hands {team.name} over: it {closing}its lead writes the handover and the line-up the rest of "
-            "the work needs, and you see both before the new team opens.")
 
 
 def cold_note(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:

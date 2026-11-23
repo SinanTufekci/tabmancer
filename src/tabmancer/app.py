@@ -67,6 +67,7 @@ from . import (
     wrapped,
 )
 from . import viewmodel as VM
+from .actions import close_tabs, handing_note, open_names, team_handover_problem
 from .clisettings import CliSettings
 from .config import merge_json, read_json
 from .dialogs import frame, title
@@ -104,12 +105,8 @@ from .teamview import (
     TeamScreen,
     TeamsDialog,
     TellTeam,
-    close_tabs,
     closing_note,
     cold_note,
-    handing_note,
-    open_names,
-    team_handover_problem,
 )
 from .teamview import colours as team_colours
 from .theme import (
@@ -2300,32 +2297,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     @work(thread=True, group="team-handover")
     def hand_over_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
-        """A whole team handed over: its open members' tabs closed, its lead closed and resumed once to
-        write the handover and the line-up for the rest (handover.write_team); then the dialog."""
-        lead = members[team.lead.name] if team.lead is not None else None
-        if lead is None:
-            return
+        """A whole team handed over (actions.write_team_handover); then the dialog."""
         try:
-            left = handover.work_left(team, members)  # before anyone closes: what git shows still lying about
-            others = [team.session_name(m) for m in team.members if not m.lead
-                      and (s := members.get(m.name)) is not None and s.exit is Exit.RUNNING]
-            if others:
-                said, severity = close_tabs(others)
-                if severity == "warning":
-                    raise handover.HandoverError(said.rstrip("."))
-            if lead.exit is Exit.RUNNING:
-                now, open_ones = self.call_from_thread(lambda: (self.sessions.get(lead.session_id, lead),
-                                                                self.open_ones()))
-                handover.close(now, open_ones, again="Close the lead's tab yourself (/exit), then h twice again")
-            written, lineup = handover.write_team(lead, team, left)
-        except (handover.HandoverError, summarize.SummaryError, OSError) as error:
-            self.call_from_thread(self.notify, f"{team.name} was not handed over: {str(error).rstrip('.')}. Members "
-                                               "closed on the way stay closed: s in the team's view starts them again.",
-                                  severity="error", timeout=15)
+            handed = actions.write_team_handover(team, members, lambda lead: self.call_from_thread(
+                lambda: (self.sessions.get(lead.session_id, lead), self.open_ones())), close_tabs)
+        except actions.ActionError as error:
+            self.call_from_thread(self.notify, error.words, severity="error", timeout=15)
             return
-        suggested = bool(lineup)
-        self.call_from_thread(self.team_handover_ready, team, lead, written,
-                              lineup or handover.current_lineup(team), suggested)
+        if handed is not None:
+            self.call_from_thread(self.team_handover_ready, team, handed.lead, handed.written, handed.lineup,
+                                  handed.suggested)
 
     def team_handover_ready(self, team: teams.Team, lead: Session, written: str, lineup: str,
                             suggested: bool) -> None:

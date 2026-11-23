@@ -102,3 +102,59 @@ def test_a_failure_after_the_close_says_it_is_closed(calls, monkeypatch):
     monkeypatch.setattr(handover, "from_transcript", lambda s: (_ for _ in ()).throw(OSError("disk full")))
     with pytest.raises(actions.ActionError, match="^shop was not handed over: disk full.$"):
         actions.write_handover(session, "transcript", lambda: (session, [session]))
+
+
+# --- a whole team's handover ------------------------------------------------------------------------
+
+def shop_team():
+    return teams.new_team("shop", "C:/shop", "A checkout", teams.parse_members(
+        "lead: leads @opus; api: endpoints; ui: screens", lead_ok=True))
+
+
+def member(name, running=True, state="idle"):
+    return Session(session_id=name, path=None, cwd="C:/shop", title=f"shop-{name}",
+                   exit=Exit.RUNNING if running else Exit.CLEAN, live_state=state)
+
+
+@pytest.fixture
+def team_calls(monkeypatch):
+    said: list = []
+    monkeypatch.setattr(handover, "work_left", lambda team, members: said.append("left") or "a file not committed")
+    monkeypatch.setattr(handover, "close", lambda s, open_ones, again="": said.append(("close", s.title, again)))
+    monkeypatch.setattr(handover, "write_team", lambda lead, team, left: said.append(("write", lead.title, left))
+                        or ("## Goal\nA checkout.", "api: endpoints @sonnet"))
+    return said
+
+
+def test_a_team_handed_over_closes_the_rest_then_its_lead_which_writes(team_calls):
+    team = shop_team()
+    members = {"lead": member("lead"), "api": member("api"), "ui": member("ui", running=False)}
+    closed: list = []
+    handed = actions.write_team_handover(team, members, lambda lead: (lead, list(members.values())),
+                                         lambda names: closed.append(names) or ("closed", "information"))
+    assert handed == actions.TeamHanded(members["lead"], "## Goal\nA checkout.", "api: endpoints @sonnet", True)
+    assert closed == [["shop-api"]]  # only the open ones, never the lead's here
+    assert team_calls[0] == "left"  # what git shows, read before anyone closes
+    assert team_calls[1][:2] == ("close", "shop-lead") and "h twice again" in team_calls[1][2]
+    assert team_calls[2] == ("write", "shop-lead", "a file not committed")
+
+
+def test_no_line_up_suggested_keeps_the_teams_own(team_calls, monkeypatch):
+    monkeypatch.setattr(handover, "write_team", lambda lead, team, left: ("## Goal", ""))
+    team = shop_team()
+    handed = actions.write_team_handover(team, {"lead": member("lead", running=False)}, lambda lead: pytest.fail("closed"))
+    assert handed.lineup == handover.current_lineup(team) and not handed.suggested
+    assert actions.write_team_handover(team, {}, lambda lead: pytest.fail("no lead")) is None  # no session yet
+    peers = teams.new_team("pals", "C:/pals", "goal", teams.parse_members("a: x; b: y"), peers=True)
+    assert peers.lead is None and actions.write_team_handover(peers, {}, lambda lead: pytest.fail("no lead")) is None
+
+
+def test_a_tab_that_would_not_close_stops_the_team_handover(team_calls):
+    team = shop_team()
+    members = {"lead": member("lead"), "api": member("api")}
+    with pytest.raises(actions.ActionError) as raised:
+        actions.write_team_handover(team, members, lambda lead: (lead, []),
+                                    lambda names: ("Could not find the tab of shop-api: close it yourself (/exit).", "warning"))
+    assert raised.value.words == ("shop was not handed over: Could not find the tab of shop-api: close it yourself "
+                                  "(/exit). Members closed on the way stay closed: s in the team's view starts them again.")
+    assert not any(call[0] in ("close", "write") for call in team_calls if isinstance(call, tuple))
