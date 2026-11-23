@@ -75,7 +75,8 @@ KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("T", "teams", ("teams: several sessions on one project with an orchestrator, talking to each other: the "
                         "list of them, and a new one. A team's own view: Enter on its row")),
         ("M", "monitor", ("on a team's row or a member's (or in a team's view): the team's monitor in a window of "
-                          "its own, on the second screen if there is one; open already, it comes to the front")),
+                          "its own, on the second screen if there is one; open already, it comes to the front. In the "
+                          "desktop window instead: tabmancer desktop --m-opens desktop")),
         ("V", "toggle_split", ("the preview beside the list, both at full height (by itself from 180x40, with a "
                                "team's cards in it, or its tree when they leave no room for its keys), or under "
                                "the list at any size (remembered)")),

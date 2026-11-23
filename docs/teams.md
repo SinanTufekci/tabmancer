@@ -188,6 +188,13 @@ lists the keys and `q` closes the window. The keys that change the team (`s`, `a
 `tabmancer team watch <team>`. `tabmancer desktop --monitor --demo` shows it over the made-up
 team of `tabmancer --demo`.
 
+`M` in the dashboard opens the terminal monitor unless you choose the desktop one:
+`tabmancer desktop --m-opens desktop` (and `--m-opens terminal` back). With that choice and the
+extra installed, `M` opens the desktop window; without the extra, the terminal monitor as ever,
+and the note says what the desktop one needs. A team's desktop monitor opens once: `M` again, or
+the command again, brings the open one to the front. If the window M started does not show, what
+it said on its way out is in `desktop.log` in tabmancer's folder.
+
 A team whose members are all closed, after a restart say, stays a team: its row sits among
 the closed sessions where it last worked, with a box to tick the whole team. `s` on it
 starts the team: each member resumed as itself, the lead last, so the others are up when it

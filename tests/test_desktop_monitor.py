@@ -17,17 +17,20 @@ else:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from tabmancer import actor, agy, cli, demo, teambus, teams
+from tabmancer import viewmodel as VM
 from tabmancer.config import read_json
-from tabmancer.desktop import look, monitor
+from tabmancer.desktop import look, monitor, widgets
 from tabmancer.monitorview import MONITOR_KEYS
 
 look.fonts_for_offscreen()
 
 NEON = {"model": "gemini-4-neon-high", "name": "Neon", "left": 72.0, "span": "week", "back": None}
+NBSP = chr(0xA0)  # what look.span keeps a second space as
 HYDROGEN = {"model": "gemini-4-hydrogen-high", "name": "Hydrogen", "left": None, "span": "", "back": None}
 
 
@@ -102,6 +105,74 @@ def test_the_window_shows_the_team(qapp, window):
     card, member = shown.cards["tests"], shown.snap.view.members[3]
     assert card.state.text() == member.label == "needs you"
     assert card.bar.share == member.context and member.context
+
+
+def test_words_are_the_dashboards(qapp, window):
+    """Models as the team view says them, limits and needs-you as the terminal monitor does."""
+    shown = window()
+    read(qapp, shown)
+    lead = shown.cards["lead"].model.text()
+    assert lead.startswith("opus 5.5") and "claude-" not in lead  # not the raw id
+    pills = [shown.pills.itemAt(i).widget().text() for i in range(shown.pills.count())]
+    assert pills == ["Claude session 34%", "week 61%"]
+    assert shown.pills.itemAt(0).widget().toolTip().startswith("lifts ")
+    assert plain(shown.needs.text()) == "NEEDS YOU  tests: needs you   j picks them in turn"
+    shown.picked = "lead"
+    shown.refresh_pick()
+    assert "claude · opus 5.5" in plain(shown.picked_lines.text())
+
+
+def test_a_team_watched_already_comes_forward(qapp, window, monkeypatch):
+    """M again, or the command twice: the open window comes to the front, and no second one opens."""
+    shown = window()
+    came = []
+    monkeypatch.setattr(shown, "come_forward", lambda: came.append("shop"))
+    assert monitor.knock("shop") is True
+    wait(qapp, lambda: came, seconds=5)
+    assert monitor.knock("blog") is False and monitor.knock("") is False
+    monkeypatch.setattr(monitor, "MonitorWindow", lambda *a, **kw: pytest.fail("a second window"))
+    assert monitor.run("shop") == 0
+    shown.close()
+    qapp.processEvents()
+    assert monitor.knock("shop") is False  # closed: its door with it
+
+
+def test_switching_to_a_team_open_elsewhere_brings_that_one(qapp, window, monkeypatch):
+    first = window()
+    came = []
+    monkeypatch.setattr(first, "come_forward", lambda: came.append(True))
+    other = window(team="")
+    other.switch_team("shop")
+    wait(qapp, lambda: came, seconds=5)
+    assert other.team == "" and other.store is None  # it stays as it was
+    assert "shop is open in another window" in plain(other.bit_line.text())
+
+
+def test_the_door_is_the_teams_and_the_folders(monkeypatch, tmp_path):
+    shop = monitor.door("shop")
+    assert shop == monitor.door("shop") != monitor.door("blog")
+    monkeypatch.setenv("TABMANCER_CONFIG_DIR", str(tmp_path / "elsewhere"))  # the demo's, say
+    assert monitor.door("shop") != shop
+
+
+def plain(html: str) -> str:
+    made = QTextDocument()
+    made.setHtml(html)
+    return made.toPlainText().replace(NBSP, " ")
+
+
+def member(**kw) -> VM.MemberView:
+    made = {"name": "docs", "lead": False, "focus": "the guide", "session": None, "state": "idle",
+            "label": "idle", "tone": "done"}
+    return VM.MemberView(**(made | kw))
+
+
+def test_model_words():
+    assert widgets.model_words(member(cli="agy", model="gemini-4-neon-high")) == "Neon (High)"
+    assert widgets.model_words(member(cli="agy", model="gemini-4-hydrogen-high", effort="high")) == "Hydrogen (High)"
+    assert widgets.model_words(member(model="claude-sonnet-5-5", effort="high")) == "sonnet 5.5 · high"
+    assert widgets.model_words(member()) == "default model"
+    assert widgets.model_words(member(cli="agy")) == "no model now"
 
 
 def test_every_key_of_the_monitor_is_in_the_menus(qapp, window):
@@ -179,7 +250,10 @@ def test_agy_chain_on_the_bar_and_in_rings(qapp, window):
     pills = [shown.pills.itemAt(i).widget().text() for i in range(shown.pills.count())]
     assert pills[-2:] == ["Neon 72% left", "Hydrogen ?"]
     assert [r.title for r in shown.ring_widgets][-2:] == ["agy Neon", "agy Hydrogen"]
-    assert shown.ring_widgets[-2].middle == "72%"
+    assert (shown.ring_widgets[-2].middle, shown.ring_widgets[-2].under) == ("72%", "left · week")
+    out = {**NEON, "left": 0.0, "back": datetime.now().replace(hour=23, minute=59)}
+    shown.take(shown.store, dataclasses.replace(shown.snap, agy_quota={**quota, "chain": [out, HYDROGEN]}), bar, "")
+    assert (shown.ring_widgets[-2].middle, shown.ring_widgets[-2].under) == ("out", "till 23:59")
 
 
 def test_bit_says_when_all_of_agy_is_out(qapp, window):

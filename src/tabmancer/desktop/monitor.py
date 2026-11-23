@@ -14,15 +14,19 @@ for the dashboard) is named in the menus and done in the terminal monitor for no
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import shutil
+import sys
 import tempfile
 import threading
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -39,7 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__, agy, bitart, focus, teams, teamview
-from ..config import merge_json, read_json
+from ..config import config_dir, merge_json, read_json
 from ..monitorview import MONITOR_KEYS
 from ..sessions import Exit, Status
 from ..store import Snapshot, TeamStore
@@ -61,6 +65,7 @@ from .widgets import (
 
 POLL_MS = 2000  # as often as the terminal monitor reads its team
 SAID_MS = 7000  # how long Bit says what just happened before it says how the team stands again
+KNOCK_MS = 500  # how long a second monitor waits for the first to answer
 CARD_WIDTH = 340  # a card's least width: as many columns as fit
 LAYOUT_FILE = "desktop.json"
 LAYOUT_VERSION = 1
@@ -165,6 +170,10 @@ class MonitorWindow(QMainWindow):
         self.said_timer = QTimer(self)
         self.said_timer.setSingleShot(True)
         self.said_timer.timeout.connect(self.show_bit)
+        self.door = QLocalServer(self)  # a second monitor of this team knocks here instead of opening
+        self.door.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+        self.door.newConnection.connect(self.answer_door)
+        self.open_door()
         self.setStyleSheet(look.sheet(self.accent))
         self.resize(1500, 950)
         self.build()
@@ -385,10 +394,11 @@ class MonitorWindow(QMainWindow):
         waiting = [m for m in view.members if m.needs_you]
         self.needs.setVisible(bool(waiting))
         if waiting:
-            self.needs.setText(look.span("NEEDS YOU  ", f"bold {look.RED}") + look.span("  ·  ", look.MUTED).join(
+            # As the terminal monitor says it (monitorview.needs_line).
+            self.needs.setText(look.span("NEEDS YOU  ", f"bold {look.RED}") + look.span(" · ", look.MUTED).join(
                 look.span(m.name, f"bold {self.colours.get(m.name, look.TEXT)}")
-                + look.span(f" ({m.label})" if m.label != "needs you" else "", look.MUTED)
-                for m in waiting) + look.span("     j picks them in turn, Enter goes to the tab", look.MUTED))
+                + look.span(f": {m.label}", tone_colour(m.tone))
+                for m in waiting) + look.span("   j picks them in turn", look.MUTED))
         self.show_pills(snap)
         self.show_cards(view)
         self.show_picked()
@@ -400,20 +410,24 @@ class MonitorWindow(QMainWindow):
             self.show_bit()
 
     def show_pills(self, snap: Snapshot) -> None:
-        """The plan limits and agy's chain beside the team's name, as the dashboard's top bar says them."""
+        """The plan limits ('Claude session 34%', 'week 61%', as the terminal monitor's quota line says
+        them; when each lifts in its tip) and agy's chain as the dashboard's top bar says it."""
         pills = []
-        for limit in snap.limits:
+        for i, limit in enumerate(snap.limits):
             colour = look.percent_colour(limit.percent)
-            when = f" · {limit.resets:%H:%M}" if limit.resets else ""
-            pills.append((f"{limit.label} {limit.percent}%{when}", colour, GROUND.get(colour, "#1c1c1c")))
+            lifts = f"lifts {limit.resets:%a %H:%M}" if limit.resets else limit.resets_text or ""
+            pills.append((f"{'' if i else 'Claude '}{limit.label} {limit.percent}%", colour,
+                          GROUND.get(colour, "#1c1c1c"), lifts))
         for words, tone in self.bar.get("parts") or []:
-            pills.append((words, AGY_TONE.get(tone, look.MUTED), "#0f2326"))
+            pills.append((words, AGY_TONE.get(tone, look.MUTED), "#0f2326", ""))
         if pills == self.shown_pills:
             return
         self.shown_pills = pills
         clear(self.pills)
-        for words, colour, ground in pills:
-            self.pills.addWidget(Pill(words, colour, ground))
+        for words, colour, ground, tip_words in pills:
+            pill = Pill(words, colour, ground)
+            pill.setToolTip(tip_words)
+            self.pills.addWidget(pill)
 
     def show_cards(self, view) -> None:
         names = [m.name for m in view.members]
@@ -470,16 +484,18 @@ class MonitorWindow(QMainWindow):
             colour = look.percent_colour(limit.percent)
             rings.append((f"Claude {limit.label}", limit.percent / 100, f"{limit.percent}%", under,
                           colour if colour != look.TEXT else self.accent))
-        low = getattr(agy, "LOW_LEFT", 15)
+        today = datetime.now().date()
         for standing in snap.agy_quota.get("chain") or []:
             name, left, back = standing.get("name") or standing.get("model", "?"), standing.get("left"), standing.get("back")
-            if back is not None:
-                rings.append((f"agy {name}", 0.0, "out", f"back {back:%a %H:%M}", look.RED))
+            if back is not None:  # 'Neon out till 14:00', as the terminal monitor says it
+                when = f"{back:%H:%M}" if back.date() == today else f"{back:%a %H:%M}"
+                rings.append((f"agy {name}", 0.0, "out", f"till {when}", look.RED))
             elif left is None:
                 rings.append((f"agy {name}", 0.0, "?", "quota not known now", look.MUTED))
-            else:
+            else:  # its colour as the terminal monitor's: amber from 60% used, red from 85%
+                colour = look.percent_colour(100 - left)
                 rings.append((f"agy {name}", left / 100, f"{left:.0f}%", f"left · {standing.get('span') or 'limit'}",
-                              look.CYAN if left >= low else look.AMBER))
+                              look.CYAN if colour == look.TEXT else colour))
         if len(rings) != len(self.ring_widgets):
             clear(self.rings)
             self.ring_widgets = [LimitRing() for _ in rings]
@@ -573,6 +589,9 @@ class MonitorWindow(QMainWindow):
     def switch_team(self, name: str) -> None:
         if name == self.team and self.store is not None:
             return
+        if knock(name):  # watched in a window of its own already: that one comes forward, this one stays
+            self.say(f"{name} is open in another window: brought to the front.", look.MUTED)
+            return
         self.team, self.store, self.snap, self.picked, self.needs_turn = name, self.make_store(name), None, None, -1
         for card in self.cards.values():
             card.deleteLater()
@@ -582,11 +601,37 @@ class MonitorWindow(QMainWindow):
                 action.setToolTip(tip(str(action.data()), key, name))
                 action.setStatusTip(tip(str(action.data()), key, name))
         self.name_window()
+        self.open_door()
         self.show_bit()
         self.poll()
 
     def show_keys(self) -> None:
         KeysDialog(self, self.team).show()
+
+    # --- one window a team ------------------------------------------------------------------------
+
+    def open_door(self) -> None:
+        """Listen under the team's name (door), so M or the command again brings this window forward."""
+        self.door.close()
+        if not self.team:
+            return
+        name = door(self.team)
+        if not self.door.listen(name) and self.door.serverError() == QAbstractSocket.SocketError.AddressInUseError:
+            QLocalServer.removeServer(name)  # left by a monitor that ended without closing (Unix); knock found none
+            self.door.listen(name)
+
+    def answer_door(self) -> None:
+        while (caller := self.door.nextPendingConnection()) is not None:
+            caller.disconnectFromServer()
+            caller.deleteLater()
+        self.come_forward()
+
+    def come_forward(self) -> None:
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     # --- the window -------------------------------------------------------------------------------
 
@@ -620,10 +665,34 @@ class MonitorWindow(QMainWindow):
             dock.show()
 
     def closeEvent(self, event) -> None:
+        self.door.close()
         self.timer.stop()
         self.said_timer.stop()
         self.save_layout()
         super().closeEvent(event)
+
+
+def door(team: str) -> str:
+    """The name a team's open monitor listens on: one per team and tabmancer folder (the demo's is
+    a folder of its own), so the same team's monitor opened again comes forward instead."""
+    key = f"{config_dir()}\0{team}".encode()
+    return f"tabmancer-monitor-{hashlib.sha256(key).hexdigest()[:20]}"
+
+
+def knock(team: str) -> bool:
+    """Whether a window watches this team already; if one does, it comes to the front."""
+    if not team:
+        return False
+    if sys.platform == "win32":  # this process may take the front (started from what you typed in): let that window
+        import ctypes
+
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+    caller = QLocalSocket()
+    caller.connectToServer(door(team))
+    if not caller.waitForConnected(KNOCK_MS):
+        return False
+    caller.disconnectFromServer()
+    return True
 
 
 def agy_bar() -> dict:
@@ -685,6 +754,8 @@ def run(team: str, demo: bool = False) -> int:
         team = team or "shop"  # the demo's team
     window = None
     try:
+        if knock(team):  # watched already (M again, or the command twice): that window comes forward
+            return 0
         window = MonitorWindow(team)
         window.show()
         if not team:

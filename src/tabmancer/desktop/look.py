@@ -21,6 +21,7 @@ MUTED, TEXT = theme.MUTED, theme.TEXT
 BLACK, SUNKEN, SURFACE = "#000000", theme.SUNKEN, theme.SURFACE
 PANEL, BORDER, FAINT, DIM = "#181818", "#2a2a2a", "#262626", "#5a5a5a"
 HEX = re.compile(r"#[0-9a-fA-F]{6}")
+SPACES = re.compile(r"(?<= ) ")  # every space after another one
 MONO_FAMILIES = ("Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono", "DejaVu Sans Mono", "Menlo",
                  "Liberation Mono", "Courier New")
 
@@ -46,7 +47,8 @@ def span(words: str, style: str = "", default: str = TEXT) -> str:
     """Words as HTML in a style's colour, for a QLabel."""
     colour, bold = colour_of(style, default)
     weight = "font-weight:600;" if bold else ""
-    return f'<span style="color:{colour};{weight}">{escape(words)}</span>'
+    text = SPACES.sub("&nbsp;", escape(words))  # 'NEEDS YOU  tests': HTML would fold the two spaces into one
+    return f'<span style="color:{colour};{weight}">{text}</span>'
 
 
 def percent_colour(percent: float) -> str:

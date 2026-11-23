@@ -67,6 +67,7 @@ tabmancer updates        # whether a newer tabmancer is out (off: never ask PyPI
 tabmancer claude-updates # claude update once a day before sessions open (on, off, now)
 tabmancer --demo         # the dashboard over made-up sessions: nothing of yours is touched
 tabmancer desktop --monitor [team]  # a team's monitor in a desktop window (the desktop extra, below; --demo)
+tabmancer desktop --m-opens desktop # M in the dashboard opens that window (terminal: the terminal monitor)
 ```
 
 The desktop window needs Qt, from an optional extra: `uv tool install "tabmancer[desktop]"` (or

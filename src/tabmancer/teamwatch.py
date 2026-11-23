@@ -3,6 +3,10 @@
 The window is made for a second screen: in Windows Terminal it opens maximized on the first screen
 that is not the main one (one screen: maximized there), in a window named after the team, so M on a
 team whose monitor is open brings that one to the front instead of opening a second.
+
+With "monitor": "desktop" in config.json (`tabmancer desktop --m-opens desktop`), M opens the
+monitor in the desktop window instead (`tabmancer desktop --monitor <team>`), where the desktop
+extra is installed; without it, the terminal monitor as ever.
 """
 
 from __future__ import annotations
@@ -14,8 +18,11 @@ import subprocess
 import sys
 
 from . import focus
+from .config import config_dir, read_json
 from .launch import _wt_escape, terminal_kind
 
+MONITOR_CHOICES = ("terminal", "desktop")  # what M opens: config.json "monitor"
+DESKTOP_LOG = "desktop.log"  # what the desktop window M started said on its way out, if anything
 OFFSET = 40  # pixels in from a screen's corner: Windows Terminal places a window there, then maximizes it
 
 
@@ -92,10 +99,61 @@ def wt_command(team: str, folder: str, where: tuple[int, int] | None, tabs_windo
     return [*args, *(_wt_escape(arg) for arg in command(team, tabs_window))]
 
 
+def monitor_choice() -> str:
+    """Which monitor M opens: 'terminal' (the default) or 'desktop'."""
+    saved = read_json("config.json")
+    chosen = saved.get("monitor") if isinstance(saved, dict) else None
+    return chosen if chosen in MONITOR_CHOICES else "terminal"
+
+
+def desktop_command(team: str) -> list[str]:
+    """`tabmancer desktop --monitor <team>` on this Python (the one the desktop extra was found in),
+    as pythonw where there is one: a window with no console behind it."""
+    python = sys.executable
+    quiet = os.path.join(os.path.dirname(python), "pythonw.exe")
+    if sys.platform == "win32" and os.path.basename(python).lower() == "python.exe" and os.path.isfile(quiet):
+        python = quiet
+    return [python, "-m", "tabmancer", "desktop", "--monitor", team]
+
+
+def open_desktop(team: str) -> str:
+    """The team's monitor in the desktop window, started on its own: it outlives the dashboard. One
+    open already for the team comes to the front instead (the window itself sees to that). It runs
+    in tabmancer's folder, not the team's: `-m` would import a tabmancer found where it starts."""
+    home = config_dir()
+    home.mkdir(parents=True, exist_ok=True)
+    try:
+        log = open(home / DESKTOP_LOG, "w", encoding="utf-8")  # noqa: SIM115 - the child has its own handle
+    except OSError:
+        log = subprocess.DEVNULL
+    try:
+        subprocess.Popen(desktop_command(team), cwd=home, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                         start_new_session=sys.platform != "win32")
+    finally:
+        if log is not subprocess.DEVNULL:
+            log.close()
+    return f"The monitor of {team} opens in a desktop window."
+
+
 def open_monitor(team: str, folder: str = "", tabs_window: str = "") -> str:
     """M: the team's monitor in a window of its own, or its open window to the front. Returns what
     happened in a few words, for a note; raises OSError when the terminal would not start.
-    tabs_window: the dashboard's window, when it knows its name (command)."""
+    tabs_window: the dashboard's window, when it knows its name (command). With the desktop window
+    chosen (monitor_choice) and Qt installed, the desktop monitor; chosen without Qt, the terminal
+    one, and the note says what the desktop one needs."""
+    missing = ""
+    if monitor_choice() == "desktop":
+        from . import desktop
+
+        if desktop.available():
+            return open_desktop(team)
+        missing = f" The desktop window needs Qt: {desktop.INSTALL}"
+    return open_terminal(team, folder, tabs_window) + missing
+
+
+def open_terminal(team: str, folder: str = "", tabs_window: str = "") -> str:
+    """The terminal monitor (`tabmancer team watch <team>`) in a window of its own, or its tab to the front."""
     if focus.focus_tab(title(team)):
         return f"The monitor of {team} is open already: brought to the front."
     kind = terminal_kind()

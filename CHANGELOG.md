@@ -38,6 +38,8 @@
   optional extra (`pip install "tabmancer[desktop]"`, Qt): the cards, the conversation as lanes, the
   messages, the team's hours and the limits as rings, in panels you can move, float and close;
   every key in the menus. Read-only for now. Without the extra, tabmancer runs as ever.
+  `tabmancer desktop --m-opens desktop` makes `M` in the dashboard open it instead of the
+  terminal monitor; a team's window opens once, and `M` again brings it to the front.
 - **One dashboard acts.** With several open, only one reads limits, sends desktop notes, updates
   Claude Code and runs queued handovers; the others watch and take over when it closes.
 - **An account is an account in an organisation.** The same email in your personal plan and in a

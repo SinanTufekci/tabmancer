@@ -13,7 +13,7 @@ from dataclasses import asdict
 from datetime import timedelta
 
 from . import claudeupdate, clis, shortcuts, workspaces
-from .config import read_json, write_json
+from .config import merge_json, read_json, write_json
 from .launch import Launch, continue_prompt, open_tabs
 from .picks import EFFORTS, NO_CAP, Pick, advisor_ok, cap_tokens
 from .sessions import MOST_DAYS, find_sessions, nothing_found
@@ -157,6 +157,8 @@ def main(argv: list[str] | None = None) -> None:
     windowing.add_argument("team", nargs="?", default="", help="the team (default: the one team with members open)")
     windowing.add_argument("--demo", dest="made_up", action="store_true",
                            help="over the made-up team of tabmancer --demo: nothing of yours is read")
+    windowing.add_argument("--m-opens", dest="m_opens", choices=("terminal", "desktop"),
+                           help="what M in the dashboard opens: the terminal monitor (the default) or this window")
     # What the login shortcut runs when there is no windowless gui launcher.
     sub.add_parser("startup-run", help="(used by the login shortcut)")
     args = parser.parse_args(argv)
@@ -230,7 +232,7 @@ def main(argv: list[str] | None = None) -> None:
         elif args.action == "run":
             sys.exit(team_run(args.team, args.rest))
     elif args.command == "desktop":
-        sys.exit(desktop_window(args.monitor, args.team, args.made_up))
+        sys.exit(m_opens(args.m_opens) if args.m_opens else desktop_window(args.monitor, args.team, args.made_up))
     elif args.command == "mcp":
         from . import mcpserver
 
@@ -484,6 +486,21 @@ def team_watch(name: str, days: float, tabs_window: str = "") -> int:
     return 0
 
 
+def m_opens(choice: str) -> int:
+    """`tabmancer desktop --m-opens terminal|desktop`: which monitor M in the dashboard opens."""
+    from . import desktop
+
+    merge_json("config.json", monitor=choice)
+    if choice == "terminal":
+        print("M in the dashboard opens the team's monitor in a terminal window.")
+    elif desktop.available():
+        print("M in the dashboard opens the team's monitor in the desktop window.")
+    else:
+        print("M in the dashboard opens the team's monitor in the desktop window once Qt is installed "
+              f"({desktop.INSTALL}); till then, in a terminal window.")
+    return 0
+
+
 def desktop_window(monitor: bool, name: str, demo: bool = False) -> int:
     """`tabmancer desktop --monitor [team]`: the team's monitor in a Qt window, from the desktop extra.
     Without Qt it says how to add it; the terminal monitor (team watch) is there either way."""
@@ -495,6 +512,12 @@ def desktop_window(monitor: bool, name: str, demo: bool = False) -> int:
         return 1
     if not monitor:
         print(f"Only the team monitor is in the desktop window so far: {PROG} desktop --monitor [team]",
+              file=sys.stderr)
+        from .teamwatch import monitor_choice
+
+        where = "this window" if monitor_choice() == "desktop" else "the terminal monitor"
+        other = "terminal" if monitor_choice() == "desktop" else "desktop"
+        print(f"M in the dashboard opens {where} ({PROG} desktop --m-opens {other} for the other).",
               file=sys.stderr)
         return 2
     team = name

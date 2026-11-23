@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLay
 from .. import bitart, monitorview
 from .. import viewmodel as VM
 from ..tokens import human
+from ..viewmodel import model_words  # the Model column's and the team view's words, for every front end
 from . import look
 
 LAST_MOST = 160  # a message on a card, in characters (the Messages panel has all of it)
@@ -105,10 +106,11 @@ class ContextBar(QWidget):
 
 def facts_html(member: VM.MemberView, leave_out_model: bool = True) -> str:
     """The picked member's facts as the terminal monitor words them (monitorview._facts), in HTML:
-    without the model (the card's own line) and the context (its bar)."""
-    facts = monitorview._facts(member)
-    if leave_out_model:
-        facts = facts[1:]
+    the model as the team view says it (model_words), or not at all (the card's own line), and
+    without the context (its bar)."""
+    facts = monitorview._facts(member)[1:]  # [0] is the model, as its id
+    if not leave_out_model:
+        facts.insert(0, (f"{member.cli} · {model_words(member)}", look.CYAN if member.cli != "claude" else look.MUTED))
     between = f' <span style="color:{look.DIM}">·</span> '
     return between.join(look.span(words, style, look.MUTED) for words, style in facts
                         if not words.startswith("context "))
@@ -179,7 +181,7 @@ class MemberCard(QFrame):
         self.cli.set(f"@{member.cli}" if member.cli != "claude" else "", look.CYAN, "#0f2326")
         self.state.set(member.label, colour)
         self.focus.setText(member.focus)
-        self.model.setText(monitorview._model_of(member))
+        self.model.setText(model_words(member))
         self.model.setStyleSheet(f"color:{look.CYAN if member.cli != 'claude' else look.TEXT}; background:transparent;")
         self.bar.set(member.context)
         facts = facts_html(member)
