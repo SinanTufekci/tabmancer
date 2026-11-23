@@ -25,7 +25,7 @@ from .config import read_json, write_json
 from .teambus import _alive, _windows_process_start  # noqa: F401  (one definition: teambus is stdlib-only)
 
 CACHE_FILE = "index.json"
-CACHE_FORMAT = 9  # bump when Session or the parser changes shape (9: a resumed session's notices, /login as a system record)
+CACHE_FORMAT = 10  # bump when Session or the parser changes shape (10: the organisation, the sensitive tools)
 HEAD_BYTES = 512 * 1024
 TAIL_BYTES = 2 * 1024 * 1024
 MAX_HEAD_BYTES = 8 * 1024 * 1024
@@ -146,10 +146,81 @@ class Session:
     # Another model answering in the one it ran on, which Claude Code did by itself (its safeguards
     # stopped a reply, say): "Opus 5.5 → Opus 4.8 (safeguards)". Gone once the first one answers again.
     fell_back: str = ""
+    # The organisation (its uuid) the session last ran on: where its conversation went. Claude Code
+    # notes it on each request (a credential_org attachment), and the one it started on first
+    # (session-owner); "" in a transcript from before either. Going on with an account in another
+    # organisation sends the conversation there.
+    org: str = ""
+    sensitive: list[str] = field(default_factory=list)  # what its tool calls read: "mail", "browser"... (SENSITIVE)
 
     @property
     def project(self) -> str:
         return Path(self.cwd).name or self.cwd or "?"
+
+
+# Tools whose results a conversation then holds, and what they read: called (a tool_use), never
+# merely offered. A claude.ai connector not named here is "connector"; Claude Docs reads nothing of yours.
+SENSITIVE = {"mcp__claude_ai_Gmail__": "mail", "mcp__claude_ai_Google_Drive__": "files",
+             "mcp__claude_ai_Google_Calendar__": "calendar", "mcp__claude-in-chrome__": "browser"}
+NOT_SENSITIVE = ("mcp__claude_ai_Claude_Docs__",)
+
+
+def sensitive_kind(tool: str) -> str:
+    """What a tool call reads that is worth a word before its conversation goes elsewhere: "" if nothing."""
+    for prefix, kind in SENSITIVE.items():
+        if tool.startswith(prefix):
+            return kind
+    return "connector" if tool.startswith("mcp__claude_ai_") and not tool.startswith(NOT_SENSITIVE) else ""
+
+
+# A call as Claude Code writes it (compact JSON): offered tools are listed as {"name":"mcp__…"} too,
+# without the tool_use before it, and are no call.
+CALL = re.compile(rb'"type":"tool_use","id":"[^"]{1,80}","name":"(mcp__[A-Za-z0-9_.-]+)"')
+SCAN_BLOCK = 8 * 1024 * 1024
+_SCANNED: dict[tuple[str, int, int], list[str]] = {}
+
+
+def sensitive_calls(path: Path | None) -> list[str]:
+    """What a session's tool calls read (SENSITIVE), from its whole transcript: a session's own read
+    sees its tail only, and a call further back is as much in its conversation. Bytes, no JSON, and
+    only when asked (before its conversation goes to another organisation); kept while unchanged."""
+    if path is None:
+        return []
+    try:
+        stat = path.stat()
+    except OSError:
+        return []
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    if key in _SCANNED:
+        return _SCANNED[key]
+    found: list[str] = []
+    try:
+        with path.open("rb") as f:
+            carry = b""
+            while block := f.read(SCAN_BLOCK):
+                data = carry + block
+                for match in CALL.finditer(data):
+                    kind = sensitive_kind(match.group(1).decode("ascii", "replace"))
+                    if kind and kind not in found:
+                        found.append(kind)
+                carry = data[-200:]  # a call cut at the block's edge is whole in the next one
+    except OSError:
+        return []
+    if len(_SCANNED) > 64:  # a few at a time are asked about: no need to keep many
+        _SCANNED.clear()
+    _SCANNED[key] = found
+    return found
+
+
+def _watch_org(record: dict, session: Session) -> None:
+    """The organisation a session ran on: the latest request's; the one it started on before any."""
+    kind = record.get("type")
+    if kind == "session-owner" and not session.org:
+        session.org = str(record.get("organizationUuid") or "")
+    elif kind == "attachment":
+        attached = record.get("attachment") if isinstance(record.get("attachment"), dict) else {}
+        if attached.get("type") == "credential_org" and attached.get("organizationUuid"):
+            session.org = str(attached["organizationUuid"])
 
 
 def claude_dir() -> Path:
@@ -490,6 +561,7 @@ def _read_head(f, size: int, session: Session) -> bool:
         for record in _parse_lines(chunk, drop_first=False, drop_last=len(chunk) < size):
             if record.get("isSidechain"):
                 continue
+            _watch_org(record, session)
             if not session.started and record.get("timestamp"):
                 try:
                     stamp = datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00"))
@@ -724,6 +796,8 @@ def _scan_tail(records: list[dict], session: Session, tail: _Tail) -> None:
         kind = record.get("type")
         _track_shells(record, tail)
         _watch_model(record, tail)
+        if kind in ("attachment", "session-owner"):
+            _watch_org(record, session)
         if kind == "custom-title":
             tail.custom_title = record.get("customTitle") or tail.custom_title
         elif kind == "ai-title":
@@ -771,8 +845,12 @@ def _scan_tail(records: list[dict], session: Session, tail: _Tail) -> None:
                 if reply:
                     session.last_reply = _shorten(reply, 500)
                 for block in content if isinstance(content, list) else []:
-                    if isinstance(block, dict) and block.get("type") == "tool_use" \
-                            and block.get("name") in EDIT_TOOLS:
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    called = sensitive_kind(str(block.get("name") or ""))
+                    if called and called not in session.sensitive:
+                        session.sensitive = [*session.sensitive, called]
+                    if block.get("name") in EDIT_TOOLS:
                         target = (block.get("input") or {}).get("file_path") \
                             or (block.get("input") or {}).get("notebook_path")
                         if target:

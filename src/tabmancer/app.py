@@ -86,6 +86,7 @@ from .sessions import (
     nothing_found,
     other_sessions,
     read_session,
+    sensitive_calls,
     transcript_path,
 )
 from .shortcuts import DASHBOARD_WINDOW
@@ -328,12 +329,17 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
     LimitDialog OptionList { height: auto; margin-top: 1; background: $surface; border: none; }
     LimitDialog SelectionList { height: auto; max-height: 10; margin-top: 1; }
     LimitDialog .plan, LimitDialog .cost { color: $text-muted; margin-top: 1; }
+    LimitDialog .away { margin-top: 1; }
     """
     BINDINGS: ClassVar[list[Binding]] = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, stopped: list[Session], when: str, armed: bool, plan: str, room: bool) -> None:
+    def __init__(self, stopped: list[Session], when: str, armed: bool, plan: str, room: bool,
+                 away: dict[str, list[str]] | None = None, where: str = "") -> None:
         super().__init__()
         self.stopped, self.when, self.armed, self.plan, self.room = stopped, when, armed, plan, room
+        # The sessions that ran on another organisation than the account signed in now (id -> what
+        # their tool calls read, SENSITIVE), and where going on would send them: said, never stopped.
+        self.away, self.where = away or {}, where
 
     def compose(self) -> ComposeResult:
         now = Option(Text.assemble(
@@ -345,7 +351,9 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
         over = Option(Text.assemble(
             ("Hand the ticked over", f"bold {TEXT}"),
             ("  each a fresh session, its handover written from the transcript\n", MUTED),
-            ("  cheap on another account: the old context is not sent again", MUTED)), id="handover")
+            ("  cheap on another account: the old context is not sent again", MUTED),
+            ("\n  only a digest goes: your prompts, its last replies and commits, not what its tools read"
+             if self.away else "", AMBER)), id="handover")
         options = [now, later, over] if self.room else [later, now, over]
         if self.armed:
             options.append(Option(Text.assemble(("Do not continue them by themselves", f"bold {TEXT}"),
@@ -359,12 +367,29 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
             biggest = sorted(self.stopped, key=lambda s: -s.context)  # what costs most to go on with first
             yield SelectionList(*[Selection(self.line(s), s.session_id, True) for s in biggest], id="which")
             yield Label(self.cost(), classes="cost")
+            yield Label(self.away_words(), classes="away")
             yield OptionList(*options, id="ways")
             yield Label(keys(("Space", "tick"), ("Tab", "the sessions or the ways"), ("Enter", "choose"),
                              ("Esc", "cancel")), classes="hint")
 
     def on_mount(self) -> None:
-        self.query_one("#ways", OptionList).focus()
+        ways = self.query_one("#ways", OptionList)
+        ways.focus()
+        if self.away:  # going on would send a conversation to another organisation: the handover first
+            ways.highlighted = next(i for i in range(ways.option_count) if ways.get_option_at_index(i).id == "handover")
+
+    def away_words(self) -> Text:
+        """For the ticked ones that ran on another organisation: where going on sends them."""
+        ticked = [sid for sid in self.ticked() if sid in self.away]
+        if not ticked:
+            return Text("")
+        held = sorted({kind for sid in ticked for kind in self.away[sid]})
+        one = len(ticked) == 1
+        said = (f"{'One' if one else len(ticked)} of the ticked ran on another organisation: "
+                f"{'its conversation goes' if one else 'their conversations go'} to {self.where} if "
+                f"{'it goes' if one else 'they go'} on")
+        return Text.assemble((said, AMBER), (f" ({' / '.join(held)} content in {'it' if one else 'them'})"
+                                             if held else "", f"bold {AMBER}"), (".", AMBER))
 
     def line(self, session: Session) -> Text:
         """'web-app  Fix the login loop  612k context', a big context in amber."""
@@ -390,6 +415,7 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
 
     def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
         self.query_one(".cost", Label).update(self.cost())
+        self.query_one(".away", Label).update(self.away_words())
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id != "ways":
@@ -2244,6 +2270,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             return
         # As the list has it now, not as it was when h was pressed: it may have opened or closed
         # while the dialog stood, and an open one written to by a second process was not closed.
+        self.tell_elsewhere(now, "its whole conversation" if how == "self" else "a digest of it")
         closing = "Closing it; " if now.exit is Exit.RUNNING else ""
         self.notify(f"{closing}{writer} in the background. The fresh session opens when it is done.",
                     title=f"Handing over {session.project}", timeout=10)
@@ -3145,6 +3172,34 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.push_screen(AccountsDialog(current, seen, stopped, places, accounts.opens_in(), usage.last_by_account()),
                          chosen)
 
+    def ran_elsewhere(self, sessions: list[Session]) -> list[Session]:
+        """Those that last ran on another organisation than the account signed in now: going on with
+        them (or a handover, or a summary) sends their conversation there. Unknown either way: none."""
+        here = self.account.org_id if self.account is not None else ""
+        return [s for s in sessions if here and s.org and s.org != here]
+
+    def org_words(self) -> str:
+        """Where a conversation goes now: 'your personal account', 'the Example Labs organisation'."""
+        account = self.account
+        if account is None:
+            return "this account"
+        if account.personal:
+            return "your personal account"
+        return f"the {account.org_name} organisation" if account.org_name else "this organisation"
+
+    @staticmethod
+    def held(session: Session) -> list[str]:
+        """What its tool calls read: those of its tail as read, and any further back (sensitive_calls)."""
+        return list(dict.fromkeys([*session.sensitive, *sensitive_calls(session.path)]))
+
+    def tell_elsewhere(self, session: Session, what: str) -> None:
+        """One line, never a stop: what of a session that ran on another organisation goes to this one."""
+        if self.ran_elsewhere([session]):
+            held = self.held(session)
+            held = f" ({' / '.join(held)} content in it)" if held else ""
+            self.notify(f"{session.project} ran on another organisation: {what} goes to {self.org_words()}{held}.",
+                        severity="warning", timeout=10)
+
     def other_accounts_note(self, opens: datetime | None) -> tuple[str, str]:
         """For a limit's note: how the other Claude accounts stood when last read (usage.other_accounts),
         named as the top bar names them. ("", "") with none read."""
@@ -3567,8 +3622,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.update_row(session)
             self.update_detail()
 
-        self.push_screen(LimitDialog(stopped, when, all(s.session_id in self.armed for s in stopped), plan, room),
-                         chosen)
+        away = {s.session_id: self.held(s) for s in self.ran_elsewhere(stopped)}
+        self.push_screen(LimitDialog(stopped, when, all(s.session_id in self.armed for s in stopped), plan, room,
+                                     away, self.org_words()), chosen)
 
     def continue_these(self, stopped: list[Session], unasked: bool = False) -> None:
         """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt
@@ -3975,6 +4031,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         session = self.current()
         if session is None or session.session_id in self.summarizing:
             return
+        self.tell_elsewhere(session, "a digest of it")
         self.summarizing.add(session.session_id)
         self.update_detail()
         self.run_summary(session)
