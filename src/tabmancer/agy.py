@@ -445,6 +445,15 @@ def name(model: str) -> str:
     return found[1].capitalize() if found else (model or "").strip()
 
 
+def label(model: str) -> str:
+    """An agy model as a list names it: 'gemini-4-neon-high' or 'Gemini 4 Neon (High)' -> 'Neon (High)';
+    '' for a model that is not agy's (a Claude one, say)."""
+    plain = model_id(model)
+    if not MODEL_NAME.match(plain):
+        return ""
+    return f"{name(plain)} ({plain.rsplit('-', 1)[1].capitalize()})"
+
+
 def chain_words(model: str, models: tuple[str, ...] | None = None) -> str:
     """Where a model stands in the chain, in a few words: said where the model is picked."""
     models = models if models is not None else chain()

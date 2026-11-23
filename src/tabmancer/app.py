@@ -1363,7 +1363,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         the effort makes room for it where both do not fit."""
         if not self.model_shown or not session.model or session.model.startswith("<"):
             return Text("")
-        model = context.short_model(session.model, MODEL_ROOM - 4)
+        # An agy model's name holds its level ('Hydrogen (High)'): no effort comes after it.
+        model = context.short_model(session.model, MODEL_ROOM if agy.label(session.model) else MODEL_ROOM - 4)
         fell = bool(session.fell_back) and session.exit is Exit.RUNNING
         out = Text(model, style=(AMBER if fell else TEXT) if session.exit is Exit.RUNNING else MUTED)
         if fell:

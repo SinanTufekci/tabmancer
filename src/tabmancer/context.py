@@ -32,7 +32,13 @@ MODEL = re.compile(r"(opus|sonnet|haiku|fable)-(\d{1,2})(?:-(\d{1,2}))?(?!\d)")
 
 def short_model(model: str, most: int = 12) -> str:
     """A model id as a narrow place says it: claude-sonnet-5-5 -> 'sonnet 5.5', claude-opus-4-8[1m] ->
-    'opus 4.8'; an id it cannot read, cut to `most` characters."""
+    'opus 4.8', an agy one by its name (agy.label): gemini-4-neon-high -> 'Neon (High)', 'Hydrogen'
+    where its level does not fit; an id it cannot read, cut to `most` characters."""
+    from . import agy
+
+    label = agy.label(model)
+    if label:
+        return label if len(label) <= most else agy.name(model)
     found = MODEL.search(model.lower())
     if found is None:
         name = model.removeprefix("claude-")
