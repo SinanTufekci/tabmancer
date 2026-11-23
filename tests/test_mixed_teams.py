@@ -292,7 +292,7 @@ def test_handover_supports_agy_lead_and_preserves_mixed_lineup(tmp_path, monkeyp
     req = handover.team_request(team)
     assert "ui: screens @agy @high" in req and "Keep @agy" in req
 
-    # write_itself invokes `agy -p --conversation` for an agy lead
+    # write_itself invokes `agy --conversation <id> ... -p <request>` for an agy lead
     seen_cmd: list[str] = []
 
     def fake_run(cmd, **kwargs):
@@ -304,7 +304,7 @@ def test_handover_supports_agy_lead_and_preserves_mixed_lineup(tmp_path, monkeyp
     monkeypatch.setattr(handover.subprocess, "run", fake_run)
     lead_session = Session(session_id="agy-lead-1", path=tmp_path / "t.jsonl", cwd=team.cwd, cli="agy", model="gemini-4-carbon")
     written, lineup = handover.write_team(lead_session, team)
-    assert seen_cmd[:4] == ["/bin/agy", "-p", "--conversation", "agy-lead-1"]
+    assert seen_cmd[:3] == ["/bin/agy", "--conversation", "agy-lead-1"] and seen_cmd[-2:] == ["-p", req]
     assert "State summary" in written
     assert "@agy" in lineup
 

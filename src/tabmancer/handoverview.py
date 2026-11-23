@@ -14,7 +14,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
-from . import context, handover
+from . import clis, context, handover
 from .dialogs import frame, title
 from .sessions import Exit, Session, _shorten
 from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, keys
@@ -59,10 +59,12 @@ class HandoverDialog(ModalScreen[str | None]):
                                         ("  cheaper; misses what was never written down\n", MUTED),
                                         ((f"  Claude ({handover.MODEL}) writes it in about a minute; the session "
                                           "is not resumed"), MUTED)), id="transcript")]
-        if session.cli == "claude":
+        # write_itself resumes these (agy on the chain's model, so only with agy here to run it).
+        if session.cli == "claude" or (session.cli == "agy" and clis.installed("agy")):
+            on = " on the chain's model (agy)" if session.cli == "agy" else ""
             options.insert(0, Option(Text.assemble(
                 ("Let the session write it", f"bold {TEXT}"), ("  the most complete: it knows everything\n", MUTED),
-                ("  resumed once in the background, without a tab; it writes the handover and exits", MUTED)),
+                (f"  resumed once in the background{on}, without a tab; it writes the handover and exits", MUTED)),
                 id="self"))
         with Vertical():
             yield Label(title("Hand over", (session.project, f"bold {CYAN}"), f"“{_shorten(session.title, 50)}”"))

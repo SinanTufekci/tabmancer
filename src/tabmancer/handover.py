@@ -130,10 +130,14 @@ def close(session: Session, open_sessions: list[Session], again: str = AGAIN) ->
         raise HandoverError(reason)
     if not focus.close_tab(session.title):
         raise HandoverError(f"its tab was not found in Windows Terminal. {again}")
-    role = teams.member_of(session) if session.cli == "agy" else None
+    # agy and Codex keep no registry of what is open, as Claude does: a team member's runner says,
+    # whose presence ends with the CLI it runs. Outside a team nothing marks one open (codex.read
+    # never does), so there is no process to wait for: the closed tab is all that can be known.
+    by_runner = session.cli in ("agy", "codex")
+    role = teams.member_of(session) if by_runner else None
     deadline = time.monotonic() + CLOSE_SECONDS
     while time.monotonic() < deadline:
-        if session.cli == "agy":
+        if by_runner:
             from . import teambus
 
             if role is None or not teambus.is_alive(role[0].name, role[1].name):
@@ -141,7 +145,7 @@ def close(session: Session, open_sessions: list[Session], again: str = AGAIN) ->
         elif not any(info.get("sessionId") == session.session_id for info in _registry_sessions()):
             return
         time.sleep(0.5)
-    who = "Antigravity" if session.cli == "agy" else "Claude"
+    who = {"agy": "Antigravity", "codex": "Codex"}.get(session.cli, "Claude")
     raise HandoverError(f"its tab closed, but {who} did not exit")
 
 
@@ -152,11 +156,10 @@ def write_itself(session: Session, request: str = REQUEST) -> str:
         raise HandoverError(f"its folder is gone ({session.cwd})")
     with tempfile.TemporaryDirectory(prefix="tabmancer-handover-") as scratch:
         last = Path(scratch) / "answer.md"  # where Codex writes its last message (-o)
-        cmd, model = _resume_command(session, last)
+        cmd, model, given = _resume_command(session, last, request)
         try:
-            # The request goes in on stdin: through a .cmd shim, cmd.exe would take < and > for redirects.
             result = subprocess.run(
-                cmd, input=request, cwd=session.cwd,
+                cmd, input=given, cwd=session.cwd,
                 env=clean_env(), capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=WRITE_SECONDS, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except subprocess.TimeoutExpired as error:
@@ -179,9 +182,13 @@ def write_itself(session: Session, request: str = REQUEST) -> str:
     return answer
 
 
-def _resume_command(session: Session, last: Path) -> tuple[list[str], str]:
-    """The command that resumes a session once without a tab, the request on stdin and the answer on
-    stdout (Codex: in the file `last` too), and the model it runs on ("" when its CLI picks).
+def _resume_command(session: Session, last: Path, request: str) -> tuple[list[str], str, str]:
+    """The command that resumes a session once without a tab with the answer on stdout (Codex: in the
+    file `last` too), the model it runs on ("" when its CLI picks) and what goes in on stdin.
+
+    The request goes in on stdin where the CLI reads it there: through a .cmd shim, cmd.exe would take
+    < and > for redirects. agy reads no prompt from stdin: it is -p's value (agy.exe, no shim), cut to
+    fit a command line as summaries are (summarize.fit_argument), after --conversation and the model.
 
     agy: the chain's model (agy.model_flags), never the one its transcript names when that is out of
     the chain (Argon, a Claude model); every model out of quota is a HandoverError, and nothing runs.
@@ -196,21 +203,24 @@ def _resume_command(session: Session, last: Path) -> tuple[list[str], str]:
             flags, _, _ = agy.model_flags("", session_id=session.session_id)
         except agy.NoModel as error:
             raise HandoverError(str(error)) from error
-        return [agy_bin, "-p", "--conversation", session.session_id, *flags], flags[1] if flags else session.model
+        # agy stops itself before the wait runs out (exit 3), so no child of it is left behind.
+        return ([agy_bin, "--conversation", session.session_id, *flags, "--print-timeout",
+                 f"{WRITE_SECONDS - 30}s", "-p", summarize.fit_argument(request)],
+                flags[1] if flags else session.model, "")
     if session.cli == "codex":
         codex = shutil.which("codex")
         if not codex:
             raise HandoverError("the codex CLI is not on PATH")
         model = ["-m", session.model] if session.model else []
         return [codex, "exec", "resume", "--skip-git-repo-check", "-o", str(last), *model,
-                session.session_id, "-"], session.model
+                session.session_id, "-"], session.model, request
     if session.cli != "claude":
         raise HandoverError(f"a {session.cli} session cannot be resumed to write its handover")
     claude = shutil.which("claude")
     if not claude:
         raise HandoverError("the claude CLI is not on PATH")
     model = ["--model", session.model] if session.model else []
-    return [claude, "-p", "--resume", session.session_id, *model], session.model
+    return [claude, "-p", "--resume", session.session_id, *model], session.model, request
 
 
 def fresh(session: Session, handover: str) -> Launch:
