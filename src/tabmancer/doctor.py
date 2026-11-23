@@ -6,6 +6,7 @@ whether recent transcripts still read the way tabmancer expects.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import shutil
@@ -233,7 +234,7 @@ def shortcut_check() -> Result | None:
     except OSError:
         return None
     found = shortcuts.read_shortcut(folder / f"{shortcuts.PICKER_TITLE}.lnk")
-    if found is None or os.path.basename(found[0]).lower() != "wt.exe":
+    if found is None or ntpath.basename(found[0]).lower() != "wt.exe":  # a Windows path, read as one
         return None
     if "--tabs-window" in found[1]:
         return "ok", "The desktop shortcut starts the dashboard in a window of its own name."

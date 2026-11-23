@@ -73,6 +73,7 @@ def test_a_holder_that_died_is_taken_over():
     try:
         assert actor.process(pid) is not None and "actor.claim()" in actor.process(pid)[1]  # our own child
         os.kill(pid, 9)  # TerminateProcess on Windows: no release
+        first.wait(30)  # reaped (a venv launcher on Windows ends with it): not left a zombie on Linux
         for _ in range(100):
             if actor.process(pid) is None:
                 break

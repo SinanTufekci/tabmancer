@@ -88,21 +88,24 @@ def _windows_process(pid: int) -> tuple[str, str] | None:
 
 def _posix_process(pid: int) -> tuple[str, str] | None:
     proc = Path(f"/proc/{pid}")
-    if proc.is_dir():  # Linux: the start in clock ticks after boot (field 22), the arguments NUL-separated
-        try:
+    # A zombie (Z; X: being removed) has exited and waits only for its parent to reap it: gone.
+    if proc.is_dir():  # Linux: the state (field 3), the start in clock ticks after boot (field 22), the
+        try:            # arguments NUL-separated
             stat = (proc / "stat").read_text(encoding="utf-8", errors="replace")
             command = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip()
         except OSError:
             return None
-        return stat[stat.rindex(")") + 2:].split()[19], command
+        fields = stat[stat.rindex(")") + 2:].split()
+        return None if fields[0] in ("Z", "X") else (fields[19], command)
     try:  # macOS and the other BSDs
-        started = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
-                                 timeout=5, check=False).stdout.strip()
+        state = subprocess.run(["ps", "-o", "stat=", "-o", "lstart=", "-p", str(pid)], capture_output=True,
+                               text=True, timeout=5, check=False).stdout.strip()
         command = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True,
                                  timeout=5, check=False).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
-    return (started, command) if started else None
+    flags, _, started = state.partition(" ")
+    return None if not started.strip() or flags.startswith("Z") else (started.strip(), command)
 
 
 def process(pid: int) -> tuple[str, str] | None:
