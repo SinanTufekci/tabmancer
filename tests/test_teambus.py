@@ -465,3 +465,65 @@ def test_a_listen_that_could_ack_but_not_claim_says_presence_is_off(monkeypatch,
     out = capsys.readouterr().out
     assert "hello" in out and teambus.PRESENCE_OFF in out and teambus.ACKS_OFF not in out
     assert teambus.unread("shop", "ui") == []
+
+
+# --- a process it may not ask about is not a dead one (agy's sandbox denies OpenProcess) ----------
+
+def test_alive_means_running_as_the_same_process_and_a_refused_question_is_no_death(monkeypatch):
+    def state(answer):
+        monkeypatch.setattr(teambus, "_process_state", lambda pid: answer)
+
+    state((teambus.GONE, None))
+    assert not teambus._alive({"pid": 4242, "procStart": "7"})
+    state((teambus.UNKNOWN, None))
+    assert teambus._alive({"pid": 4242, "procStart": "7"})  # agy's sandbox: no answer, not dead
+    state((teambus.RUNNING, 7))
+    assert teambus._alive({"pid": 4242, "procStart": "7"}) and teambus._alive({"pid": 4242})
+    state((teambus.RUNNING, 8))
+    assert not teambus._alive({"pid": 4242, "procStart": "7"})  # the pid went to another process
+    assert not teambus._alive({})
+
+
+def _agent(monkeypatch, answers: list) -> list:
+    """The watched agent (pid 4242) answers each question with the next of `answers` (the last one
+    from then on); returns the list of questions asked about it. Other pids (the listen's own, for
+    its claim) are running."""
+    asked: list = []
+
+    def state(pid):
+        if pid != 4242:
+            return teambus.RUNNING, 1
+        asked.append(pid)
+        return answers[min(len(asked), len(answers)) - 1]
+
+    monkeypatch.setattr(teambus, "_process_state", state)
+    return asked
+
+
+def test_a_listen_whose_agent_it_may_not_ask_about_keeps_waiting(monkeypatch):
+    # The 2026-11-23 Stop-hook run: in agy's sandbox every listen said [timeout] within seconds.
+    asked = _agent(monkeypatch, [(teambus.UNKNOWN, None)])
+    _, box = _in_thread(lambda: teambus.listen("shop", "ui", timeout=30, poll=0.01, watch_pid=4242))
+    _until(lambda: len(asked) >= 4)  # the agent asked about several times over
+    assert "value" not in box
+    teambus.send("shop", "lead", "ui", "TASK-2")
+    _until(lambda: "value" in box)
+    assert [m["text"] for m in box["value"]] == ["TASK-2"]
+
+
+@pytest.mark.parametrize("later", [(teambus.GONE, None), (teambus.RUNNING, 8)], ids=["gone", "pid reused"])
+def test_a_listen_ends_with_its_agent(monkeypatch, later):
+    _agent(monkeypatch, [(teambus.RUNNING, 7), later])  # the start time is taken first, then asked
+    started = time.monotonic()
+    assert teambus.listen("shop", "ui", timeout=30, poll=0.01, watch_pid=4242) == []
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows' own answers")
+def test_windows_says_gone_for_an_ended_process_and_running_for_a_live_one():
+    child = subprocess.Popen(["cmd", "/c", "exit 0"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    child.wait()
+    assert teambus._windows_query(child.pid)[0] == teambus.GONE
+    assert teambus._windows_query(999_999_999) == (teambus.GONE, None)
+    state, started = teambus._windows_query(os.getpid())
+    assert state == teambus.RUNNING and started == teambus._windows_process_start(os.getpid())

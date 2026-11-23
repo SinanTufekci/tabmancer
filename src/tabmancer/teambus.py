@@ -257,7 +257,14 @@ def write_role_file(team: str, session_name: str, text: str) -> Path | None:
 
 # --- processes: whose listener is it --------------------------------------------------------
 
-def _windows_process_start(pid: int) -> int | None:
+RUNNING, GONE, UNKNOWN = "running", "gone", "unknown"  # what asking about a process can say
+ERROR_INVALID_PARAMETER = 87  # OpenProcess on a pid no process has
+
+
+def _windows_query(pid: int) -> tuple[str, int | None]:
+    """(RUNNING, its start time) / (GONE, None) / (UNKNOWN, None) for a pid on Windows. GONE only when
+    Windows says so: no process has the pid, or it has exited. A refused question (agy's terminal
+    sandbox denies OpenProcess on processes outside it) is UNKNOWN, never GONE."""
     import ctypes
     from ctypes import wintypes
 
@@ -270,37 +277,56 @@ def _windows_process_start(pid: int) -> int | None:
 
     handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
     if not handle:
-        return None
+        return (GONE if ctypes.get_last_error() == ERROR_INVALID_PARAMETER else UNKNOWN), None
     try:
         code = wintypes.DWORD()
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:
-            return None  # 259 = STILL_ACTIVE
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return UNKNOWN, None
+        if code.value != 259:  # 259 = STILL_ACTIVE
+            return GONE, None
         times = [wintypes.FILETIME() for _ in range(4)]
         if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
-            return None
-        return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            return UNKNOWN, None
+        return RUNNING, (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
     finally:
         kernel32.CloseHandle(handle)
 
 
+def _windows_process_start(pid: int) -> int | None:
+    """A running process's start time on Windows, else None (gone, or Windows would not say)."""
+    state, started = _windows_query(pid)
+    return started if state == RUNNING else None
+
+
+def _process_state(pid: int) -> tuple[str, int | None]:
+    """(RUNNING, start time or None) / (GONE, None) / (UNKNOWN, None): see _windows_query."""
+    if sys.platform == "win32":
+        return _windows_query(pid)
+    try:
+        os.kill(pid, 0)  # signal 0 only probes on POSIX (on Windows it would kill)
+    except ProcessLookupError:
+        return GONE, None
+    except PermissionError:
+        return RUNNING, None  # it exists, another user's
+    except OSError:
+        return UNKNOWN, None
+    return RUNNING, None
+
+
 def _alive(info: dict) -> bool:
     """Whether the process in info ({pid, procStart}) still runs: on Windows, the same one (a pid
-    is reused after a restart, its start time is not)."""
+    is reused after a restart, its start time is not). Dead means gone, or a different start time;
+    a process this one may not ask about counts as alive (a listen in agy's sandbox quit within
+    seconds when it took a refused question for a dead agent)."""
     try:
         pid = int(info["pid"])
     except (KeyError, TypeError, ValueError):
         return False
-    if sys.platform == "win32":
-        started = _windows_process_start(pid)
-        expected = info.get("procStart")
-        return started is not None and (not expected or str(expected) == str(started))
-    try:
-        os.kill(pid, 0)  # signal 0 only probes on POSIX (on Windows it would kill)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    state, started = _process_state(pid)
+    if state != RUNNING:
+        return state == UNKNOWN
+    expected = info.get("procStart")
+    return started is None or not expected or str(expected) == str(started)
 
 
 def _windows_parent(pid: int) -> tuple[int, str] | None:
@@ -545,10 +571,9 @@ def unread(team: str, member: str, mark_read: bool = False, since: datetime | No
 
 def _pid_info(pid: int) -> dict:
     info: dict[str, object] = {"pid": pid}
-    if sys.platform == "win32":
-        started = _windows_process_start(pid)
-        if started is not None:
-            info["procStart"] = str(started)
+    _, started = _process_state(pid)  # a start time on Windows only
+    if started is not None:
+        info["procStart"] = str(started)
     return info
 
 

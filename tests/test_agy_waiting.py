@@ -38,6 +38,8 @@ def conversation(home, statuses: list[int], sid: str = SID) -> None:
     ([3, 9, 3, 2], False),  # held once, allowed: it went on
     ([3, 7, 1], False),  # denied: an error, its turn goes on
     ([3, 2], False),  # running
+    ([3, 8], False),  # generating: seen briefly in a live run (2026-11-23), then gone; no prompt
+    ([3, 9, 8], False),  # held once, then on to generating
     ([], False),
 ])
 def test_the_newest_step_reached_decides(agy_home, statuses, waits):
