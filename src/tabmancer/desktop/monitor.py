@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__, agy, bitart, focus, teams, teamview
 from ..config import config_dir, merge_json, read_json
-from ..monitorview import MONITOR_KEYS
+from ..keys import MONITOR_KEYS
 from ..sessions import Exit, Status
 from ..store import Snapshot, TeamStore
 from ..tokens import human

@@ -2,6 +2,7 @@
 tabmancer runs as ever without it, and `tabmancer desktop` says how to add it."""
 
 import ast
+import os
 import subprocess
 import sys
 import types
@@ -39,6 +40,57 @@ def test_the_package_and_its_cli_load_no_qt():
             "sorted(m for m in sys.modules if m.split('.')[0] in ('PySide6', 'shiboken6')))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=True)
     assert out.stdout.split() == ["True", "[]"]
+
+
+BLOCKED = ("textual", "PySide6", "shiboken6")
+# The core works headless, with neither Textual nor Qt importable: what the MCP server, the bus, the
+# agy plugin, teams and the CLI's twins stand on, and what the desktop window reads. Each is used a
+# little on made-up data, in folders of the test's own.
+HEADLESS = """
+import importlib, json, sys
+
+class Blocked:
+    def find_spec(self, name, path=None, target=None):
+        if name.split(".")[0] in BLOCKED:
+            raise ImportError("blocked: " + name)
+
+sys.meta_path.insert(0, Blocked())
+for name in MODULES:
+    importlib.import_module("tabmancer." + name)
+from tabmancer import agyplugin, handover, keys, mcpserver, router, store, teams
+
+assert keys.KEYS and keys.MONITOR_KEYS
+assert all(len(row) == 3 for _, rows in keys.KEYS + keys.MONITOR_KEYS for row in rows)
+assert {tool["name"] for tool in mcpserver.TOOLS}
+shop = teams.new_team("shop", FOLDER, "Add a checkout", teams.parse_members("api: endpoints"))
+teams.save({"shop": shop})
+assert teams.load()["shop"].goal == "Add a checkout"
+assert "api" in handover.team_request(teams.load()["shop"])
+assert router.guess("rename the design doc").pick.model == "haiku"
+assert json.loads(agyplugin.files()["plugin.json"])["name"]
+assert store.TeamStore("shop").name == "shop"
+print(sorted(m for m in sys.modules if m.split(".")[0] in BLOCKED))
+"""
+CORE = ("keys", "store", "viewmodel", "actions", "actor", "marks", "search", "teams", "teambus", "codexbus",
+        "mcpserver", "agyplugin", "summarize", "router", "handover", "teamwatch", "launch", "picks", "agy")
+
+
+def test_the_core_runs_without_textual_or_qt(tmp_path):
+    env = {**os.environ, "PYTHONPATH": str(SOURCE.parent)}
+    for name in ("TABMANCER_CONFIG_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
+        env[name] = str(tmp_path / name.lower())
+    given = {"BLOCKED": BLOCKED, "MODULES": CORE, "FOLDER": str(tmp_path / "shop")}
+    code = "".join(f"{name} = {value!r}\n" for name, value in given.items()) + HEADLESS
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, env=env,
+                         check=False)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.split() == ["[]"]
+
+
+def test_the_key_lists_import_nothing():
+    tree = ast.parse((SOURCE / "keys.py").read_text(encoding="utf-8"))
+    imported = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+    assert [getattr(node, "module", None) for node in imported] == ["__future__"]
 
 
 def test_available_asks_without_importing(monkeypatch):

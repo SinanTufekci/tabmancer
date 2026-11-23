@@ -25,7 +25,7 @@ from tabmancer import actor, agy, cli, demo, teambus, teams
 from tabmancer import viewmodel as VM
 from tabmancer.config import read_json
 from tabmancer.desktop import look, monitor, widgets
-from tabmancer.monitorview import MONITOR_KEYS
+from tabmancer.keys import MONITOR_KEYS
 
 look.fonts_for_offscreen()
 

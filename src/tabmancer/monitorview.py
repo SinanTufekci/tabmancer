@@ -20,6 +20,7 @@ from textual.widgets import Label, Static
 
 from . import agy, teams, teamtree, teamwatch
 from . import viewmodel as VM
+from .keys import MONITOR_KEYS  # the list itself; tests import it from here too
 from .keysview import KeysScreen
 from .safework import work
 from .sessions import Session, folder_key
@@ -29,33 +30,6 @@ from .tokens import human
 
 WIDE = 180  # columns from which every member shows in a table beside the conversation
 SIDE = 72  # that table's width
-
-# The monitor's keys, for its ? menu: (group, [(key, its action on the monitor, what it does)]).
-MONITOR_KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
-    ("Members", [
-        ("← →", "", "pick a member: its card, its lane and its arrows lit, and its two lines under the cards"),
-        ("Enter", "open_member", "go to the picked member's tab, or open it"),
-        ("j", "next_needs", "pick the next member that needs you"),
-        ("p", "message", ("write to the picked member: typed into its tab once it waits for you, over the team "
-                          "bus for a member on it; a closed one opens with it")),
-        ("Esc", "clear_pick", "everyone again: no member picked"),
-    ]),
-    ("The team", [
-        ("s", "start_team", "start every member not open, the lead last"),
-        ("a", "add_member", "add members"),
-        ("d", "remove_member", "take the picked member off the team (twice); its sessions stay"),
-        ("g", "edit_goal", "the team's goal; the lead is told"),
-        ("h", "handover_team", "hand the whole team over (twice): a fresh lead with the handover, fresh members"),
-        ("H", "handover", "hand the picked member alone over to a fresh session"),
-        ("x", "close_team", "close every open member's tab (twice); the sessions stay"),
-    ]),
-    ("Windows", [
-        ("T", "other_team", "the monitor of another team, in this window"),
-        ("D", "dashboard", "the dashboard: its tab to the front, or a new one"),
-        ("?", "", "this list"),
-        ("q", "quit_monitor", "close the monitor (twice while a handover is on its way from here)"),
-    ]),
-]
 
 
 def tone_style(tone: str) -> str:
