@@ -116,16 +116,18 @@ class Launch:
         return ["claude", *more, *_said(self.prompt)]
 
     def _codex_argv(self) -> list[str]:
-        prompt = _said(self.prompt)
+        # options: a team member's -c overrides (its MCP server, for this session only), before the
+        # session and the prompt, after the subcommand that takes them.
+        prompt, more = _said(self.prompt), list(self.options)
         if self.mode is Mode.RESUME:
-            return ["codex", "resume", self.session_id, *prompt]
+            return ["codex", "resume", *more, self.session_id, *prompt]
         if self.mode is Mode.AUTO:
-            return ["codex", "resume", self.session_id, *_said(self.prompt or continue_prompt())]
+            return ["codex", "resume", *more, self.session_id, *_said(self.prompt or continue_prompt())]
         if self.mode is Mode.FORK:
-            return ["codex", "fork", self.session_id]
+            return ["codex", "fork", *more, self.session_id]
         if self.mode is Mode.CONTINUE:
-            return ["codex", "resume", "--last"]  # the most recent session in this folder
-        return ["codex", *prompt]
+            return ["codex", "resume", *more, "--last"]  # the most recent session in this folder
+        return ["codex", *more, *prompt]
 
     def _agy_argv(self) -> list[str]:
         # -i sends a first prompt and keeps the session open; -p would print and exit.
@@ -400,19 +402,21 @@ def _note(launches: list[Launch]) -> None:
         pass  # a pick not saved costs the next resume its cap, never this launch
 
 
-def open_tabs(launches: list[Launch]) -> list[str]:
+def open_tabs(launches: list[Launch], window: str | None = None) -> list[str]:
     """Open each launch in its own tab. Returns the commands left for the user to run.
 
-    Inside Windows Terminal the tabs join the current window, otherwise a new one.
-    Anything that could not be opened comes back as a shell line to run by hand. Raises OSError
-    when Windows Terminal would not start.
+    Inside Windows Terminal the tabs join the current window (the one used last: "0"), otherwise a
+    new one; window says which instead ("0", "new" or a window's name), for a caller that is not
+    where the tabs belong (the team monitor, in a window of its own). Anything that could not be
+    opened comes back as a shell line to run by hand. Raises OSError when Windows Terminal would
+    not start.
     """
     if any(launch.cli == "claude" for launch in launches):
         claudeupdate.before_opening()  # today's claude update first, when it is on
     _note(launches)
     kind = terminal_kind()
     if kind == "windows-terminal":
-        window = "0" if os.environ.get("WT_SESSION") else "new"
+        window = window or ("0" if os.environ.get("WT_SESSION") else "new")
         started = None
         for command in windows_terminal_commands(launches, window):
             if started is not None:  # in their order: a team's lead, which comes last, opens last

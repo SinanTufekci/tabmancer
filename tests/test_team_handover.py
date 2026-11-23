@@ -189,6 +189,8 @@ async def test_the_new_generations_cap_is_picked_in_the_dialog(fake_home, tmp_pa
         await pilot.press("h", "h")
         await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog))
         dialog = app.screen
+        # Pushed is not yet mounted: under a loaded machine the preview was read before on_mount filled it.
+        await until(pilot, lambda: str(dialog.query_one("#handover-preview").render()).strip() != "")
         choice = dialog.query_one("#handover-cap")
         assert choice.value == "auto"  # the team's own (none, in the tests): there to see and change
         assert "no cap" in str(dialog.query_one("#handover-preview").render())

@@ -14,6 +14,10 @@ from tabmancer import agy, cli, handover, sessions, summarize, teambus, teams, t
 from tabmancer.launch import Launch, Mode
 from tabmancer.sessions import Exit, Session
 
+# Every bus tool but team_request, which asks the user each time
+ALLOWED = ("--allowedTools=Bash(tabmancer team:*),mcp__tabmancer__team_send,mcp__tabmancer__team_inbox,"
+           "mcp__tabmancer__team_wait,mcp__tabmancer__team_who,mcp__tabmancer__team_status")
+
 WRITE_ITSELF = handover.write_itself  # the real one: conftest keeps tests off claude/agy -p
 
 
@@ -83,7 +87,7 @@ def test_mixed_team_launches_claude_and_agy_with_bus_and_auto_mode(tmp_path):
     # Claude worker gets bus allowedTools, bus env, and startup listen prompt
     api_launch = teams.launch(team, api)
     assert api_launch.cli == "claude"
-    assert "--allowedTools=Bash(tabmancer team:*)" in api_launch.argv
+    assert ALLOWED in api_launch.argv
     assert ("TABMANCER_TEAM", "shop") in api_launch.env
     assert ("TABMANCER_MEMBER", "api") in api_launch.env
     assert "tabmancer team listen shop api" in (api_launch.prompt or "")
@@ -334,3 +338,37 @@ def test_the_bus_command_in_an_agy_role_runs_without_tabmancer(tmp_path):
     who = subprocess.run(f"{bus} who shop", shell=True, cwd=empty, env=env,
                          capture_output=True, text=True, timeout=60, check=False)
     assert who.returncode == 0 and "api" in who.stdout, who.stderr
+
+
+def test_claude_members_of_a_bus_team_get_the_bus_as_mcp_tools(tmp_path):
+    """--mcp-config names a file per member that starts `tabmancer mcp` for that member; the tools are
+    allowed without asking. agy members and Claude-only teams get none (agy: its plugin; Claude-only:
+    SendMessage)."""
+    team = _mixed_team(tmp_path)
+    _lead, api, ui = team.members
+    argv = teams.launch(team, api).argv
+    [flag] = [a for a in argv if a.startswith("--mcp-config=")]
+    path = Path(flag.split("=", 1)[1])
+    assert path.parent == teambus.team_dir("shop") / "mcp" and path.name == "shop-api.json"
+    entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["tabmancer"]
+    assert entry["type"] == "stdio" and entry["args"][-5:] == ["mcp", "--team", "shop", "--member", "api"]
+    assert ALLOWED in argv
+    assert argv.index(flag) < argv.index(ALLOWED)
+    assert "mcp__tabmancer__team_send" in teams.role(team, api)
+
+    assert not any(a.startswith("--mcp-config") for a in teams.launch(team, ui).argv)
+    plain = teams.new_team("solo", str(tmp_path / "shop"), "x", teams.parse_members("lead: a\nb: c", lead_ok=True))
+    assert not any(a.startswith("--mcp-config") for a in teams.launch(plain, plain.members[1]).argv)
+
+    # The seam: the command in that file is a working MCP server for that member.
+    hello = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                                   "clientInfo": {"name": "claude-code", "version": "2"}}})
+    ask = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                      "params": {"name": "team_send", "arguments": {"to": "ui", "message": "from the config"}}})
+    teams.save({"shop": team})
+    done = subprocess.run([entry["command"], *entry["args"]], input=f"{hello}\n{ask}\n", capture_output=True,
+                          text=True, encoding="utf-8", timeout=60, check=False)
+    replies = [json.loads(line) for line in done.stdout.splitlines()]
+    assert [r["id"] for r in replies] == [1, 2] and replies[1]["result"]["isError"] is False, done.stderr
+    assert [(m["from"], m["text"]) for m in teambus.unread("shop", "ui")] == [("api", "from the config")]

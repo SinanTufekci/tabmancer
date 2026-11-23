@@ -38,7 +38,8 @@
 - **Remembers what was open.** Sessions that were still open at the last shutdown
   start out ticked.
 - **A short preview.** First and last prompt, Claude's last reply, files edited, git
-  branch, lines changed.
+  branch, lines changed. In a big window (180x40 and up) it stands beside the list at full
+  height and says more, a team's cards in it as in the team view (the compact tree when they would leave no room for its messages and keys); `V` keeps it under the list.
 - **No more typing "continue".** A session that was cut off mid-task reopens and is
   told to carry on right away. Sessions stopped at a usage limit show when it lifts;
   `c` continues them then, or right away once you have signed in with another account.

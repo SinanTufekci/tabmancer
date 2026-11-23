@@ -175,9 +175,9 @@ def team_key_pairs(started: bool, unfolded: bool) -> tuple[tuple[str, str], ...]
     members unfolded under it or not)."""
     if not started:
         return (("Enter", "team view"), ("s", "start the team"), ("e", "members"), ("E", "all teams"),
-                ("Space", "tick"), ("a", "add"), ("x", "hide"), ("T", "teams"))
+                ("Space", "tick"), ("a", "add"), ("x", "hide"), ("T", "teams"), ("M", "monitor"))
     return (("Enter", "team view"), ("e", "fold" if unfolded else "unfold"), ("E", "all teams"),
-            ("s", "start the rest"), ("a", "add"), ("x", "close"), ("T", "teams"))
+            ("s", "start the rest"), ("a", "add"), ("x", "close"), ("T", "teams"), ("M", "monitor"))
 
 
 def by_project(sessions: list[Session]) -> list[str]:

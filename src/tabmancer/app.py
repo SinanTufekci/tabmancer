@@ -28,7 +28,7 @@ from textual.containers import Horizontal, Vertical
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
 from textual.timer import Timer
-from textual.widgets import DataTable, Input, Label, OptionList, SelectionList, Sparkline, Static
+from textual.widgets import DataTable, Input, Label, OptionList, Rule, SelectionList, Sparkline, Static
 from textual.widgets.data_table import ColumnKey, RowKey
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
@@ -36,6 +36,7 @@ from textual.widgets.selection_list import Selection
 from . import (
     __version__,
     accounts,
+    actor,
     agy,
     background,
     browsers,
@@ -55,6 +56,7 @@ from . import (
     teambus,
     teams,
     teamtree,
+    teamwatch,
     toast,
     tokens,
     typein,
@@ -65,11 +67,11 @@ from . import (
 )
 from . import viewmodel as VM
 from .clisettings import CliSettings
-from .config import read_json, write_json
+from .config import merge_json, read_json
 from .dialogs import frame, title
 from .handoverview import HandoverDialog, fill
 from .keysview import KEYS, KeysScreen
-from .launch import Launch, Mode, continue_prompt, default_mode, open_tabs, run_in_background
+from .launch import Launch, Mode, continue_prompt, default_mode, open_tabs, run_in_background, terminal_kind
 from .mascot import Mascot, way_of
 from .safework import work
 from .sessions import (
@@ -86,6 +88,7 @@ from .sessions import (
     read_session,
     transcript_path,
 )
+from .shortcuts import DASHBOARD_WINDOW
 from .shutdowns import open_at_shutdown, recent_shutdowns
 from .statsview import StatsScreen, copy_text
 from .teamview import (
@@ -94,6 +97,7 @@ from .teamview import (
     JoinTeam,
     LineDialog,
     NewTeamDialog,
+    TeamGraph,
     TeamHandoverDialog,
     TeamScreen,
     TeamsDialog,
@@ -151,7 +155,18 @@ LIVE_STATES = {raw: (label, TONE[tone], rank) for raw, (label, tone, rank, _) in
 SPINNING = {"busy", "working"}
 # A team's members, counted on its row by what each does (VM.state_id), in this order (VM.TEAM_GLYPHS).
 TEAM_GLYPHS = {state: (glyph, TONE[tone]) for state, (glyph, tone) in VM.TEAM_GLYPHS.items()}
+MONITOR_AGAIN = 4.0  # seconds in which a second M for the same team does nothing: its window is on its way
 TEAM_MESSAGES_FROM = 150  # columns from which a team's preview lists its messages beside the tree
+# Columns and rows from which the preview stands beside the list, both at full height (V keeps it
+# under the list): a maximized window, not a 120x30 or half-screen one.
+SPLIT_FROM = (180, 40)
+# Said instead of "remembered" when config.json is there but could not be read: writing the one key
+# alone would have wiped the rest of it (merge_json refuses).
+NOT_SAVED = "Not saved: config.json could not be read, so it was left as it is."
+ACTS_ELSEWHERE = ("Another tabmancer dashboard continues sessions at their reset: c there sets which. This one "
+                  "only shows them (it takes over when that one closes).")
+PANE_LEAST, PANE_MOST = 56, 90  # the preview's width there: the window's less 132, within these
+PANE_TAKES = 132
 # The sidebar's marks, said once under its projects (two lines of the sidebar's width).
 LEGEND = Text.assemble(("● ", RED), ("your turn  ", MUTED), ("● ", GREEN), ("open\n", MUTED),
                        ("▲ ", AMBER), ("to continue  ", MUTED), ("± ", AMBER), ("↑ ", CYAN), ("git", MUTED))
@@ -170,6 +185,9 @@ TIMER_THREADS = 64  # Windows: a thread for every timer at once, the team view's
 USAGE_SECONDS = 300  # plan limits change slowly; `claude -p /usage` is cheap but not free
 TOKENS_SECONDS = 60  # token counts: only what transcripts gained since the last count is read
 ACCOUNTS_SECONDS = 5  # who the CLIs are signed in as: /login in any session switches it
+ACTOR_SECONDS = 10  # a dashboard that only watches looks this often whether the one that acts is gone
+NAMELESS = ("This dashboard could not read its own start time, so it only shows sessions: it does not "
+            "continue them at their reset, send desktop notes or run updates. Another tabmancer dashboard can.")
 UPDATES_SECONDS = 6 * 3600  # a dashboard left open for days hears of a new tabmancer (PyPI: once a day)
 GIT_SECONDS = 60  # where each project's folder stands in git (git status: local, no network)
 WRAPPED_AFTER, WRAPPED_SECONDS = 8, 600  # Friday's word on the week: after Bit's hello, then looked for again
@@ -518,6 +536,41 @@ def settle_memory() -> None:
     gc.freeze()
 
 
+def wrap_at(text: Text, width: int, separator: str = "  ·  ") -> list[Text]:
+    """A line of parts on as many lines as it takes at this width, broken only between its parts
+    ("TEAM shop · 4 of 4 open · 7 messages · 671k tokens": never "671k" on one line, "tokens" on the
+    next); a part wider than the width by itself is cut."""
+    out: list[Text] = []
+    for part in text.split(separator, allow_blank=True):
+        part.end = ""
+        if out and out[-1].cell_len + len(separator) + part.cell_len <= width:
+            out[-1].append(separator, style=MUTED)
+            out[-1].append_text(part)
+        else:
+            out.append(part)
+    for line in out:
+        line.truncate(width, overflow="ellipsis")
+    return out or [Text("")]
+
+
+class PaneGraph(TeamGraph):
+    """A team's cards in the preview beside the list: no card is picked there (← → are the list's), so
+    no line for what a picked one works on under them; drawn at the pane's width (pane_width), known
+    before the first layout gives the widget a size, so its height (set from height_for) is never
+    measured at a width it will not have."""
+
+    pane_width = 0
+
+    def height_for(self, rows: list[list[str]]) -> int:
+        return (self.card_h if self.lead else 0) + len([row for row in rows if row]) * (self.card_h + 1)
+
+    def draw_focus(self, canvas) -> None:
+        pass
+
+    def canvas_width(self) -> int:
+        return max(40, self.size.width or self.pane_width or 100)
+
+
 class SessionPicker(sixel.SixelHost, App[list[str]]):
     """The dashboard. It stays open while sessions open in tabs beside it; it exits with
     shell commands only when no supported terminal can open the tabs itself."""
@@ -561,6 +614,17 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     .mini #body { margin-top: 1; }
     .short #mascot { display: none; }
     #mascot.hidden { display: none; }
+    /* Beside the list (split): the preview a column of its own at full height, its facts under its
+       words; Bit at the foot of the list, on a rule of its own. Its width is set with the window's. */
+    #list { height: 1fr; }
+    #floor { display: none; margin: 0; color: #262626; }
+    .split #main { layout: horizontal; }
+    .split #list { width: 1fr; height: 100%; }
+    .split #floor { display: block; }
+    .split #inspector { layout: vertical; height: 100%; max-height: 100%; }
+    .split #detail { width: 100%; padding: 0; }
+    .split #meta { width: 100%; padding-left: 0; border-left: none; margin-top: 1; }
+    .split .pane-graph { margin-top: 1; }
     """
     BINDINGS: ClassVar[list[Binding]] = [
         # The footer shows them in the ? screen's groups (footer_group), each a little apart.
@@ -589,6 +653,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         Binding("l", "toggle_live", "Live"),
         Binding("u", "tokens", "Stats"),
         Binding("T", "teams", "Teams"),
+        Binding("M", "monitor", "Monitor"),  # on a team's row or a member's: dimmed on the rest
         Binding("A", "accounts", "Accounts", show=False),
         Binding("W", "wrapped", "Wrapped", show=False),
         Binding("w", "save_workspace", "Save workspace", show=False),
@@ -597,12 +662,31 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         Binding("comma", "settings", "CLIs", show=False),
         Binding("t", "cycle_theme", "Theme", show=False),
         Binding("b", "toggle_mascot", "Bit", show=False),
+        Binding("V", "toggle_split", "Split"),
         Binding("escape", "back", "Quit", show=False),
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, days: float = 14, include_all: bool = False, live: bool = False) -> None:
+    def __init__(self, days: float = 14, include_all: bool = False, live: bool = False,
+                 watch: str | None = None, tabs_window: str = "") -> None:
         super().__init__()
+        # `tabmancer team watch`: a team's monitor, in a window of its own beside the dashboard. It
+        # shows the team and does what you ask of it there, and nothing by itself: no limits
+        # continued, no toasts, no updates, nothing saved for the stats. "" asks which team, with the
+        # list of them.
+        self.watch = watch
+        # Whether this one does what happens by itself (those things): the dashboard holding the
+        # actor lock (actor.py), once however many dashboards and monitors are open. Taken in on_mount;
+        # a dashboard without it watches like a monitor, and takes it over when its holder is gone.
+        self.acts = False
+        self.actor_timers: list[Timer] = []  # what acting runs on a timer: stopped if the lock is lost
+        self.armed_unsaved = False  # the sessions to continue could not be saved, and that was said
+        self.actor_misses = 0  # looks in a row that found no lock it could read (tick_actor)
+        self.told_alone = False  # a monitor said no dashboard is open
+        # The Windows Terminal window sessions open in, by name (--tabs-window), when tabmancer's own
+        # launcher named it: the dashboard's own, which a monitor is told too. "" when not known.
+        self.tabs_window = tabs_window
+        self.unasked: set[str] = set()  # queued handovers being written: their fresh session opens unasked
         self.start_live = live
         self.live_mode = False
         self.days = days
@@ -670,6 +754,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.focused_at = float("-inf")  # when the terminal last said the window took the focus
         self.swallowing = False  # the press that brought the window to the front: its release goes too
         self.footer_was: tuple | None = None  # the row the footer's words and dimmed keys were last made for
+        self.monitors_opened: dict[str, float] = {}  # M: team -> when its monitor last opened or came up
+        self.monitors_opening: set[str] = set()  # M: teams whose monitor is being opened right now
+        self.split_on = True  # V: the preview beside the list from SPLIT_FROM; off, under it at any size
+        self.team_graph: TeamGraph | None = None  # a team's cards in the preview beside the list
+        self.pane_fit: tuple[int, int, int] = (0, 0, 0)  # the pane's room a team's preview was fitted to
 
     def compose(self) -> ComposeResult:
         yield TopBar(id="topbar")
@@ -687,10 +776,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 yield Label(f"TOKENS · {CHART_DAYS} DAYS", classes="heading")
                 yield TokenChart([0] * CHART_DAYS, id="activity")  # in real pixels where it can be
             with Vertical(id="main"):
-                yield Input(placeholder="Find by project, title or anything said in a session", id="filter")
-                # The cursor lights the row but keeps each cell's own colours (status, mode).
-                yield SessionTable(id="table", cursor_type="row", cursor_foreground_priority="renderable")
-                yield Mascot(id="mascot")
+                with Vertical(id="list"):
+                    yield Input(placeholder="Find by project, title or anything said in a session", id="filter")
+                    # The cursor lights the row but keeps each cell's own colours (status, mode).
+                    yield SessionTable(id="table", cursor_type="row", cursor_foreground_priority="renderable")
+                    yield Mascot(id="mascot")
+                    yield Rule(id="floor")  # what Bit stands on with the preview beside the list
                 with Horizontal(id="inspector"):
                     yield Static("Loading sessions…", id="detail")
                     yield Static("", id="meta")
@@ -745,6 +836,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         saved = read_json("config.json")
         self.mascot.accent = THEMES[self.theme][1]
         self.show_mascot(way_of(saved.get("mascot") if isinstance(saved, dict) else None))
+        self.split_on = not (isinstance(saved, dict) and saved.get("split") == "off")
+        self.fit_split()
+        if self.watch is None:  # a monitor never acts, nor asks for the lock
+            self.acts = actor.claim()
+        self.set_interval(ACTOR_SECONDS, self.tick_actor)
+        if not self.acts:
+            claudeupdate.leave_to_dashboard()  # the one that acts runs it: two at once would race
         self.set_interval(SPIN_SECONDS, self.spin)
         self.refresh_usage()
         self.set_interval(USAGE_SECONDS, self.refresh_usage)
@@ -752,25 +850,191 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.set_interval(TOKENS_SECONDS, self.refresh_tokens)
         self.show_accounts()
         self.set_interval(ACCOUNTS_SECONDS, self.show_accounts)
+        if self.acts:
+            self.start_acting()
+        elif self.watch is None:
+            self.load_armed()  # shown: the one that acts continues them
+            if actor.nameless():
+                self.notify(NAMELESS, title="Watching", severity="warning", timeout=12)
+            else:
+                self.say_who_acts()
+        # The tab is named after the dashboard, whatever started it, so that a desktop
+        # notification can tell whether you are looking at it (toast.show). A monitor's is named
+        # after its team: never the dashboard's, which M and a monitor's D look for.
+        self.name_tab(self.TITLE if self.watch is None else teamwatch.title(self.watch or "teams"))
+        table.focus()
+        self.load()
+        if self.watch is not None:  # on top from the first frame: the list is never seen
+            self.show_monitor(self.watch)
+
+    def start_acting(self) -> None:
+        """This dashboard holds the actor lock: what happens by itself is its to do. At its start, or
+        later when it takes the lock over from a dashboard that closed (then Wrapped's word too, which
+        the first load starts otherwise)."""
+        claudeupdate.take_back()
+        self.load_armed()
         self.check_updates()
-        self.set_interval(UPDATES_SECONDS, self.check_updates)
+        self.actor_timers.append(self.set_interval(UPDATES_SECONDS, self.check_updates))
         if claudeupdate.due():  # today's claude update, before any session opens
             self.updating_claude = True
             self.update_claude()
-        armed = saved.get("continue_at_reset") if isinstance(saved, dict) else None
-        for sid, moment in (armed.items() if isinstance(armed, dict) else ()):
-            try:
-                self.armed[sid] = datetime.fromisoformat(moment)
-            except (TypeError, ValueError):
-                pass
-        self.set_interval(10, self.continue_due)
-        # The tab is named after the dashboard, whatever started it, so that a desktop
-        # notification can tell whether you are looking at it (toast.show).
+        self.actor_timers.append(self.set_interval(10, self.continue_due))
+
+    def start_wrapped(self) -> None:
+        self.actor_timers.append(self.set_timer(WRAPPED_AFTER, self.tell_wrapped))
+        self.actor_timers.append(self.set_interval(WRAPPED_SECONDS, self.tell_wrapped))
+
+    def stop_acting(self) -> None:
+        for timer in self.actor_timers:
+            timer.stop()
+        self.actor_timers.clear()
+        self.acts = False
+        claudeupdate.leave_to_dashboard()
+
+    def say_who_acts(self, held: dict | None = None) -> None:
+        held = held if held is not None else (actor.holder() or {})
+        pid = f" (pid {held['pid']})" if isinstance(held.get("pid"), int) else ""
+        self.notify(f"Another tabmancer dashboard{pid} continues sessions at their reset, sends the desktop "
+                    "notes and runs the updates; this one shows the same, and takes over when that one closes.",
+                    title="Watching", timeout=10)
+
+    @work(thread=True, exclusive=True, group="actor")
+    def tick_actor(self) -> None:
+        """Every ACTOR_SECONDS, off the screen's thread (reading another process can take a moment:
+        `ps` on macOS). A dashboard that watches: whether the one that acts is gone (it takes over
+        then), and the sessions to continue as that one saved them. The one that acts: whether it
+        still holds the lock; it steps back when a readable lock names another process, or after two
+        looks in a row that found none it could read (a file held open a moment is no reason). A
+        monitor: whether any dashboard acts at all."""
+        if self.watch is not None:
+            self.call_from_thread(self.say_alone, not actor.running(actor.holder()))
+            return
+        if self.acts:
+            held = actor.holder()
+            if actor.is_me(held) or (held is None and actor.claim()):
+                self.actor_misses = 0
+                return
+            self.actor_misses += 1
+            if held is not None or self.actor_misses >= 2:
+                self.call_from_thread(self.lost_actor, held or {})
+            return
+        if actor.claim():
+            self.call_from_thread(self.took_over)
+            return
+        self.call_from_thread(self.show_armed, read_armed())
+
+    def took_over(self) -> None:
+        if self.acts:
+            return
+        self.acts = True
+        self.actor_misses = 0
+        self.start_acting()
+        self.start_wrapped()
+        self.notify("The tabmancer dashboard that did what happens by itself closed: this one does now.",
+                    timeout=8)
+
+    def lost_actor(self, held: dict) -> None:
+        """Another took the lock over (it judged this one gone): only one may act."""
+        if self.acts:
+            self.stop_acting()
+            self.say_who_acts(held)
+
+    def show_armed(self, armed: dict[str, datetime]) -> None:
+        """A dashboard that watches: the sessions to continue at their reset, as the one that acts saved them."""
+        if armed == self.armed or self.acts:
+            return
+        self.armed = armed
+        if self.screen_stack:
+            for session in self.sessions.values():
+                if at_limit(session):
+                    self.update_row(session)
+
+    def say_alone(self, alone: bool) -> None:
+        """A monitor with no dashboard open says so, once each time: nothing continues sessions at their
+        reset or sends desktop notes until one is."""
+        if alone and not self.told_alone:
+            self.notify("No tabmancer dashboard is open: until one is, nothing continues sessions when their "
+                        "limit lifts and no desktop notes come.", severity="warning", timeout=15)
+        self.told_alone = alone
+
+    def on_unmount(self) -> None:
+        if self.acts:
+            actor.release()
+
+    def name_tab(self, name: str) -> None:
+        """The terminal tab's title."""
         driver = self._driver
         if driver is not None and not driver.is_headless:
-            driver.write(f"\x1b]0;{self.TITLE}\x07")
-        table.focus()
-        self.load()
+            driver.write(f"\x1b]0;{name}\x07")
+
+    def show_monitor(self, name: str) -> None:
+        """The monitor of this team, in place of the one on top (T or a handover picked another);
+        with no such team, the list of teams to pick one from, or quit."""
+        from .monitorview import TeamMonitor
+
+        team = teams.load().get(name) if name else None
+        if team is None:
+            saved = teams.load()
+            if not saved:
+                self.exit(None)
+                return
+
+            def chosen(answer: tuple[str, str] | None) -> None:
+                picked = teams.load().get(answer[1]) if answer and answer[0] == "open" else None
+                if picked is not None:
+                    self.show_monitor(picked.name)
+                elif answer and answer[0] != "open":  # a new team: the dashboard makes it, the list again
+                    self.notify("New teams are made in the dashboard: T there.", timeout=6)
+                    self.show_monitor("")
+                elif not isinstance(self.screen, TeamMonitor):
+                    self.exit(None)  # nothing picked, and no monitor to go back to: not the list
+
+            self.push_screen(TeamsDialog(saved, None), chosen)
+            return
+        self.watch = team.name
+        self.name_tab(teamwatch.title(team.name))
+        monitor = TeamMonitor(team, self.accent())
+        if isinstance(self.screen, TeamMonitor):
+            self.switch_screen(monitor)
+        else:
+            self.push_screen(monitor)
+
+    @work(thread=True, group="tabs-open")
+    def open_in_dashboard_window(self, launches: list[Launch], unasked: bool = False) -> None:
+        """Tabs that belong in the dashboard's window, not the one used last: a monitor's (its own
+        window would be "0"), and the dashboard's unasked ones (open_unasked). By the window's name
+        when it is known. Else, asked (a key in a monitor), the dashboard's tab is brought to the
+        front first, which makes its window the one used last ("0"); unasked, never: keys typed
+        meanwhile elsewhere would land in the dashboard as its keys (x, h, q, Enter). With no name
+        and no tab found: the dashboard's go to "0", a monitor's to a new window; but the
+        dashboard's unasked ones go to a window named for them when a team's monitor is open (it
+        may be the one used last): only looked for, nothing comes to the front. Unasked, the
+        window that had the keys gets them back. Off the screen's thread: finding a tab takes a
+        second or two. Today's claude update, when it is due, runs here first, never on the screen's
+        thread: a limit lifting at 04:00 with the day's update due would have frozen the dashboard
+        while it ran."""
+        if any(launch.cli == "claude" for launch in launches):
+            claudeupdate.before_opening(lambda words: self.call_from_thread(self.notify, words, timeout=8))
+        before = focus.foreground() if unasked else 0  # after the update: you may have moved on meanwhile
+        if self.tabs_window:
+            window = self.tabs_window
+        elif self.watch is None:
+            window = DASHBOARD_WINDOW if unasked and teamwatch.monitor_open() else "0"
+        else:
+            window = "0" if not unasked and focus.focus_tab(self.TITLE) else "new"
+        self.call_from_thread(self.open_sessions, launches, window, True)
+        if before:
+            focus.give_back(before)
+
+    def open_unasked(self, launches: list[Launch]) -> None:
+        """Tabs no key asked for just now (a session whose limit lifted, a queued handover's fresh
+        session): in the dashboard's own window when its name is known, never a team's monitor; with
+        no name and no monitor open, the one used last (open_in_dashboard_window). The keys stay where
+        they were. Elsewhere than in Windows Terminal, as any other."""
+        if terminal_kind() != "windows-terminal":
+            self.open_sessions(launches)
+            return
+        self.open_in_dashboard_window(launches, unasked=True)
 
     # --- a click that only brings the window to the front --------------------------------------
 
@@ -826,6 +1090,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.dashboard.set_class(event.size.height < MINI_BELOW, "mini")
         self.dashboard.set_class(event.size.height < 30, "short")
         self.fit_sidebar(event.size.width)
+        self.fit_split(event.size.width, event.size.height)
         self.place_mascot()
 
     def fit_sidebar(self, width: int | None = None) -> None:
@@ -836,6 +1101,47 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if hasattr(self, "projects"):  # the first resize comes before on_mount
             self.call_after_refresh(self.projects.fit)  # the list keeps clear of the legend and chart at any height
         self.call_after_refresh(self.fit_title)
+
+    @property
+    def split(self) -> bool:
+        """The preview stands beside the list now (fit_split). False while shutting down."""
+        return bool(self.screen_stack) and self.dashboard.has_class("split")
+
+    def fit_split(self, width: int | None = None, height: int | None = None) -> None:
+        """From SPLIT_FROM, unless V turned it off: the preview beside the list, both at full height,
+        the window's width less PANE_TAKES wide, within PANE_LEAST and PANE_MOST. The widgets stay
+        as they are (Bit's picture with them); only the layout changes."""
+        if not hasattr(self, "inspector") or not self.screen_stack:
+            return  # the first resize comes before on_mount, which fits it then; or shutting down
+        width = self.size.width if width is None else width
+        height = self.size.height if height is None else height
+        split = self.split_on and width >= SPLIT_FROM[0] and height >= SPLIT_FROM[1]
+        was = self.split
+        self.dashboard.set_class(split, "split")
+        self.inspector.styles.width = max(PANE_LEAST, min(PANE_MOST, width - PANE_TAKES)) if split else None
+        if split != was:
+            if not split:
+                self.drop_team_graph()  # now: a frame of the cards under the list would show otherwise
+            self.call_after_refresh(self.update_detail)  # the preview's words for its new room
+            self.call_after_refresh(self.fit_title)  # the list's room changed too
+
+    def action_toggle_split(self) -> None:
+        """V: the preview beside the list (by itself from SPLIT_FROM), or under it at any size.
+        Remembered."""
+        self.split_on = not self.split_on
+        self.fit_split()
+        self.place_mascot()
+        columns, rows = SPLIT_FROM
+        if not self.split_on:
+            said = "The preview stays under the list: V puts it beside the list again."
+        elif self.split:
+            said = "The preview beside the list: V puts it under the list."
+        else:
+            said = (f"The preview goes beside the list from {columns}x{rows}; this window is "
+                    f"{self.size.width}x{self.size.height}.")
+        if not merge_json("config.json", split="auto" if self.split_on else "off"):
+            said += " " + NOT_SAVED
+        self.notify(said, timeout=4)
 
     @work(thread=True)
     def load(self) -> None:
@@ -857,7 +1163,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.action_toggle_live()
         self.poll_live()  # refine the quick view with `claude agents --json`
         self.poll_teams()
-        self.index_search()  # what was said in each, for the filter
+        if self.watch is None:  # a monitor has no filter to search with
+            self.index_search()  # what was said in each, for the filter
         self.refresh_git()
         self.set_interval(GIT_SECONDS, self.refresh_git)
         self.set_interval(LIVE_REFRESH_SECONDS, self.poll_tick)
@@ -868,15 +1175,17 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.body.styles.animate("opacity", 1.0, duration=0.5, easing="out_cubic", on_complete=self.faded_in)
         if not sessions:
             self.detail.update(nothing_found(self.days, self.include_all, dashboard=True))
-        if self.preselected:
+        if self.watch is not None:
+            pass  # a monitor: Bit stays quiet on the list nobody sees there
+        elif self.preselected:
             self.mascot.say(f"Hi! {len(self.preselected)} were open when you shut down.", seconds=6)
         elif not sessions:
             self.mascot.say("Hi! No sessions here yet: n starts some.", seconds=6)
         else:
             self.mascot.say("Hi! Press Enter to open a session.", seconds=5)
         self.check_limits()
-        self.set_timer(WRAPPED_AFTER, self.tell_wrapped)  # after Bit's hello: Friday's word on the week
-        self.set_interval(WRAPPED_SECONDS, self.tell_wrapped)
+        if self.acts:
+            self.start_wrapped()  # after Bit's hello: Friday's word on the week
         for after in SETTLE_AFTER:  # once what loads at the start (tokens, the search index) is in
             self.set_timer(after, settle_memory)
 
@@ -892,13 +1201,20 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     # --- rows ---------------------------------------------------------------------
 
-    def setup_columns(self) -> None:
+    def setup_columns(self, keep: bool = False) -> None:
+        """The columns, made again. keep: the rows built again too, the cursor on the row it was on
+        (clearing the columns clears the rows, which put the cursor on the first row: V, l or a
+        resize sent it there)."""
+        table = self.table
+        was = (self.cursor_key(), table.cursor_row, table.scroll_y)
         model = "Model" if self.model_shown else ""
         labels = (["", "Project", "Title", "State", model, "Kind", "Last activity", "ctx"] if self.live_mode
                   else ["", "Project", "Title", "Status", model, "Context", "Last", "Open as"])
-        self.table.clear(columns=True)
+        table.clear(columns=True)
         for key, label in zip(COLUMNS, labels):
-            self.table.add_column(label, key=key)
+            table.add_column(label, key=key)
+        if keep:
+            self.refresh_rows(was=was)
 
     def visible(self) -> list[Session]:
         needle = search.fold(self.filter_text)
@@ -1072,8 +1388,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         width = max(TITLE_MIN, min(EXPAND_WIDTH, room))
         if width != self.title_width or shown != self.model_shown:
             self.title_width, self.model_shown = width, shown
-            self.setup_columns()  # a column keeps the width of its widest cell so far
-            self.refresh_rows()
+            self.setup_columns(keep=True)  # a column keeps the width of its widest cell so far
 
     def toggle_expanded(self, session_id: str) -> None:
         self.expanded ^= {session_id}
@@ -1160,6 +1475,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.grow_until = 0.0
         if self.team_flights:
             self.fly(now)
+        graph = self.team_graph
+        if graph is not None and (graph.flights or any(
+                s is not None and s.live_state.lower() in SPINNING for s in graph.sessions.values())):
+            graph.refresh()  # its stars turn and its messages fly, as in the team view
+        if graph is not None:
+            self.fit_team_pane()  # a layout after the last look moved its messages' room
         changes: list[tuple[str, str, object]] = []  # only these rows are drawn again (update_cells)
         for state, _ in self.blocks:  # a folded team's members at work: their stars turn on its row
             key = f"{TEAM_ROW}{state.team.name}"
@@ -1315,10 +1636,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         caption = Text("\nprocess", style=MUTED) if closed else Text("")
         return (Text(""), label, Text(""), Text(""), Text(""), caption, Text(""), Text(""))
 
-    def refresh_rows(self, keep_place: bool = True) -> None:
-        """Build the table again. A filter that changed (keep_place False) starts at its newest match."""
+    def refresh_rows(self, keep_place: bool = True, was: tuple[str | None, int, float] | None = None) -> None:
+        """Build the table again. A filter that changed (keep_place False) starts at its newest match.
+        was: where the cursor and the scroll were, when the rows went before this (setup_columns)."""
         table = self.table
-        current, row, scrolled = self.cursor_key(), table.cursor_row, table.scroll_y
+        current, row, scrolled = was or (self.cursor_key(), table.cursor_row, table.scroll_y)
         table.clear()  # the cursor goes to the top with it, and the scroll
         for key, session, height in self.rows():
             cells = (self.cells(session) if session is not None else self.team_cells(key)
@@ -1550,6 +1872,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.show_team(state)
             return
         self.inspector.remove_class("team-only")
+        self.drop_team_graph()
         head = Text(session.title, style=f"bold {TEXT}")
         label, style = (STATUS_LABEL[session.status] if session.exit is not Exit.RUNNING
                         else state_of(session)[:2])
@@ -1565,6 +1888,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         # Quiet labels on the left, the words themselves bright and indented beside them,
         # each cut to a few lines of the room there is, so the reply still shows when narrow.
         room = max(24, (detail.content_size.width or 74) - 14)
+        more = 3 if self.split else 1  # beside the list, at full height: more of each
         said = Table.grid(padding=(0, 2))
         said.add_column(style=MUTED, no_wrap=True)
         said.add_column(style=TEXT, overflow="fold")
@@ -1584,13 +1908,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if summary.get("size") != session.size:
                 words.append("  (written before the latest activity; s refreshes it)", style="dim")
             said.add_row("Summary", words)
-        said.add_row("First prompt", _clip(session.first_prompt, min(220, 3 * room)))
+        said.add_row("First prompt", _clip(session.first_prompt, more * min(220, 3 * room)))
         if session.last_prompt and session.last_prompt != session.first_prompt:
-            said.add_row("Last prompt", _clip(session.last_prompt, min(220, 2 * room)))
+            said.add_row("Last prompt", _clip(session.last_prompt, more * min(220, 2 * room)))
         if session.last_reply:
-            said.add_row(agent, _clip(session.last_reply, min(320, 4 * room)))
+            said.add_row(agent, _clip(session.last_reply, more * min(320, 4 * room)))
         if session.files:
-            said.add_row("Files edited", _clip(", ".join(session.files), 2 * room))
+            said.add_row("Files edited", _clip(", ".join(session.files), more * 2 * room))
         detail.update(Group(head, status, enter, Text(""), said))
         self.meta.update(self.meta_table(session))
 
@@ -1948,6 +2272,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if written is None:
                 written = handover.write_itself(session)
         except (handover.HandoverError, summarize.SummaryError, OSError) as error:
+            actor.let_go(f"handover-{session.session_id}")  # a queued one: h again may queue it afresh
             after = " It is closed now; Enter on it resumes it." if closed else ""
             self.call_from_thread(self.notify, f"{session.project} was not handed over: {str(error).rstrip('.')}."
                                                f"{after}", severity="error", timeout=15)
@@ -1955,7 +2280,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.call_from_thread(self.handover_ready, session, written, left_open)
 
     def handover_ready(self, session: Session, written: str, left_open: str = "") -> None:
-        self.open_sessions([handover.fresh(session, written)])
+        fresh = [handover.fresh(session, written)]
+        if session.session_id in self.unasked:  # queued: it finished while you were elsewhere
+            self.unasked.discard(session.session_id)
+            self.open_unasked(fresh)
+        else:
+            self.open_sessions(fresh)
         if left_open:
             self.notify(f"Handed {session.project} over to a fresh session, but the old one is still open: "
                         f"{left_open}.", title="Handed over", severity="warning", timeout=15)
@@ -2074,6 +2404,39 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.update_row(session)
             self.update_detail()
         self.notify(f"Renamed to “{session.title}”.", timeout=5)
+
+    def action_monitor(self, name: str = "") -> None:
+        """M: the team's monitor (`tabmancer team watch`) in a window of its own, on the second
+        screen when there is one; open already, it comes to the front. On a team's row or a member's;
+        a team's view passes its team."""
+        if not name:
+            here = self.team_at()
+            session = self.current()
+            if here is not None:
+                name = here.team.name
+            elif session is not None and session.session_id in self.member_rows:
+                name = self.member_rows[session.session_id][0]
+        if not name:
+            self.notify("M opens a team's monitor: on a team's row, or one of its members'.", timeout=4)
+            return
+        if name in self.monitors_opening:
+            return  # being opened (Windows Terminal can take a while): a second M would open another
+        if time.monotonic() - self.monitors_opened.get(name, float("-inf")) < MONITOR_AGAIN:
+            return  # opened a moment ago, its window still on its way
+        self.monitors_opening.add(name)
+        team = teams.load().get(name)
+        self.open_monitor(name, team.cwd if team is not None else "")
+
+    @work(thread=True, group="monitor")
+    def open_monitor(self, name: str, folder: str) -> None:
+        try:
+            said, severity = teamwatch.open_monitor(name, folder, tabs_window=self.tabs_window), "information"
+        except OSError as error:
+            said, severity = f"Could not open the monitor of {name}: {error}", "error"
+        finally:  # from when it is done: the window shows a moment after wt returns
+            self.monitors_opened[name] = time.monotonic()
+            self.monitors_opening.discard(name)
+        self.call_from_thread(self.notify, said, severity=severity, timeout=6)
 
     def action_teams(self) -> None:
         """T: the list of teams, to open one's view or make a new one; on a team's row or one of its
@@ -2276,6 +2639,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if action == "continue_at_reset":
             if not at_limit(session) or session.status is Status.BACKGROUND:
                 return "not at a limit"
+            if not self.acts:
+                return "continued at its reset only by the dashboard that acts (actor.py): ask there"
             self.armed[session_id] = session.resets or datetime.now()
             self.save_armed()
             self.update_row(session)
@@ -2325,6 +2690,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             new = [(m, now) for m in state.between_members() if (m.sender, m.receiver, m.text) not in (seen or ())]
             if seen is not None and new:  # the first look only takes note: history does not fly
                 self.team_flights.setdefault(name, []).extend(new)
+                if self.team_graph is not None and self.team_graph.team.name == name:
+                    for message, _ in new:
+                        self.team_graph.launch_flight(message)
             self.team_seen[name] = said
         if states == self.team_states:
             return
@@ -2353,6 +2721,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """The preview of a team's row: the lead and each member on its wire, with the messages along
         it, and the newest messages beside it."""
         colours = team_colours(state.team, self.accent())
+        if self.split:
+            self.show_team_pane(state, colours)
+            return
+        self.drop_team_graph()
         looks = {name: self.member_look(session) for name, session in state.sessions.items()}
         # Narrower than this, the tree takes the facts column's room too: the latest word on each
         # wire says much of what the list of messages would.
@@ -2379,6 +2751,77 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         room = max(2, (self.inspector.content_size.height or 8) - 2 - len(hint.split()))
         self.meta.update(Group(Text("MESSAGES", style=f"bold {MUTED}"),
                                teamtree.latest(state, colours, room, beside), Text(""), hint))
+
+    def show_team_pane(self, state: teamtree.TeamState, colours: dict[str, str]) -> None:
+        """A team's row with the preview beside the list: its head and goal, the team view's cards
+        (a PaneGraph, kept while the cursor stays on the team), then its newest messages and its keys,
+        the messages taking the height the rest leaves. The cards only when they leave room for two
+        messages and every key: else the compact tree, as under the list (a big team, a low window)."""
+        self.inspector.remove_class("team-only")
+        area = self.inspector.content_region
+        width = area.width or max(PANE_LEAST, min(PANE_MOST, self.size.width - PANE_TAKES)) - 4  # padding 2+2
+        top = area.y or 2
+        bottom = area.bottom if area.height else self.size.height - 3  # before the first layout, a guess
+        goal = Text.assemble(("Goal  ", MUTED), (teamtree.one_line(state.team.goal), TEXT))
+        goal.truncate(width, overflow="ellipsis")
+        lines = [*wrap_at(teamtree.head(state, state.tokens(self.session_tokens), self.accent()), width), goal]
+        if not self.team_open(state.team.name):
+            last = f", {state.team.lead.name} last" if state.team.lead is not None else ""
+            lines.append(Text(f"Closed. Enter starts it: each member resumed as itself{last}.", style=AMBER))
+        beside = max(20, width - 2)  # a body's indent: no line wraps
+        hint = keys_in(beside, *self.team_key_pairs(state))
+        keys_h = len(hint.split())
+        graph = self.team_graph
+        if graph is None or graph.team.name != state.team.name or graph.accent != self.accent():
+            graph = PaneGraph(state.team, self.accent(), classes="pane-graph")  # no id: the one going may still be there
+        graph.team, graph.palette, graph.pane_width = state.team, colours, width
+        cards_h = graph.height_for(graph.layout_boxes(width)[1])
+        # Under the words: a blank line, the cards, a blank line, MESSAGES and two of them at least, a
+        # blank line and the keys.
+        words_h = sum(len(line.wrap(self.console, width)) for line in lines)  # rows as shown: the note can wrap
+        if words_h + 1 + cards_h + 1 + 1 + 2 + 1 + keys_h <= bottom - top:
+            if graph is not self.team_graph:
+                self.drop_team_graph()
+                self.team_graph = graph
+                graph.selected = len(graph.order)  # no card picked: ← → are the list's here
+                self.inspector.mount(graph, after=self.detail)
+            graph.styles.height = cards_h  # measured: laid out at its own width, never a guessed one
+            graph.sessions, graph.said = dict(state.sessions), list(state.said)
+            graph.unread = {}
+            for message in state.said:
+                if not message.delivered:
+                    graph.unread[message.receiver] = graph.unread.get(message.receiver, 0) + 1
+            graph.refresh(layout=True)
+            used = words_h + 1 + cards_h
+        else:
+            self.drop_team_graph()
+            looks = {name: self.member_look(session) for name, session in state.sessions.items()}
+            tree = teamtree.tree(state, width, looks, colours, self.team_flights.get(state.team.name, ()),
+                                 time.monotonic())
+            lines += tree
+            used = words_h + sum(len(line.wrap(self.console, width)) for line in tree)
+        self.detail.update(Text("\n").join(lines))
+        room = max(2, bottom - top - used - 1 - 1 - 1 - keys_h)  # less the blank line, MESSAGES, a blank line
+        self.meta.update(Group(Text("MESSAGES", style=f"bold {MUTED}"),
+                               teamtree.latest(state, colours, room, beside), Text(""), hint))
+        self.pane_fit = (top, bottom, width)
+        self.call_after_refresh(self.fit_team_pane)
+
+    def fit_team_pane(self) -> None:
+        """Once laid out: the team's preview shown again if the room its messages were measured for
+        changed meanwhile (the cards just came in, the footer took a second row on the team's row).
+        Shown with what it measures now, it stops there."""
+        if not self.split or self.team_at() is None:
+            return
+        area = self.inspector.content_region
+        if area.height and (area.y, area.bottom, area.width) != self.pane_fit:
+            self.update_detail()
+
+    def drop_team_graph(self) -> None:
+        """The team's cards out of the preview: a session's row, or the preview under the list."""
+        if self.team_graph is not None:
+            self.team_graph.remove()
+            self.team_graph = None
 
     def team_keys(self, state: teamtree.TeamState) -> Text:
         """The keys of a team's row as it stands: closed, folded or unfolded."""
@@ -2611,6 +3054,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     @work(thread=True, exclusive=True, group="usage")
     def refresh_usage(self) -> None:
+        if not self.acts:  # a monitor: the dashboard's last reading, if it is fresh (one claude -p, not two)
+            shared = usage.latest()
+            self.call_from_thread(self.show_usage, shared if shared is not None else usage.read_all())
+            return  # recorded by the dashboard alone: a monitor's readings would count twice
         limits = usage.read_all()  # Codex's too, when it is turned on
         usage.record(limits)  # the stats chart these readings and forecast from them
         self.call_from_thread(self.show_usage, limits)
@@ -2626,6 +3073,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if email != self.signed_as:
             switched = self.signed_as is not None and email is not None
             self.signed_as = email
+            if not self.acts:  # a monitor only shows who is signed in: the dashboard remembers it
+                return
             accounts.remember(account, datetime.now().isoformat(timespec="seconds"))
             if switched:
                 self.signed_in_elsewhere()
@@ -2752,6 +3201,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """Bit walks on the preview's top edge; without Bit, a blank row separates the two."""
         if not hasattr(self, "inspector"):
             return  # a resize before the dashboard is mounted
+        if self.split:  # beside the list: Bit stands on the list's own floor
+            self.inspector.styles.margin = (0, 0, 0, 1)
+            return
         shown = not self.mascot.has_class("hidden") and not self.dashboard.has_class("short")
         self.inspector.styles.margin = (0 if shown else 1, 0, 0, 0)
 
@@ -2763,16 +3215,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         now = "away" if bit.has_class("hidden") else "calm" if bit.calm else "pixels" if bit.picture else "blocks"
         way = ways[(ways.index(now) + 1) % len(ways)]
         self.show_mascot(way)
-        self.notify({"pixels": "Bit in real pixels.", "calm": "Bit, calm: fewer moves, no confetti.",
-                     "blocks": "Bit in block characters.",
-                     "away": "Bit is away: b brings it back."}[way], timeout=3)
-        saved = read_json("config.json")
-        saved = saved if isinstance(saved, dict) else {}
-        saved["mascot"] = way
-        try:
-            write_json("config.json", saved, indent=2)
-        except OSError:
-            pass
+        said = {"pixels": "Bit in real pixels.", "calm": "Bit, calm: fewer moves, no confetti.",
+                "blocks": "Bit in block characters.", "away": "Bit is away: b brings it back."}[way]
+        saved = merge_json("config.json", mascot=way)
+        self.notify(said if saved else f"{said} {NOT_SAVED}", timeout=3 if saved else 8)
 
     def show_mascot(self, way: str) -> None:
         self.mascot.set_class(way == "away", "hidden")
@@ -2792,14 +3238,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.theme = names[(names.index(self.theme) + 1) % len(names)] if self.theme in names else DEFAULT_THEME
         self.refresh_rows()  # accent-coloured cells follow the theme
         self.mascot.accent = THEMES[self.theme][1]
-        saved = read_json("config.json")
-        saved = saved if isinstance(saved, dict) else {}
-        saved["theme"] = self.theme
-        try:
-            write_json("config.json", saved, indent=2)
-        except OSError:
-            pass
-        self.notify(f"Theme: {THEMES[self.theme][0]}", timeout=2)
+        saved = merge_json("config.json", theme=self.theme)
+        said = f"Theme: {THEMES[self.theme][0]}"
+        self.notify(said if saved else f"{said}. {NOT_SAVED}", timeout=2 if saved else 8)
 
     def action_toggle(self) -> None:
         team = self.team_at()
@@ -2897,9 +3338,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         on_top = len(self.screen_stack) > 1
         if action == "open" and (on_top or self.focused is self.projects):
             return False
-        # Only the dashboard's own keys: Textual's (Tab between boxes, Ctrl+P) stay on.
-        if on_top and action in DASHBOARD_ACTIONS:
+        # Only the dashboard's own keys: Textual's (Tab between boxes, Ctrl+P) stay on. A monitor never
+        # takes them, not even before its screen is up: x, f, space would hide, pin, tick in the list.
+        if (on_top or self.watch is not None) and action in DASHBOARD_ACTIONS:
             return False
+        if self.watch is not None and action in ("toggle_mascot", "cycle_theme"):
+            return False  # saved for the dashboard: a monitor leaves them as they are
         if action == "continue_at_reset":  # shown only when there is something to continue
             return any(at_limit(s) for s in self.sessions.values())
         if self.live_mode and action in PICKER_ONLY:
@@ -3003,9 +3447,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def action_toggle_live(self) -> None:
         self.live_mode = not self.live_mode
-        self.setup_columns()
         self.fit_sidebar()  # the live view's other columns are wider
-        self.refresh_rows()
+        self.setup_columns(keep=True)
         self.refresh_bindings()
 
     def poll_tick(self) -> None:
@@ -3058,6 +3501,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if picked is None:
                 return
             answer, ids = picked
+            if answer in ("lift", "off") and not self.acts:
+                self.notify(ACTS_ELSEWHERE, severity="warning", timeout=10)
+                return
             these = [s for s in stopped if s.session_id in ids]
             if answer in ("now", "handover"):
                 self.armed = {sid: moment for sid, moment in self.armed.items() if sid not in ids}
@@ -3085,27 +3531,36 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.push_screen(LimitDialog(stopped, when, all(s.session_id in self.armed for s in stopped), plan, room),
                          chosen)
 
-    def continue_these(self, stopped: list[Session]) -> None:
+    def continue_these(self, stopped: list[Session], unasked: bool = False) -> None:
         """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt
-        typed into its own tab."""
+        typed into its own tab. unasked: by itself, the limit lifted (open_unasked)."""
         closed = [replace(self.launch_for(s), mode=Mode.AUTO, prompt=continue_prompt(Status.LIMIT))
                   for s in stopped if s.exit is not Exit.RUNNING]
         if closed:
-            self.open_sessions(closed)
+            (self.open_unasked if unasked else self.open_sessions)(closed)
         still_open = [s for s in stopped if s.exit is Exit.RUNNING]
         if still_open:
             self.continue_open(still_open, len(closed))
         else:
             self.mascot.react("back", f"{len(closed)} back at work", self.accent())
 
+    def load_armed(self) -> None:
+        """The sessions to continue at their reset, as saved: the dashboard that acts saves them as it
+        continues them, and one that watches shows them."""
+        self.armed = read_armed()
+
     def save_armed(self) -> None:
-        saved = read_json("config.json")
-        saved = saved if isinstance(saved, dict) else {}
-        saved["continue_at_reset"] = {sid: moment.isoformat() for sid, moment in self.armed.items()}
-        try:
-            write_json("config.json", saved, indent=2)
-        except OSError:
-            pass
+        """The sessions to continue at their reset, saved: only by the dashboard that acts. A monitor
+        and a dashboard that watches continue nothing, and their copy is the saved one, read again."""
+        if not self.acts:
+            return
+        saved = merge_json("config.json",
+                           continue_at_reset={sid: moment.isoformat() for sid, moment in self.armed.items()})
+        if not saved and not self.armed_unsaved:  # said once, not at each continue_due
+            self.notify("The sessions to continue at their reset could not be saved: config.json could not be "
+                        "read, so it was left as it is. They still continue while this dashboard is open.",
+                        severity="warning", timeout=15)
+        self.armed_unsaved = not saved
 
     def continue_due(self) -> None:
         """Continue the sessions whose limit has lifted: a closed one in a new tab, an open one with
@@ -3125,7 +3580,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 lifted.append(session)
         self.save_armed()
         if lifted:
-            self.continue_these(lifted)
+            self.continue_these(lifted, unasked=True)
 
     @work(thread=True, group="limits")
     def continue_open(self, still_open: list[Session], opened: int) -> None:
@@ -3157,11 +3612,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 kept[session.session_id] = stopped_on
             if stopped_on and current and stopped_on != current:
                 session.signed_in_again = True
-        if self.sessions:
+        if self.sessions and self.acts:
             accounts.keep_limited(kept)
         at = {s.session_id for s in self.sessions.values() if at_limit(s)}
         self.told_limit &= at
-        if self.sessions and not self.armed.keys() <= at:
+        if self.sessions and self.acts and not self.armed.keys() <= at:
             self.armed = {sid: moment for sid, moment in self.armed.items() if sid in at}
             self.save_armed()
         if at != self.limited and self.screen_stack:  # not while the app shuts down: no screen then
@@ -3338,8 +3793,18 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         for sid, fresh in updates.items():
             if sid in self.queued and (fresh.exit is not Exit.RUNNING or fresh.live_state in handover.IDLE):
                 how = self.queued.pop(sid)  # it finished: the handover asked for with h
+                if self.watch is not None and fresh.exit is not Exit.RUNNING:
+                    # A monitor hands over only what is still open as it finishes: closed in its tab
+                    # meanwhile (from the dashboard, say), it was taken care of there.
+                    self.notify(f"{fresh.project} closed before it finished: not handed over from here.",
+                                severity="warning", timeout=10)
+                    continue
+                if not actor.first_to(f"handover-{sid}"):  # queued in another dashboard or monitor too
+                    self.notify(f"{fresh.project} finished: another tabmancer window hands it over.", timeout=8)
+                    continue
                 self.notify(f"{fresh.project} finished: handing it over now.", title=f"Handing over {fresh.project}",
                             timeout=10)
+                self.unasked.add(sid)  # its fresh session opens by itself: in the dashboard's window
                 self.hand_over(fresh, how)
                 continue
             old = self.sessions.get(sid)
@@ -3361,7 +3826,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                     self.mascot.celebrate(fresh.project)  # done, waiting for your next message
                 else:
                     self.mascot.alert(fresh.project)  # blocked: it needs an answer
-        if turned:
+        if turned and self.acts:  # the dashboard sends them: a monitor's would be a second one
             self.tell_desktop(turned)
         changed = {sid for sid, fresh in updates.items() if self.sessions.get(sid) != fresh}
         until = time.monotonic() + FLASH_SECONDS
@@ -3425,7 +3890,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     @work(thread=True, group="toast")
     def send_toast(self, title: str, body: str) -> None:
-        toast.show(title, body, dashboard=self.TITLE)
+        """A desktop note: only from the dashboard that acts, or each one open would send it."""
+        if self.acts:
+            toast.show(title, body, dashboard=self.TITLE)
 
     def retry_git(self) -> None:
         self.git_retry = None
@@ -3433,7 +3900,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     @work(thread=True, exclusive=True, group="git")
     def refresh_git(self) -> None:
-        states, failed = gitstate.read_all([s.cwd for s in self.sessions.values()])
+        folders = [s.cwd for s in self.sessions.values()]
+        if self.watch is not None:  # a monitor shows one team: its folder and worktrees, not every session's
+            team = teams.load().get(self.watch or "")
+            folders = [f for f in folders if team is not None and teams.in_team_folder(team, f)]
+        states, failed = gitstate.read_all(folders)
         self.call_from_thread(self.show_git, states, failed)
 
     def show_git(self, states: dict[str, gitstate.GitState], failed: set[str] = frozenset()) -> None:
@@ -3507,13 +3978,25 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         saved = teams.load()
         self.open_sessions([self.launch_for(s, saved) for s in teams.lead_last(chosen, saved)])
 
-    def open_sessions(self, launches: list[Launch]) -> None:
+    def open_sessions(self, launches: list[Launch], window: str | None = None, updated: bool = False) -> None:
         """Open sessions in new tabs beside the dashboard, which stays open. One that a Claude
         process has open right now, in another tab or in the background, is not opened again.
-        While claude update runs (claudeupdate.py), they open once it is done."""
-        if self.after_update("the session opens" if len(launches) == 1 else f"the {len(launches)} sessions open",
-                             lambda: self.open_sessions(launches)):
+        While claude update runs (claudeupdate.py), they open once it is done; one due now (the day
+        turned while the dashboard was open) is started in its thread first, never run here on
+        the screen's. window: the terminal window they go to (launch.open_tabs); a monitor finds
+        the dashboard's first. updated: the update was seen to first, in a worker (open_in_dashboard_window)."""
+        if self.watch is not None and window is None:
+            self.open_in_dashboard_window(launches)
             return
+        if not updated:
+            if (not self.updating_claude and any(launch.cli == "claude" for launch in launches)
+                    and claudeupdate.due()):
+                self.updating_claude = True
+                self.update_claude()
+            if self.after_update("the session opens" if len(launches) == 1
+                                 else f"the {len(launches)} sessions open",
+                                 lambda: self.open_sessions(launches, window, True)):
+                return
         taken = self.open_elsewhere(launches)
         if taken:
             again = [launch for launch in launches if resumes(launch) and launch.session_id in taken]
@@ -3525,7 +4008,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if not launches:
                 return
         try:
-            leftover = open_tabs(launches)
+            leftover = open_tabs(launches) if window is None else open_tabs(launches, window)
         except OSError as error:  # the terminal would not start: said, rather than the dashboard falling over
             self.notify(f"Could not open {'the tab' if len(launches) == 1 else 'the tabs'}: {error}",
                         severity="error", timeout=15)
@@ -3588,6 +4071,19 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                              "Windows Terminal, or its tab has been renamed.", severity="warning", timeout=8)
 
 
+def read_armed() -> dict[str, datetime]:
+    """The sessions to continue at their reset, as config.json keeps them."""
+    saved = read_json("config.json")
+    armed = saved.get("continue_at_reset") if isinstance(saved, dict) else None
+    found = {}
+    for sid, moment in (armed.items() if isinstance(armed, dict) else ()):
+        try:
+            found[sid] = datetime.fromisoformat(moment)
+        except (TypeError, ValueError):
+            pass
+    return found
+
+
 # The dashboard's own keys, which a dialog or the team view on top keeps for itself.
 DASHBOARD_ACTIONS = {binding.action for binding in SessionPicker.BINDINGS} - {
     "quit", "back", "cycle_theme", "toggle_mascot"}
@@ -3600,4 +4096,5 @@ IDLE_ON = {
     "pin": TEAM_ROWS,
     "prompt": TEAM_ROWS,
     "rename": {"member", "member-open", *TEAM_ROWS},  # members keep the names the team finds them by
+    "monitor": {"open", "closed", "none", "ticked"},  # a team's, from its row or a member's
 }

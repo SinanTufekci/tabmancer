@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -56,6 +57,9 @@ def main(argv: list[str] | None = None) -> None:
                             help="include non-terminal sessions (claude -p, desktop app, IDE)")
     parser.add_argument("--demo", action="store_true",
                         help="the dashboard over made-up sessions, to try it: nothing of yours is read or changed")
+    # The Windows Terminal window the dashboard runs in, by the name tabmancer's own launcher gave it
+    # (wt -w <name>): what opens by itself goes there. A monitor is told the dashboard's.
+    parser.add_argument("--tabs-window", default="", help=argparse.SUPPRESS)
     parser.set_defaults(days=None, all=False)  # 14, or a week for report: see below
     sub = parser.add_subparsers(dest="command", metavar="command")
     listing = sub.add_parser("list", parents=[filters],
@@ -109,13 +113,22 @@ def main(argv: list[str] | None = None) -> None:
                           help="open this workspace directly instead of the picker")
     startup = sub.add_parser("startup", help="open the picker at login when sessions were left open")
     startup.add_argument("action", choices=["on", "off", "status"])
-    teaming = sub.add_parser("team", help="manage a team: add/start members, or send/listen/who on the cross-CLI bus")
-    teaming.add_argument("action", choices=["add", "start", "send", "listen", "who", "run"])
-    teaming.add_argument("team", help="the team's name")
+    teaming = sub.add_parser("team", help="manage a team: add/start members, send/listen/who on the cross-CLI bus, "
+                                          "or watch it in a monitor of its own")
+    teaming.add_argument("action", choices=["add", "start", "send", "listen", "who", "run", "watch"])
+    teaming.add_argument("team", nargs="?", default="",
+                         help="the team's name (watch: default the one team with members open)")
     teaming.add_argument("rest", nargs=argparse.REMAINDER,
                          help='add: "name: area @agy @model @effort; ..."; start: [member ...]; '
                               'send: <to> <message> [--from <member>] [--summary <text>]; '
                               'listen: [member] [--timeout N]; who; run: <member> -- <cmd...>')
+    serving = sub.add_parser("mcp", help="the team bus as an MCP server on stdin/stdout, for a member's CLI "
+                                         "(Claude Code, Antigravity, Codex)")
+    serving.add_argument("--team", default="", help="default: TABMANCER_TEAM")
+    serving.add_argument("--member", default="", help="default: TABMANCER_MEMBER")
+    plugging = sub.add_parser("agy-plugin", help="Antigravity plugin for agy team members: the team bus as tools "
+                                                 "and messages handed over when a turn ends (changes agy's plugins)")
+    plugging.add_argument("action", nargs="?", choices=["install", "remove", "status"], default="status")
     telling = sub.add_parser("notifications", help="desktop notifications when a session wants you back")
     telling.add_argument("action", nargs="?", choices=["on", "off", "test"])
     checking = sub.add_parser("updates", help="say when a newer tabmancer is out (PyPI, once a day): on or off")
@@ -191,9 +204,14 @@ def main(argv: list[str] | None = None) -> None:
         save_wrapped(args.action, args.out, "story" if args.story else "wide", args.share, args.period, args.slide,
                      args.gif, args.names)
     elif args.command == "team":
+        if args.action == "watch":
+            sys.exit(team_watch(args.team, args.days, args.tabs_window))
+        if not args.team:
+            parser.error(f"team {args.action} needs the team's name")
         if args.action in ("add", "start"):
             claudeupdate.before_opening(print)  # today's claude update, before the members open
-            spec = " ".join(args.rest)
+            rest = args.rest[1:] if args.rest[:1] == ["--"] else args.rest  # older Pythons keep the --
+            spec = " ".join(rest)
             sys.exit(start_team(args.team, spec) if args.action == "start" else add_to_team(args.team, spec))
         elif args.action == "send":
             sys.exit(team_send(args.team, args.rest))
@@ -203,6 +221,14 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(team_who(args.team))
         elif args.action == "run":
             sys.exit(team_run(args.team, args.rest))
+    elif args.command == "mcp":
+        from . import mcpserver
+
+        sys.exit(mcpserver.main(["--team", args.team, "--member", args.member]))
+    elif args.command == "agy-plugin":
+        from . import agyplugin
+
+        sys.exit(agyplugin.main([args.action]))
     elif args.command == "startup-run":
         startup_main()
     else:
@@ -212,7 +238,8 @@ def main(argv: list[str] | None = None) -> None:
         sixel.probe()  # whether Bit can be drawn in real pixels: asked before Textual reads the keys
         # The picker opens sessions itself and stays open; it only hands back commands
         # when no supported terminal can open tabs.
-        print_leftover(SessionPicker(args.days, args.all, live=args.command == "live").run())
+        print_leftover(SessionPicker(args.days, args.all, live=args.command == "live",
+                                     tabs_window=args.tabs_window).run())
 
 
 def launch_all(launches: list[Launch]) -> None:
@@ -414,6 +441,39 @@ def start_team(name: str, spec: str = "") -> int:
     return 0 if not failed and not other else 1
 
 
+def watched_team(name: str) -> tuple[str, str]:
+    """The team `team watch` shows, and a word for when there is none: the one named; else the one
+    team with members open; else '' (the monitor asks with the list of teams)."""
+    from . import teams
+
+    saved = teams.load()
+    if not saved:
+        return "", "There is no team yet: T in the dashboard makes one."
+    if name:
+        found = next((t for t in saved if t.casefold() == name.casefold()), None)
+        return (found, "") if found else ("", f"There is no team {name}. Teams: {', '.join(sorted(saved))}.")
+    live = teams.live_names()
+    working = [t.name for t in saved.values()
+               if any(t.session_name(m) in live for m in t.members)]
+    return (working[0] if len(working) == 1 else ""), ""
+
+
+def team_watch(name: str, days: float, tabs_window: str = "") -> int:
+    """`tabmancer team watch [team]`: the team's monitor, in this window. It acts only when asked
+    (no limits continued, no toasts, no updates): the dashboard stays the one that does."""
+    team, problem = watched_team(name)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 1
+    from . import claudeupdate, sixel
+    from .app import SessionPicker
+
+    claudeupdate.leave_to_dashboard()  # tabs opened from the monitor do not run claude update first
+    sixel.probe()
+    print_leftover(SessionPicker(days, watch=team, tabs_window=tabs_window).run())  # "": it asks which, with the list of teams
+    return 0
+
+
 def team_send(name: str, rest: list[str]) -> int:
     """Send a message to a team member over tabmancer's cross-CLI bus."""
     from . import teambus, teams
@@ -505,8 +565,16 @@ def team_run(name: str, rest: list[str]) -> int:
     saved = teams.load()
     team = saved.get(team_name)
     created = team.created if team is not None else ""
-    cli_name = "agy" if cmd[0].lower().startswith("agy") else "claude"
-    return teambus.run_member(team_name, member, cmd, cli=cli_name, created=created)
+    program = os.path.basename(cmd[0]).lower()
+    cli_name = "agy" if program.startswith("agy") else "codex" if program.startswith("codex") else "claude"
+    beside = None
+    if cli_name == "codex":  # no background command wakes Codex: its messages are queued into its thread
+        from functools import partial
+
+        from . import codexbus
+
+        beside = partial(codexbus.watch, team_name, teambus.normalize_member(team_name, member))
+    return teambus.run_member(team_name, member, cmd, cli=cli_name, created=created, beside=beside)
 
 
 def manage_notifications(action: str | None) -> None:

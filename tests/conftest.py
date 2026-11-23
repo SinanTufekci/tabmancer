@@ -63,6 +63,8 @@ def isolated(monkeypatch, tmp_path):
     # as they were before caps (test_router, test_picks: caps).
     monkeypatch.setenv("TABMANCER_CONTEXT_CAP", "auto")
     monkeypatch.setattr(usage, "read_codex", lambda now=None: [])  # never the real ~/.codex
+    # Never the real Desktop or Startup folder (doctor reads the desktop shortcut): a test's own.
+    monkeypatch.setenv("TABMANCER_SHORTCUT_DIR", str(tmp_path / "shortcuts"))
     from tabmancer import agy
 
     monkeypatch.setattr(agy, "_run_usage", lambda timeout: None)  # never the real `agy -p /usage`
@@ -70,12 +72,17 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(agy, "_version", None)  # no agy version carried from one test to the next
     monkeypatch.setattr(focus, "focus_tab", lambda title: False)  # never switch the real tabs
     monkeypatch.setattr(focus, "close_tab", lambda title: False)  # nor close them
+    monkeypatch.setattr(focus, "foreground", lambda: 0)  # nor take the keys back to a window
+    monkeypatch.setattr(focus, "give_back", lambda hwnd, wait=3.0, timeout=20: False)
+    monkeypatch.setattr(focus, "tab_open", lambda start, timeout=5: False)  # nor look through the real tabs
     monkeypatch.setattr(typein, "write_keys", lambda pid, text: False)  # nor type into a real console
     # Never real tabs or windows, whatever a test presses: a test that wants to see what would
     # open puts its own recorder in their place.
     monkeypatch.setattr(app_module, "open_tabs", lambda launches: [])
     monkeypatch.setattr(cli, "open_tabs", lambda launches: [])
     monkeypatch.setattr(app_module, "run_in_background", no_background)
+    # Unasked tabs (a limit lifted) as anywhere but Windows Terminal: test_monitor asks for its way.
+    monkeypatch.setattr(app_module, "terminal_kind", lambda: "none")
     monkeypatch.setattr(toast, "show", lambda title, body, dashboard: toast.FAILED)  # no real toasts
     from tabmancer import share
 
@@ -96,6 +103,7 @@ def isolated(monkeypatch, tmp_path):
     from tabmancer import claudeupdate
 
     monkeypatch.setattr(claudeupdate, "_tried", False)  # each test a process of its own (it is off anyway)
+    monkeypatch.setattr(claudeupdate, "_elsewhere", False)
     from tabmancer import wrapped
 
     # The week's word only where a test asks for it: run on a Friday afternoon, every dashboard said it.

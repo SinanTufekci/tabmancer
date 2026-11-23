@@ -86,3 +86,22 @@ def write_json(name: str, data: object, indent: int | None = 1) -> None:
         except OSError:  # elsewhere a folder by that name is IsADirectoryError: no half file left
             tmp.unlink(missing_ok=True)
             raise
+
+
+def merge_json(name: str, **keys: object) -> bool:
+    """Set these keys in a saved dict, keeping the rest of it. Refused (False) when the file is there
+    but could not be read, or holds no dict: writing the keys alone would wipe whatever else it holds
+    (config.json keeps the theme, Bit, the split and the sessions to continue side by side). False too
+    when the write fails."""
+    path = config_dir() / name
+    saved = read_json(name)
+    if not isinstance(saved, dict):
+        if os.path.lexists(path):
+            return False
+        saved = {}
+    saved.update(keys)
+    try:
+        write_json(name, saved, indent=2)
+    except OSError:
+        return False
+    return True

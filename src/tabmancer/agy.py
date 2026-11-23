@@ -193,6 +193,40 @@ def _read_transcript(path: Path) -> dict:
     return info
 
 
+# A conversation's steps (conversations/<id>.db, table steps) carry agy's CORTEX_STEP_STATUS_* as a
+# number, in the enum's order as agy's binary lists it: 0 unspecified, 1 pending, 2 running, 3 done,
+# ... 7 error, 8 generating, 9 waiting, 10 queued. The mapping is read from that order, not from a
+# descriptor; the data fits it (a denied permission is 7, a done step 3), and the one step ever seen at
+# 9 was an MCP tool call held for an OK in the member's tab that nobody gave (2026-11-20).
+STEP_WAITING = 9
+STEP_NOT_REACHED = (0, 1, 10)  # unspecified, pending, queued: behind the one held, not yet run
+_CONVERSATION_ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z-]{7,63}")
+
+
+def waiting_for_you(session_id: str) -> bool:
+    """Whether the agy conversation stopped at a step held for your OK (a permission prompt in its
+    tab: an MCP tool, a command): its newest step that has been reached is WAITING. Only read, from
+    its own db; False when there is none or it cannot be read."""
+    if not _CONVERSATION_ID.fullmatch(session_id or ""):
+        return False  # "agy:<member>" before its conversation is known, or anything odd
+    path = home() / "conversations" / f"{session_id}.db"
+    if not path.is_file():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=1)
+    except sqlite3.Error:
+        return False
+    try:
+        marks = ",".join("?" * len(STEP_NOT_REACHED))
+        row = con.execute(f"SELECT status FROM steps WHERE status NOT IN ({marks}) ORDER BY idx DESC LIMIT 1",
+                          STEP_NOT_REACHED).fetchone()
+    except sqlite3.Error:
+        return False
+    finally:
+        con.close()
+    return row is not None and row[0] == STEP_WAITING
+
+
 def user_events(path: Path) -> list[dict]:
     """User prompts from an agy transcript.jsonl, for team conversation logs."""
     if path.suffix != ".jsonl" or not path.is_file():
@@ -349,9 +383,11 @@ CHAIN_WORDS = {
     "gemini-3.8-flash-high": "only when Hydrogen is out of quota too",
 }
 # The /usage families each model draws on. Argon has a family of its own; Hydrogen is under
-# "Gemini Models". Flash has no row that names it, so it is taken as there whenever it is reached.
+# "Gemini Models" (a live 429 on Hydrogen came with that row at 0%), which has a five-hour and a
+# weekly window: either at 0% is out. Flash names no row of its own: taken as under "Gemini Models"
+# too, so with that row at 0% the whole chain is out once Argon is.
 QUOTA_FAMILIES = {"gemini-4-argon-high": ("Gemini 4 Argon",), "gemini-4-hydrogen-high": ("Gemini Models",),
-                  "gemini-3.8-flash-high": ()}
+                  "gemini-3.8-flash-high": ("Gemini Models",)}
 QUOTA_FILE = "agy_quota.json"
 STALE = timedelta(hours=2)  # a /usage read older than this says nothing about now
 NOTED_FOR = timedelta(hours=5)  # a quota failure noted with no reset time holds this long
@@ -577,21 +613,29 @@ def _fresh(quota: dict, now: datetime) -> datetime | None:
     return read_at if read_at is not None and now - read_at <= STALE else None
 
 
+def _same_family(model: str, other: str) -> bool:
+    """Whether two models draw on the same quota: the same model, or a /usage family in common."""
+    return model == other or bool(set(QUOTA_FAMILIES.get(model, ())) & set(QUOTA_FAMILIES.get(other, ())))
+
+
 def _out_until(model: str, quota: dict, now: datetime) -> datetime | None:
-    """When a model is back if it is out of quota now; None when it is not known to be out."""
-    if model in quota["out"]:
-        back = _utc(quota["out"][model]) or now + NOTED_FOR
-        if back > now:
-            return back
-    read_at = _fresh(quota, now)
-    if read_at is None:
-        return None
-    for family, _, remaining, *rest in quota["rows"]:
-        if _family_of(model, family) and _percent(remaining) == 0:
-            back = _utc(rest[0] if rest else "") or read_at + STALE
+    """When a model is back if it is out of quota now; None when it is not known to be out. Out by
+    a note on it or on a model of its family, or by any of its family's rows at 0% (a five-hour
+    window and a weekly one each count); back once the last of those lifts."""
+    backs = []
+    for noted, until in quota["out"].items():
+        if _same_family(model, noted):
+            back = _utc(until) or now + NOTED_FOR
             if back > now:
-                return back
-    return None
+                backs.append(back)
+    read_at = _fresh(quota, now)
+    if read_at is not None:
+        for family, _, remaining, *rest in quota["rows"]:
+            if _family_of(model, family) and _percent(remaining) == 0:
+                back = _utc(rest[0] if rest else "") or read_at + STALE
+                if back > now:
+                    backs.append(back)
+    return max(backs) if backs else None
 
 
 def _left(model: str, quota: dict, now: datetime) -> str:
@@ -645,8 +689,8 @@ def _pick(usage: dict | None, now: datetime | None, start: str) -> tuple[str, st
             return model, f"{CHAIN_NAMES[model]} first ({UNREADABLE if known else 'quota not read yet'})"
         last, _ = skipped[-1]
         model, back = min(skipped, key=lambda item: item[1])
-        return last, (f"every model in the chain is out of quota; {CHAIN_NAMES[last]}, the last, all the same "
-                      f"({CHAIN_NAMES[model]} is back {_when_back(back)})")
+        return last, (f"all agy models out of quota until {_when_back(back)} ({CHAIN_NAMES[model]} back first); "
+                      f"{CHAIN_NAMES[last]}, the last, is given all the same and will likely fail")
     except Exception:  # noqa: BLE001 - a guess beats a crash: the chain's first
         return CHAIN[0], f"{CHAIN_NAMES[CHAIN[0]]} first ({UNREADABLE})"
 
@@ -750,3 +794,64 @@ def quota_view(usage: dict | None = None, now: datetime | None = None) -> dict:
     unreadable = _utc(str(quota.get("unreadable") or ""))
     return {"read_at": _local(read_at), "unreadable": unreadable is not None and now - unreadable <= STALE,
             "chain": [standing(model, quota, now) for model in CHAIN], "pick": pick, "why": why}
+
+
+def all_out(usage: dict | None = None, now: datetime | None = None) -> datetime | None:
+    """When the first model of the chain is back, if every one is out of quota now; else None.
+    Reads only the saved quota."""
+    try:
+        quota = usage if usage is not None else load_quota()
+        quota = {"read_at": str(quota.get("read_at") or ""), "rows": list(quota.get("rows") or []),
+                 "out": dict(quota.get("out") or {}), "unreadable": str(quota.get("unreadable") or "")}
+        now = now or datetime.now(timezone.utc)
+        backs = [_out_until(model, quota, now) for model in CHAIN]
+    except Exception:  # noqa: BLE001 - not known to be out
+        return None
+    return None if any(back is None for back in backs) else min(b for b in backs if b is not None)
+
+
+# --- a run that failed on quota ----------------------------------------------------------------
+# agy's error for it: "RESOURCE_EXHAUSTED (429): Individual quota reached ... Resets in 4h7m". A 429
+# that says "overloaded" (capacity), or a rate limit that names no quota, passes in minutes: not noted.
+
+QUOTA_ERROR = re.compile(r"resource[_ ]exhausted|quota (?:reached|exceeded|exhausted)|individual quota|"
+                         r"out of quota", re.IGNORECASE)
+RESETS_IN = re.compile(r"resets?\s+in\s+~?\s*((?:\d+(?:[.,]\d+)?\s*(?:d|h|m|s)\w*\s*)+)", re.IGNORECASE)
+SPAN = re.compile(r"(\d+(?:[.,]\d+)?)\s*(d|h|m|s)", re.IGNORECASE)
+SECONDS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+
+
+def resets_in(text: str) -> timedelta | None:
+    """'Resets in 4h7m' -> 4 h 7 min; '1d2h', '~75h', '35m', '45s' too; None when it says no time."""
+    found = RESETS_IN.search(text or "")
+    if found is None:
+        return None
+    seconds = sum(float(n.replace(",", ".")) * SECONDS[unit.lower()] for n, unit in SPAN.findall(found[1]))
+    return timedelta(seconds=seconds) if seconds > 0 else None
+
+
+def _quota_model(model: str) -> str:
+    """The chain model whose quota a model draws on: its own id for a chain model, by its id or
+    display name; the chain's model of the same name at another effort ('Gemini 4 Hydrogen (Low)');
+    else the name as written."""
+    found = chain_id(model)
+    if found:
+        return found
+    plain = (model or "").strip().lower()
+    for chain_model, name in CHAIN_NAMES.items():
+        if name.lower() in plain:
+            return chain_model
+    return plain
+
+
+def note_quota_error(text: str, model: str, now: datetime | None = None) -> datetime | None:
+    """For a failed agy run's error text: when it says the model is out of quota, note it (its whole
+    family) until the time it gives ("Resets in 4h7m"), or NOTED_FOR when it gives none, and return
+    that time (UTC). None, and nothing noted, for any other error (a 429 'overloaded', say). model:
+    the one the run used, its id or display name."""
+    if not text or not QUOTA_ERROR.search(text) or not (model or "").strip():
+        return None
+    now = now or datetime.now(timezone.utc)
+    back = now + (resets_in(text) or NOTED_FOR)
+    note_out_of_quota(_quota_model(model), back, now)
+    return back

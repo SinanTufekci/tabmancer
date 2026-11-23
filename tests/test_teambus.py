@@ -341,3 +341,121 @@ def test_a_member_started_in_the_background_gets_its_name_too(tmp_path, monkeypa
     monkeypatch.setattr(launch_module.subprocess, "run", run)
     launch_module.run_in_background(teams.background_start(team, teams.launch(team, member)))
     assert seen.get("TABMANCER_MEMBER") == "api" and seen.get("TABMANCER_TEAM") == "shop"
+
+
+# --- the bus folder on a shared /tmp ----------------------------------------------------------------
+
+def _as_posix(monkeypatch, tmp_path, uid: int) -> list:
+    monkeypatch.delenv(teambus.BUS_ENV, raising=False)
+    monkeypatch.setattr(teambus.sys, "platform", "linux")
+    monkeypatch.setattr(teambus.os, "getuid", lambda: uid, raising=False)
+    monkeypatch.setattr(teambus.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    monkeypatch.setattr(teambus.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkeypatch.setattr(teambus, "_PRIVATE", set())
+    chmods: list = []
+    monkeypatch.setattr(teambus.os, "chmod", lambda path, mode: chmods.append((str(path), mode)))
+    return chmods
+
+
+def test_on_linux_and_macos_the_bus_is_the_users_own_folder(monkeypatch, tmp_path):
+    (tmp_path / "tmp").mkdir()
+    owner = teambus.os.lstat(tmp_path / "tmp").st_uid  # what a folder made here is owned by
+    _as_posix(monkeypatch, tmp_path, owner)
+    root = teambus.bus_root()
+    assert root == tmp_path / "tmp" / f"tabmancer-bus-{owner}" and root.is_dir()
+    assert teambus.team_dir("shop").parent == root
+
+
+def test_a_bus_folder_someone_else_made_is_not_used(monkeypatch, tmp_path):
+    (tmp_path / "tmp").mkdir()
+    owner = teambus.os.lstat(tmp_path / "tmp").st_uid
+    _as_posix(monkeypatch, tmp_path, owner + 1000)  # the folder's owner is not this user
+    assert teambus.bus_root() == tmp_path / "home" / ".cache" / "tabmancer-bus"
+
+
+def test_a_bus_folder_others_can_read_is_closed_to_them(monkeypatch, tmp_path):
+    (tmp_path / "tmp").mkdir()
+    owner = teambus.os.lstat(tmp_path / "tmp").st_uid
+    chmods = _as_posix(monkeypatch, tmp_path, owner)
+    real = teambus.os.lstat
+    monkeypatch.setattr(teambus.os, "lstat", lambda path: os.stat_result(
+        (teambus.stat.S_IFDIR | 0o755, *real(path)[1:])))
+    root = teambus.bus_root()
+    assert chmods == [(str(root), 0o700)]
+
+
+def test_windows_keeps_its_temp_folder(monkeypatch, tmp_path):
+    monkeypatch.delenv(teambus.BUS_ENV, raising=False)
+    monkeypatch.setattr(teambus.sys, "platform", "win32")
+    monkeypatch.setattr(teambus.tempfile, "gettempdir", lambda: str(tmp_path))
+    assert teambus.bus_root() == tmp_path / "tabmancer-bus"
+
+
+def test_windows_can_keep_the_bus_out_of_its_temp_folder(monkeypatch, tmp_path):
+    """Ready for the retest's outcome: a sandbox that refuses writes under %TEMP% only."""
+    monkeypatch.delenv(teambus.BUS_ENV, raising=False)
+    monkeypatch.setattr(teambus.sys, "platform", "win32")
+    monkeypatch.setattr(teambus, "WINDOWS_BUS_IN_TEMP", False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    assert teambus.bus_root() == tmp_path / "Local" / "tabmancer" / "bus"
+    monkeypatch.setenv(teambus.BUS_ENV, str(tmp_path / "own"))  # a member started with its folder keeps it
+    assert teambus.bus_root() == tmp_path / "own"
+
+
+def test_a_session_name_loses_the_team_only_when_that_leaves_a_member():
+    assert teambus.normalize_member("shop", "shop-api") == "api"  # no member list yet: as before
+    teambus.install("shop", "", ["lead", "api", "shop-ui"])
+    assert teambus.normalize_member("shop", "shop-api") == "api"
+    assert teambus.normalize_member("shop", "Shop-API") == "API"
+    assert teambus.normalize_member("shop", "shop-ui") == "shop-ui"  # a member of that very name
+    assert teambus.normalize_member("shop", "shop-qa") == "shop-qa"  # no member qa: left whole
+    assert teambus.normalize_member("shop", " lead ") == "lead"
+
+
+# --- a bus folder it may read but not write (agy's terminal sandbox) ----------------------------
+
+@pytest.fixture
+def read_only_bus(monkeypatch):
+    """Every write into the bus folder refused, as agy's sandbox refused the 2026-11-20 seam test's."""
+    monkeypatch.setattr(teambus, "_atomic_write_json", _refused)
+    monkeypatch.setattr(teambus, "_append_jsonl", _refused)
+    monkeypatch.setattr(teambus, "agent_pid", lambda *a: None)
+
+
+def _refused(*args, **kwargs):
+    raise PermissionError(13, "Permission denied")
+
+
+def test_a_listen_that_cannot_write_still_hands_the_message_over_once_and_says_acks_are_off(
+        monkeypatch, capsys):
+    sent = teambus.send("shop", "lead", "ui", "TASK-1: probe the bus")
+    monkeypatch.setattr(teambus, "agent_pid", lambda *a: None)
+    with monkeypatch.context() as m:  # the message is in; then the folder turns read-only
+        m.setattr(teambus, "_atomic_write_json", _refused)
+        m.setattr(teambus, "_append_jsonl", _refused)
+        assert teambus.listen_command("shop", "ui", timeout=0.5) == 0
+        out = capsys.readouterr().out
+    assert out.count("TASK-1: probe the bus") == 1  # printed once in this run, no traceback
+    assert teambus.ACKS_OFF in out and "team_inbox" in out and "BypassSandbox" in out
+    # Still unread, so a member acks it with team_inbox (outside the sandbox) and it never comes again.
+    assert [m["id"] for m in teambus.unread("shop", "ui")] == [sent["id"]]
+    teambus.unread("shop", "ui", mark_read=True)
+    assert teambus.listen_command("shop", "ui", timeout=0.2) == 0
+    assert "TASK-1" not in capsys.readouterr().out
+
+
+def test_a_listen_without_a_claim_waits_and_is_never_superseded(read_only_bus):
+    report: dict = {}
+    assert teambus.listen("shop", "ui", timeout=0.2, poll=0.02, ack=False, report=report) == []
+    assert report == {"claimed": False}
+    assert teambus.listener("shop", "ui") is None  # nobody sees it listening
+
+
+def test_a_listen_that_could_ack_but_not_claim_says_presence_is_off(monkeypatch, capsys):
+    teambus.send("shop", "lead", "ui", "hello")
+    monkeypatch.setattr(teambus, "_write_claim", _refused)
+    monkeypatch.setattr(teambus, "agent_pid", lambda *a: None)
+    assert teambus.listen_command("shop", "ui", timeout=0.5) == 0
+    out = capsys.readouterr().out
+    assert "hello" in out and teambus.PRESENCE_OFF in out and teambus.ACKS_OFF not in out
+    assert teambus.unread("shop", "ui") == []

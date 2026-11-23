@@ -13,6 +13,10 @@ from pathlib import Path
 
 PROG = "tabmancer"
 PICKER_TITLE = "tabmancer"
+# The Windows Terminal window tabmancer's own launchers start the dashboard in (wt -w <name> names it),
+# told to the dashboard with --tabs-window: what opens by itself later (a session whose limit lifted,
+# a queued handover's fresh one) goes there by name, not to the window used last.
+DASHBOARD_WINDOW = "tabmancer"
 STARTUP_NAME = "tabmancer at login"
 LAUNCH_AGENT = "com.tabmancer.startup"  # macOS: ~/Library/LaunchAgents/<this>.plist
 # Linux terminals that open a window running a command, the first found wins, and how each is told
@@ -51,13 +55,17 @@ def picker_argv(extra: list[str], title: str = PICKER_TITLE) -> list[str]:
     wt = _windows_terminal()
     if not wt:
         return _terminal_window(command)
+    window = "new"
+    if not extra and title == PICKER_TITLE:  # the dashboard itself: in its named window
+        window = DASHBOARD_WINDOW
+        command = [*command, "--tabs-window", DASHBOARD_WINDOW]
     pwsh = shutil.which("pwsh")
     if pwsh:
         from .launch import _ps_quote
 
         script = "& " + " ".join(_ps_quote(arg) for arg in command)  # & runs a quoted path
         command = [pwsh, "-NoLogo", "-Command", script]
-    return [wt, "-w", "new", "new-tab", "--title", title, *command]
+    return [wt, "-w", window, "new-tab", "--title", title, *command]
 
 
 def _terminal_window(command: list[str]) -> list[str]:
@@ -146,6 +154,20 @@ def write_shortcut(folder: Path, name: str, argv: list[str], description: str) -
         path=str(path), target=argv[0], args=subprocess.list2cmdline(argv[1:]), desc=description,
         icon=shutil.which("claude") or "")
     return path
+
+
+def read_shortcut(path: Path) -> tuple[str, str] | None:
+    """A Windows shortcut's target and arguments, only read: CreateShortcut loads one that is there,
+    and nothing is saved. None off Windows, when it is not there, or when it cannot be read."""
+    if sys.platform != "win32" or not path.is_file():
+        return None
+    try:
+        out = _powershell("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:SC_PATH);"
+                          "$s.TargetPath; $s.Arguments", path=str(path))
+    except OSError:
+        return None
+    target, _, args = out.partition("\n")
+    return target.strip(), args.strip()
 
 
 def startup_shortcut() -> Path:

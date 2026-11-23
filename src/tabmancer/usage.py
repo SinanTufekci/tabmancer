@@ -211,6 +211,27 @@ def _raw_history() -> list[tuple[datetime, dict]]:
     return out
 
 
+
+SHARED_FOR = 15 * 60  # a team's monitor takes the dashboard's reading up to this old
+
+
+def latest(max_age: float = SHARED_FOR, now: datetime | None = None) -> list[Limit] | None:
+    """The newest reading in the history (the dashboard's, every five minutes) when it is at most
+    max_age seconds old, else None: a team's monitor shows it instead of asking claude again."""
+    raw = _raw_history()
+    if not raw:
+        return None
+    at, data = raw[-1]
+    if not 0 <= ((now or datetime.now()) - at).total_seconds() <= max_age:
+        return None
+    try:
+        return [Limit(str(item["label"]), int(item["percent"]),
+                      datetime.fromisoformat(item["resets"]) if item.get("resets") else None, "")
+                for item in data["limits"]]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def history(days: float = 7, now: datetime | None = None) -> list[Reading]:
     """Readings from the last `days` days, oldest first."""
     since = (now or datetime.now()) - timedelta(days=days)

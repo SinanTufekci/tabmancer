@@ -60,7 +60,8 @@ def test_login_opens_the_picker_when_sessions_were_left_open(tools, monkeypatch)
     monkeypatch.setattr(cli.subprocess, "Popen", lambda argv, **k: launched.append(argv))
     cli.startup_main()
     (argv,) = launched
-    assert argv[0] == "C:/bin/wt.exe" and argv[-1] == "C:/bin/tabmancer.exe"
+    assert argv[0] == "C:/bin/wt.exe" and argv[-3:] == ["C:/bin/tabmancer.exe", "--tabs-window", "tabmancer"]
+    assert argv[1:3] == ["-w", "tabmancer"]  # the dashboard's named window
 
 
 def test_login_argv_prefers_the_windowless_launcher(monkeypatch):

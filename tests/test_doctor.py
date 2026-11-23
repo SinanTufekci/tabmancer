@@ -159,3 +159,23 @@ def test_doctor_says_how_bit_is_drawn(monkeypatch):
     assert "as chosen with b" in doctor.bit_check()[1]
     write_json("config.json", {"mascot": False})  # hidden, from before b chose among three
     assert "away" in doctor.bit_check()[1]
+
+
+def test_doctor_offers_the_agy_plugin_and_never_installs_it(monkeypatch):
+    from tabmancer import agyplugin
+
+    def never(*args, **kwargs):
+        raise AssertionError("doctor must not install or remove the agy plugin")
+
+    monkeypatch.setattr(agyplugin, "install", never)
+    monkeypatch.setattr(agyplugin, "remove", never)
+    monkeypatch.setattr(agyplugin, "_agy", lambda: None)
+    assert doctor.agy_plugin_check() is None  # no agy, nothing to say
+
+    monkeypatch.setattr(agyplugin, "_agy", lambda: "agy")
+    for state, level, words in [("missing", "ok", "tabmancer agy-plugin install"),
+                                ("outdated", "warn", "older than this tabmancer"),
+                                ("installed", "ok", "is installed")]:
+        monkeypatch.setattr(agyplugin, "status", lambda state=state: state)
+        found = doctor.agy_plugin_check()
+        assert found is not None and found[0] == level and words in found[1]

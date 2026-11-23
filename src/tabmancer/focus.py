@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 _FIND = r"""
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
@@ -72,6 +73,15 @@ $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).In
 exit 0
 """
 
+_ANY = _FIND + r"""
+foreach ($w in $A::RootElement.FindAll($scope::Children, $byClass)) {
+  foreach ($t in $w.FindAll($scope::Descendants, $byTab)) {
+    if ((Plain $t.Current.Name).StartsWith($want, [System.StringComparison]::Ordinal)) { exit 0 }
+  }
+}
+exit 3
+"""
+
 
 def _run(script: str, title: str, timeout: float) -> bool:
     if sys.platform != "win32" or not title.strip():
@@ -97,6 +107,108 @@ def focus_tab(title: str, timeout: float = 20) -> bool:
     if _tmux_select(title):
         return True
     return sys.platform == "darwin" and _mac_select(title, timeout)
+
+
+_GIVE_BACK = r"""
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type -Namespace W -Name U -MemberDefinition '
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);'
+$h = [System.IntPtr][long]$env:CCR_HWND
+try { [System.Windows.Automation.AutomationElement]::FromHandle($h).SetFocus() } catch { }
+if ([W.U]::SetForegroundWindow($h)) { exit 0 }
+exit 3
+"""
+
+
+def foreground() -> int:
+    """The window that has the keys now (its handle), 0 off Windows or when none has."""
+    if sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+
+        return int(ctypes.windll.user32.GetForegroundWindow() or 0)
+    except (OSError, AttributeError):
+        return 0
+
+
+def is_window(hwnd: int) -> bool:
+    """Whether this handle is still a window (closed meanwhile, it is not)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        return bool(ctypes.windll.user32.IsWindow(wintypes.HWND(hwnd)))
+    except (OSError, AttributeError):
+        return False
+
+
+TERMINAL_CLASS = "CASCADIA_HOSTING_WINDOW_CLASS"  # a Windows Terminal window
+TERMINAL_EXE = "windowsterminal.exe"
+
+
+def is_terminal(hwnd: int) -> bool:
+    """Whether this window is Windows Terminal's: by its window class, else by the process it
+    belongs to. False when neither can be read."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+        name = ctypes.create_unicode_buffer(256)
+        if user32.GetClassNameW(wintypes.HWND(hwnd), name, 256) and name.value == TERMINAL_CLASS:
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+        if not pid.value:
+            return False
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        handle = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            path = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(1024)
+            if not kernel32.QueryFullProcessImageNameW(wintypes.HANDLE(handle), 0, path, ctypes.byref(size)):
+                return False
+            return os.path.basename(path.value).lower() == TERMINAL_EXE
+        finally:
+            kernel32.CloseHandle(wintypes.HANDLE(handle))
+    except (OSError, AttributeError, ValueError):
+        return False
+
+
+def give_back(hwnd: int, wait: float = 3.0, timeout: float = 20) -> bool:
+    """After tabs opened in another window: the window that had the keys (hwnd, from foreground())
+    gets them back once the terminal has taken them; a terminal brings the window it opens a tab in
+    to the front a moment after it is asked. False when nothing took them within wait seconds, and
+    nothing is given back when what took them is not a Windows Terminal window (you went to the
+    browser meanwhile: you stay there) or the window that had them has closed since."""
+    if sys.platform != "win32" or not hwnd:
+        return False
+    end = time.monotonic() + wait
+    taken = foreground()
+    while taken in (hwnd, 0):
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.1)
+        taken = foreground()
+    if not is_window(hwnd) or not is_terminal(taken):
+        return False
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", _GIVE_BACK],
+            env=dict(os.environ, CCR_HWND=str(hwnd)), capture_output=True, text=True, timeout=timeout,
+            check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def tab_open(start: str, timeout: float = 5) -> bool:
+    """Whether a Windows Terminal tab's title (without Claude's glyph) starts with these words. Only
+    looks: no tab is selected, no window comes to the front, the keys stay where they are."""
+    return sys.platform == "win32" and _run(_ANY, start, timeout)
 
 
 def plain(title: str) -> str:
@@ -125,7 +237,8 @@ def _tmux_select(title: str) -> bool:
         if len(parts) == 4 and plain(parts[3]) == want:
             session, window, pane, _ = parts
             _quiet(["tmux", "switch-client", "-t", session])
-            return _quiet(["tmux", "select-window", "-t", window]) is not None and                 _quiet(["tmux", "select-pane", "-t", pane]) is not None
+            return (_quiet(["tmux", "select-window", "-t", window]) is not None
+                    and _quiet(["tmux", "select-pane", "-t", pane]) is not None)
     return False
 
 

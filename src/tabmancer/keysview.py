@@ -74,6 +74,11 @@ KEYS: list[tuple[str, list[tuple[str, str, str]]]] = [
                           "it); on Fridays Bit says it is ready")),
         ("T", "teams", ("teams: several sessions on one project with an orchestrator, talking to each other: the "
                         "list of them, and a new one. A team's own view: Enter on its row")),
+        ("M", "monitor", ("on a team's row or a member's (or in a team's view): the team's monitor in a window of "
+                          "its own, on the second screen if there is one; open already, it comes to the front")),
+        ("V", "toggle_split", ("the preview beside the list, both at full height (by itself from 180x40, with a "
+                               "team's cards in it, or its tree when they leave no room for its keys), or under "
+                               "the list at any size (remembered)")),
     ]),
     ("Workspaces", [
         ("w", "save_workspace", "save the ticked sessions' folders as a workspace"),
@@ -102,9 +107,9 @@ def line(key: str, what: str) -> Table:
     return grid
 
 
-def options() -> list[Option | None]:
+def options(groups: list[tuple[str, list[tuple[str, str, str]]]] | None = None) -> list[Option | None]:
     out: list[Option | None] = []
-    for i, (group, rows) in enumerate(KEYS):
+    for i, (group, rows) in enumerate(KEYS if groups is None else groups):
         if i:
             out.append(None)
         out.append(Option(Text(group.upper(), style=f"bold {MUTED}"), disabled=True))
@@ -122,11 +127,15 @@ class KeysScreen(ModalScreen[str | None]):
     """
     BINDINGS: ClassVar[list[Binding]] = [Binding("escape,q,question_mark", "close", "Close")]
 
+    def __init__(self, groups: list[tuple[str, list[tuple[str, str, str]]]] | None = None) -> None:
+        super().__init__()
+        self.groups = groups  # another screen's keys (the team monitor's); else the dashboard's
+
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(Text.assemble(("Every key", "bold"),
                                       ("   the footer shows the common ones; Enter runs any of these", MUTED)))
-            yield OptionList(*options())
+            yield OptionList(*options(self.groups))
             yield Label(keys(("↑↓", "pick"), ("Enter", "run it"), ("Esc", "close")), classes="hint")
 
     def on_mount(self) -> None:

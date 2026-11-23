@@ -237,8 +237,12 @@ class TeamGraph(Widget):
 
     # --- drawing ---------------------------------------------------------------------------
 
+    def canvas_width(self) -> int:
+        """The width the cards are laid out at: the widget's own, or a guess before its first layout."""
+        return max(40, self.size.width or 100)
+
     def render(self) -> Text:
-        width = max(40, self.size.width or 100)
+        width = self.canvas_width()
         places, rows = self.layout_boxes(width)
         canvas = Canvas(width, self.height_for(rows))
         for member in self.order:
@@ -404,7 +408,7 @@ class TeamGraph(Widget):
                 canvas.put(cx, cy, "●", f"bold {colour}")
 
     def launch_flight(self, message: teams.Message) -> None:
-        places, _ = self.layout_boxes(max(40, self.size.width or 100))
+        places, _ = self.layout_boxes(self.canvas_width())
         path = self.path(message.sender, message.receiver, places)
         if path:
             self.flights.append(Flight(message, path, time.monotonic()))
@@ -641,6 +645,7 @@ class TeamScreen(Screen):
         Binding("h", "handover_team", "Hand the team over"),
         Binding("H", "handover", "Hand a member over"),
         Binding("x", "close_team", "Close the team"),
+        Binding("M", "monitor", "Its monitor"),
     ]
 
     def __init__(self, team: teams.Team, accent: str) -> None:
@@ -662,7 +667,7 @@ class TeamScreen(Screen):
             yield Static("", id="team-log")
         yield Label(keys(("← →", "member"), ("Enter", "its tab"), ("s", "start the rest"), ("a", "add"),
                          ("d", "take off"), ("g", "goal"), ("h", "hand the team over"), ("H", "a member"),
-                         ("x", "close"), ("Esc", "back")),
+                         ("x", "close"), ("M", "monitor"), ("Esc", "back")),
                     classes="hint")
 
     def on_mount(self) -> None:
@@ -955,6 +960,12 @@ class TeamScreen(Screen):
             go(lead)
         self.notify(f"{done} A note for the lead is on the clipboard: paste it into its tab (Ctrl+V, Enter).",
                     title="Tell the lead", timeout=12)
+
+    def action_monitor(self) -> None:
+        """M: this team's monitor in a window of its own (the dashboard's action_monitor)."""
+        opener = getattr(self.app, "action_monitor", None)
+        if opener is not None:
+            opener(self.team.name)
 
     def action_close(self) -> None:
         self.app.pop_screen()

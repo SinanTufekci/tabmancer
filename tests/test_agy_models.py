@@ -54,10 +54,11 @@ def test_hydrogen_when_argon_is_out():
     assert "Argon out of quota" in why
 
 
-def test_flash_only_when_hydrogen_is_out_too():
+def test_argon_out_and_the_gemini_models_row_at_nothing_is_the_whole_chain_out():
+    # Flash draws on "Gemini Models" as Hydrogen does: that row at 0% takes both.
     model, why = agy.pick_model(quota(argon="0%", gemini_5h="0%"), NOW)
     assert model == FLASH
-    assert "Argon" in why and "Hydrogen" in why
+    assert why.startswith("all agy models out of quota until") and "Hydrogen back first" in why
 
 
 def test_argon_comes_back_at_its_reset():
@@ -82,7 +83,8 @@ def test_the_whole_chain_out_is_flash_all_the_same_and_says_when_argon_is_back()
     noted = {model: (NOW + timedelta(hours=i + 1)).isoformat() for i, model in enumerate(agy.CHAIN)}
     model, why = agy.pick_model({"out": noted}, NOW)
     assert model == FLASH
-    assert "the last" in why and "Argon is back" in why
+    assert why.startswith(f"all agy models out of quota until {agy._when_back(NOW + timedelta(hours=1))}")
+    assert "Argon back first" in why and "the last" in why and "will likely fail" in why
     assert agy.resolve("", {"out": noted}, NOW) == (model, why)  # the two agree; never agy's own default
 
 

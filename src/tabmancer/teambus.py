@@ -32,11 +32,14 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -67,10 +70,53 @@ class Superseded(Exception):
     """A newer listener for the same member took over: this one leaves without marking anything."""
 
 
+_PRIVATE: set[str] = set()  # folders seen to be this user's alone
+# Windows: the bus in %TEMP% (True) or in %LOCALAPPDATA%	abmancerus (False). Pending the
+# retest's probe of whether agy's terminal sandbox refuses writes under %TEMP% only, even in an
+# --add-dir folder (the 2026-11-20 seam test's listen was refused there). Members already running
+# keep theirs: they were started with TABMANCER_BUS_DIR.
+WINDOWS_BUS_IN_TEMP = True
+
+
+def _private(path: Path) -> bool:
+    """Whether the folder is this user's alone (made so, 0700, when it is not there yet). A folder
+    someone else made, or a link, is not: on a shared /tmp another user could read the messages,
+    or put a bus copy (teambus_cli.py) there for a member to run."""
+    key = str(path)
+    if key in _PRIVATE:
+        return True
+    try:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = os.lstat(path)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():  # type: ignore[attr-defined]
+            return False
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            os.chmod(path, 0o700)
+    except OSError:
+        return False
+    _PRIVATE.add(key)
+    return True
+
+
 def bus_root() -> Path:
-    """Root folder for team buses: TABMANCER_BUS_DIR, else <temp>/tabmancer-bus."""
+    """Root folder for team buses: TABMANCER_BUS_DIR, else <temp>/tabmancer-bus. On Windows the temp
+    folder is the user's own already; on Linux and macOS /tmp is shared, so the folder is named for
+    the user and kept 0700 (<temp>/tabmancer-bus-<uid>), else ~/.cache/tabmancer-bus. Everything
+    in it (messages, the bus copy, roles, mcp configs) is under that."""
     override = os.environ.get(BUS_ENV)
-    return Path(override) if override else Path(tempfile.gettempdir()) / BUS_FOLDER
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        if WINDOWS_BUS_IN_TEMP:
+            return Path(tempfile.gettempdir()) / BUS_FOLDER
+        local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(local) / "tabmancer" / "bus"
+    shared = Path(tempfile.gettempdir()) / f"{BUS_FOLDER}-{os.getuid()}"  # type: ignore[attr-defined]
+    if _private(shared):
+        return shared
+    own = Path.home() / ".cache" / BUS_FOLDER
+    _private(own)
+    return own
 
 
 def team_dir(team: str) -> Path:
@@ -184,12 +230,17 @@ def _atomic_write_json(path: Path, data: dict) -> None:
 
 
 def normalize_member(team: str, name: str) -> str:
-    """Strip '<team>-' prefix if a caller addresses a member by its session name."""
+    """A member's name from its session name ('<team>-<member>'): the prefix goes only when what is
+    left is a member and the whole is not (a member may be called shop-api itself). With no
+    member list in the bus folder, it goes whenever it is there."""
     cleaned = name.strip()
     prefix = f"{team}-"
-    if cleaned.lower().startswith(prefix.lower()) and len(cleaned) > len(prefix):
-        return cleaned[len(prefix):]
-    return cleaned
+    if not (cleaned.lower().startswith(prefix.lower()) and len(cleaned) > len(prefix)):
+        return cleaned
+    members = {m.lower() for m in _read_team_file(team)[1]}
+    if members and (cleaned.lower() in members or cleaned[len(prefix):].lower() not in members):
+        return cleaned
+    return cleaned[len(prefix):]
 
 
 def write_role_file(team: str, session_name: str, text: str) -> Path | None:
@@ -519,21 +570,34 @@ def listener(team: str, member: str) -> dict | None:
 
 def listen(team: str, member: str, timeout: float = DEFAULT_LISTEN_TIMEOUT,
            poll: float = POLL_SECONDS, since: datetime | None = None,
-           watch_pid: int | None = None, ack: bool = True) -> list[dict]:
+           watch_pid: int | None = None, ack: bool = True,
+           stop: Callable[[], bool] | None = None, report: dict | None = None) -> list[dict]:
     """Wait until unread message(s) arrive for `member` and return them: marked delivered with
     ack, else left for the caller to mark once they are out (`ack()`).
 
     Returns at once if unread messages are already waiting, and [] if `timeout` expires or
-    `watch_pid` is no longer alive. Claims the member's listener file first; when a newer
+    `watch_pid` is no longer alive (or `stop()` says so: an MCP wait cancelled). Claims the member's listener file first; when a newer
     listener takes the claim over, raises Superseded without marking anything or touching the
     newer one's claim.
+
+    A bus folder it may read but not write (agy's terminal sandbox) does not stop it: it waits
+    without a claim (nobody sees it listening, and it is never superseded) and says so in
+    `report["claimed"]`.
     """
     who = normalize_member(team, member)
     token = uuid.uuid4().hex
     claim = {**_pid_info(os.getpid()), "token": token, "since": _now_iso()}
-    _write_claim(team, who, claim)
+    try:
+        _write_claim(team, who, claim)
+        claimed = True
+    except OSError:
+        claimed = False
+    if report is not None:
+        report["claimed"] = claimed
 
     def mine() -> bool:
+        if not claimed:
+            return True
         current = _read_claim(team, who)
         if not current:  # removed from outside (a cleared presence folder): claimed again
             with contextlib.suppress(OSError):
@@ -567,11 +631,11 @@ def listen(team: str, member: str, timeout: float = DEFAULT_LISTEN_TIMEOUT,
             checks += 1
             if watch_info is not None and checks % 4 == 0 and not _alive(watch_info):
                 return []
-            if time.monotonic() >= deadline:
+            if time.monotonic() >= deadline or (stop is not None and stop()):
                 return []
             time.sleep(min(poll, max(0.01, deadline - time.monotonic())))
     finally:
-        if _read_claim(team, who).get("token") == token:
+        if claimed and _read_claim(team, who).get("token") == token:
             with contextlib.suppress(OSError):
                 _claim_path(team, who).unlink()
 
@@ -725,8 +789,10 @@ def _after_agy_failed(code: int) -> None:
               f"{f' ({why})' if why else ''}.", file=sys.stderr)
 
 
-def run_member(team: str, member: str, argv: list[str], cli: str = "agy", created: str = "") -> int:
-    """Run a team member CLI inside its tab while tracking its live process presence."""
+def run_member(team: str, member: str, argv: list[str], cli: str = "agy", created: str = "",
+               beside: Callable[[threading.Event], None] | None = None) -> int:
+    """Run a team member CLI inside its tab while tracking its live process presence. beside: run
+    on a thread for as long as the CLI runs, told to stop by the event (Codex's deliverer)."""
     who = normalize_member(team, member)
     session_name = f"{team}-{who}"
     _set_tab_title(session_name)
@@ -745,14 +811,21 @@ def run_member(team: str, member: str, argv: list[str], cli: str = "agy", create
     env[AGENT_PID_ENV] = str(os.getpid())  # this runner lives exactly as long as the member's CLI
 
     write_presence(team, who, cli=cli, session_id=session_id, pid=os.getpid(), state="working")
+    stop = threading.Event()
+    helper = threading.Thread(target=beside, args=(stop,), daemon=True) if beside is not None else None
     try:
         proc = subprocess.Popen(argv, env=env)
         write_presence(team, who, cli=cli, session_id=session_id, pid=proc.pid, state="working")
+        if helper is not None:
+            helper.start()
         code = proc.wait()
     except OSError as error:
         print(f"Could not start {argv[0] if argv else cli}: {error}", file=sys.stderr)
         return 127
     finally:
+        stop.set()
+        if helper is not None and helper.is_alive():
+            helper.join(timeout=5)
         clear_presence(team, who)
     if cli == "agy":
         _after_agy_failed(code)
@@ -788,9 +861,10 @@ def listen_command(team: str, member: str, timeout: float = DEFAULT_LISTEN_TIMEO
                    since: datetime | None = None) -> int:
     """`listen`: wait for this member's messages, print them, and only then mark them read."""
     who = normalize_member(team, member)
+    report: dict = {}
     try:
         # It lives as long as its agent: the shell between them is not the agent.
-        arrived = listen(team, who, timeout=timeout, since=since, watch_pid=agent_pid(), ack=False)
+        arrived = listen(team, who, timeout=timeout, since=since, watch_pid=agent_pid(), ack=False, report=report)
     except Superseded:
         print(f"[superseded] A newer listen for {who} on team {team} is waiting for {who}'s messages; "
               "it delivers them. Nothing to do here: do not start another.")
@@ -802,8 +876,23 @@ def listen_command(team: str, member: str, timeout: float = DEFAULT_LISTEN_TIMEO
         stamp = msg["at"].strftime("%H:%M:%S")
         print(f"[{stamp} from {msg['from']}]: {msg['text']}")
     sys.stdout.flush()
-    ack(team, who, [msg["id"] for msg in arrived])  # read only once it is out
+    try:
+        ack(team, who, [msg["id"] for msg in arrived])  # read only once it is out
+    except OSError:
+        print(ACKS_OFF)
+    else:
+        if report.get("claimed") is False:
+            print(PRESENCE_OFF)
     return 0
+
+
+# What a listen says when it may read the bus folder but not write it (agy's terminal sandbox).
+ACKS_OFF = ("[acks off] This command could not write the bus folder (a sandbox?), so these messages "
+            "are still unread and the next listen shows them again. Mark them read now: call the "
+            "team_inbox tool with ack: true if you have it, else run your bus commands outside the "
+            "sandbox (BypassSandbox).")
+PRESENCE_OFF = ("[presence off] This command could not write the bus folder, so your team does not see "
+                "you listening.")
 
 
 def who_command(team: str, members: list[str]) -> int:

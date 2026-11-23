@@ -30,6 +30,22 @@ and asks what to do with the ticked ones (all to begin with; `Tab` to the list, 
 - **Continue them when the limit lifts.** The dashboard has to be open at that time; the plan
   is kept if you restart it. `c` again can call it off.
 
+What opens by itself (a session whose limit lifted, the fresh session of a handover that waited
+for its session to finish) opens in the dashboard's own window, not in the window you used last,
+and another window you are in keeps the keys. In Windows Terminal the dashboard knows its window
+by name when tabmancer started it (the desktop shortcut, start at login, `D` in a team's monitor).
+Started by hand, it does not know it, and never brings its own tab to the front for this (what you
+type meanwhile would reach the dashboard): such a tab goes to the window used last, as any other,
+unless a team's monitor is open (that may be the window used last): then to a window of its own
+named `tabmancer`, where the next ones join it.
+
+With two dashboards open at once, one of them does what happens by itself: it continues sessions
+when their limit lifts, sends the desktop notes, runs `claude update`, looks for a newer tabmancer
+and keeps the limits for the stats. The other says so when it starts, shows the same, and does
+what you ask of it; `c` there continues sessions now but leaves "when the limit lifts" to the
+first. When the first closes, the other takes over within seconds. A handover waiting for its
+session to finish, asked for in both (or in a team's monitor too), is handed over once.
+
 ### Another account
 
 `A` (or a click on the account in the top bar) lists the Claude accounts you have used, with
@@ -113,6 +129,7 @@ the highlighted session the preview says what `Enter` will do with it, as it sta
 | `p` | write a prompt to the highlighted session |
 | `n` | start fresh sessions in several projects at once |
 | `T` | teams: several sessions on one project with an orchestrator, talking to each other; the list of them, and a new one (a team's own view: `Enter` on its row) |
+| `M` | on a team's row or a member's: the team's monitor in a window of its own, on the second screen if there is one (see [Teams](teams.md#the-teams-monitor-m)) |
 | `h` | hand a session over to a fresh one; an open one is closed |
 | `c` | the sessions stopped at a usage limit: continue them now (signed in with another account) or when the limit lifts (in the footer only while one is) |
 | `r` | rename the highlighted session (see below) |
@@ -125,6 +142,7 @@ the highlighted session the preview says what `Enter` will do with it, as it sta
 | `,` | which CLIs to list: Claude Code, Codex, Antigravity |
 | `t` | next colour theme (remembered) |
 | `b` | Bit in real pixels, calm, in block characters, or away (remembered) |
+| `V` | the preview beside the list, both at full height, or under the list. Beside it by itself in a window of at least 180 columns and 40 rows, a team's cards in it (its compact tree when the cards would leave no room for its messages and keys); `V` keeps it under the list at any size (remembered) |
 | `Tab` | move between the project sidebar and the session list |
 | `q`, `Esc` | quit (`Esc` first clears the filter, then a card's) |
 

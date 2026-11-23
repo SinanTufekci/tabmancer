@@ -154,6 +154,13 @@ def checks() -> list[Result]:
             found.append(("warn", (f"{clis.label(name)} is on but not on PATH: its {listed} sessions are "
                                    "listed but cannot be opened.")))
 
+    plugin = agy_plugin_check()
+    if plugin is not None:
+        found.append(plugin)
+    desktop = shortcut_check()
+    if desktop is not None:
+        found.append(desktop)
+
     shutdowns = recent_shutdowns()
     if shutdowns:
         found.append(("ok", f"Shutdown records readable (latest {shutdowns[0]:%d %b %H:%M})."))
@@ -169,6 +176,48 @@ def checks() -> list[Result]:
     found.append(("ok", (f"Own files in {config_dir()}: {len(workspaces.load())} workspaces, "
                          f"{len(summarize.load_cache())} summaries, {cached} cached sessions.")))
     return found
+
+
+def agy_plugin_check() -> Result | None:
+    """Whether agy members of tabmancer teams have the plugin (the bus as tools, messages handed
+    over when a turn ends): offered, never installed from here, since it changes agy's plugins.
+    None when agy is not installed."""
+    from . import agyplugin
+
+    if agyplugin._agy() is None:
+        return None
+    state = agyplugin.status()
+    if state == "installed":
+        return "ok", "The tabmancer agy plugin is installed (agy team members get the team_* tools)."
+    if state == "outdated":
+        return "warn", ("The tabmancer agy plugin is older than this tabmancer: tabmancer agy-plugin install "
+                        "brings it up to date.")
+    return "ok", ("agy team members can get the team bus as tools, and messages handed over when a turn "
+                  "ends: tabmancer agy-plugin install (it adds a plugin to agy; tabmancer agy-plugin remove "
+                  "takes it away).")
+
+
+def shortcut_check() -> Result | None:
+    """Whether the desktop shortcut starts the dashboard in its own named Windows Terminal window
+    (shortcuts.DASHBOARD_WINDOW), where what opens by itself goes; one written before that sends it
+    to the window used last. Only read: tabmancer shortcut writes it again. None off Windows, with no
+    desktop shortcut, or with one that does not go through Windows Terminal."""
+    if sys.platform != "win32":
+        return None
+    from . import shortcuts
+
+    try:
+        folder = shortcuts.special_folder("Desktop")
+    except OSError:
+        return None
+    found = shortcuts.read_shortcut(folder / f"{shortcuts.PICKER_TITLE}.lnk")
+    if found is None or os.path.basename(found[0]).lower() != "wt.exe":
+        return None
+    if "--tabs-window" in found[1]:
+        return "ok", "The desktop shortcut starts the dashboard in a window of its own name."
+    return "warn", ("The desktop shortcut predates the dashboard's named window: what opens by itself (a "
+                    "session whose limit lifted) goes to the window used last. tabmancer shortcut writes it "
+                    "again.")
 
 
 def update_check() -> Result:

@@ -56,12 +56,22 @@ async def test_the_model_column_follows_the_window_back_and_forth(fake_home):
             "role": "assistant", "model": "claude-opus-5-5", "stop_reason": "end_turn",
             "content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 1}}},
             separators=(",", ":")) + "\n")
+    from tabmancer.config import write_json
+
+    write_json("config.json", {"split": "off"})  # the preview under the list, whatever the size
     app = SessionPicker(days=14)
-    async with app.run_test(size=(200, 40)) as pilot:
+    async with app.run_test(size=(200, 50)) as pilot:
         await pilot.pause(0.3)
-        for size, shown in [((200, 40), True), ((90, 30), False), ((200, 40), True), ((90, 30), False),
-                            ((200, 40), True)]:
+        assert not app.split_on
+        for size, shown in [((200, 50), True), ((90, 30), False), ((200, 50), True), ((90, 30), False),
+                            ((200, 50), True)]:
             await pilot.resize_terminal(*size)
             await pilot.pause(0.3)
             assert app.model_shown is shown, size
             assert str(app.table.get_cell("one", "model")) == ("opus 5.5" if shown else ""), size
+        # The preview beside the list takes the Model column's room too, until the window is wider.
+        app.action_toggle_split()
+        for size, shown in [((200, 50), False), ((240, 50), True), ((200, 50), False)]:
+            await pilot.resize_terminal(*size)
+            await pilot.pause(0.3)
+            assert app.split and app.model_shown is shown, size

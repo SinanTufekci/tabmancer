@@ -66,8 +66,10 @@ def read(folder: str, leave_out: tuple[str, ...] = ()) -> GitState | str | None:
         return None
     try:
         spec = ["--", ".", *(f":(exclude){path}" for path in leave_out)] if leave_out else []
-        result = subprocess.run([git, "-C", folder, "status", "--porcelain=v2", "--branch", *spec], capture_output=True,
-                                text=True, encoding="utf-8", errors="replace", timeout=TIMEOUT, check=False,
+        # --no-optional-locks: a read only, never index.lock in a folder a member is committing in.
+        result = subprocess.run([git, "--no-optional-locks", "-C", folder, "status", "--porcelain=v2", "--branch",
+                                 *spec], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                timeout=TIMEOUT, check=False,
                                 env=dict(os.environ, LC_ALL="C", LANGUAGE="C"),  # its messages in English
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError):

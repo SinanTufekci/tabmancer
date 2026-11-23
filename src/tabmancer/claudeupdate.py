@@ -29,6 +29,7 @@ VERSION = re.compile(r"\d+\.\d+\.\d+")
 
 _lock = threading.RLock()  # one update at a time: the dashboard's, or a launch waiting for it
 _tried = False            # asked in this process already: never twice, whatever came of it
+_elsewhere = False        # another process (the dashboard) owns updates: this one never asks
 
 
 def enabled() -> bool:
@@ -50,9 +51,24 @@ def last() -> dict:
     return saved if isinstance(saved, dict) else {}
 
 
+def leave_to_dashboard() -> None:
+    """This process (a team's monitor) never runs claude update: the dashboard does, and a second
+    one at the same time would race it. Sessions opened from here open on what is installed."""
+    global _elsewhere
+    _elsewhere = True
+
+
+def take_back() -> None:
+    """This process runs claude update again: the dashboard that did closed, and this one took its
+    place (actor.py)."""
+    global _elsewhere
+    _elsewhere = False
+
+
 def due(today: date | None = None) -> bool:
-    """On, not yet asked in this process, and not yet done today."""
-    return enabled() and not _tried and last().get("day") != (today or date.today()).isoformat()
+    """On, not yet asked in this process, not left to the dashboard, and not yet done today."""
+    return (enabled() and not _tried and not _elsewhere
+            and last().get("day") != (today or date.today()).isoformat())
 
 
 @dataclass(frozen=True)

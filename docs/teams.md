@@ -136,6 +136,35 @@ other), and its preview says how many messages it got and sent. On the team's ro
 starts every member that is not open, `a` adds members (each opens and introduces itself to
 the lead) and `x` twice closes the members' tabs.
 
+### The team's monitor (`M`)
+
+`M` on a team's row, one of its members' or in its view opens the team's monitor: the team view
+in a window of its own, made for a second screen. In Windows Terminal it opens maximized on the
+first screen that is not the main one (with one screen, maximized there); `M` again brings it to
+the front rather than open a second. Elsewhere it opens in a tmux window, or says what to run:
+`tabmancer team watch <team>` (with no name: the one team with members open, else the list of
+teams to pick from).
+
+The monitor shows the team the way its view does, the cards and the conversation, with more on
+it: the plan limits beside the team's name (and agy's quota, for a team with agy members), a line
+naming whoever needs you, and the picked member in two lines under the cards: what it is doing,
+its model, context, tokens and git, for a member on the bus whether it listens and how many
+messages wait for it unread, then its newest message. From 180 columns
+every member stands in a table beside the conversation instead.
+
+Its keys are the team view's (`← →`, `Enter`, `s`, `a`, `d`, `g`, `h`, `H`, `x`), and `j` picks
+the next member that needs you, `p` writes to the picked one (typed into its tab once it waits,
+over the bus for a member on it), `T` shows another team's monitor in the same window, `D` brings
+the dashboard to the front (or opens it), `?` lists them all, `Esc` picks nobody and `q` closes
+the monitor (twice while a handover asked for there is on its way, or a handover is being
+written: that one still ends, the tab waiting for it, but its fresh session does not open). A tab
+it opens joins the dashboard's window, not its own.
+
+The monitor only shows the team and does what you ask of it. Everything the dashboard does by
+itself stays the dashboard's, however many monitors are open: continuing sessions at a limit,
+desktop notifications, updates, Wrapped, the readings behind the stats. It shows the plan limits
+the dashboard read last (up to 15 minutes old) rather than ask Claude Code a second time.
+
 A team whose members are all closed, after a restart say, stays a team: its row sits among
 the closed sessions where it last worked, with a box to tick the whole team. `s` on it
 starts the team: each member resumed as itself, the lead last, so the others are up when it
@@ -201,6 +230,63 @@ A pure Claude Code team keeps using Claude Code's own `SendMessage`/`ListAgents`
 - `tabmancer team who <team>` shows every member's CLI and whether it is open, listening or closed.
 
 Each `@agy` member opens in its own tab with `agy --mode auto --add-dir <bus>`, tracks live open/idle/working state, reads its `transcript.jsonl` for models and tokens, supports `Ctrl+O` git worktrees, resumes with `agy --conversation <id>`, and supports team handovers (`h`).
+
+`agy` runs its shell commands in a sandbox that cannot reach the installed tabmancer, so an `@agy` member doesn't run `tabmancer team …`. When it starts, tabmancer copies the bus into the team's bus folder (the one `--add-dir` opens), and the member's role names the command that runs it: `<python> -I <bus>/<team>/teambus_cli.py listen|send|who …`. It takes the same arguments and prints the same lines as `tabmancer team`.
+
+#### The bus as MCP tools (`tabmancer mcp`)
+
+`tabmancer mcp` serves the bus as an MCP server over stdio, with these tools:
+
+| Tool | What it does |
+| --- | --- |
+| `team_send` | message a member, or `all` |
+| `team_inbox` | what is waiting, without blocking; `ack: true` marks it read |
+| `team_wait` | block until a message arrives, or a timeout (300 s by default, at most 55 minutes) |
+| `team_who` | the members, and who is running or listening |
+| `team_status` | each member's CLI, model, listener, unread messages and (for `agy`) quota; the latest messages |
+| `team_request` | the lead only: `add` members (when the team is the lead's to make) or `start` closed ones |
+
+Who calls is never a tool argument. It comes from `--team`/`--member`, or else from the `TABMANCER_TEAM`/`TABMANCER_MEMBER` environment that tabmancer starts every member of a bus team with. A server with neither answers every call with "not a tabmancer team session". This identity keeps members apart, not people: any program of yours that sets those variables speaks as that member. The bus folder is yours alone. On Windows it is in your temp folder. On Linux and macOS it is `<temp>/tabmancer-bus-<uid>`, kept `0700`, or `~/.cache/tabmancer-bus` when that one is someone else's. `TABMANCER_BUS_DIR` puts it elsewhere.
+
+`team_request` runs `tabmancer team add|start` for the caller's own team and logs who asked in the bus folder's `requests.jsonl`. A lead adds a Codex member only to a team that already has one.
+
+Delivery is at least once. A message is marked read only once it has gone out (a tool's answer, the hook's output, `codex queue` taking it), so a member that stops at that moment may see it again. A message is never marked read without being sent.
+
+Claude Code members of a bus team get the server without any setup: their command line gets `--mcp-config` with a file of their own in the bus folder, and the tools are allowed without asking, except `team_request`: what a lead starts or adds is asked of you each time. They still wait with the background `tabmancer team listen`: `team_wait` would hold their turn open.
+
+#### The Antigravity plugin
+
+`agy` doesn't load a workspace's MCP servers or hooks, only those of a plugin it has installed. That changes `agy` for every session, so tabmancer never does it by itself: `tabmancer doctor` offers it, and you install it yourself:
+
+```text
+tabmancer agy-plugin install    # agy plugin validate, then agy plugin install
+tabmancer agy-plugin status     # installed, older than this tabmancer, or not installed
+tabmancer agy-plugin remove     # agy plugin uninstall, and the files the install left behind
+```
+
+The plugin has two parts, and both leave `agy` sessions outside a tabmancer team alone:
+
+- **The tools above**, as an MCP server that takes the member from the environment `agy` passes on. The member's role tells it so. Waiting stays with the background listen.
+- **A Stop hook**, run when each turn ends:
+  - If the turn failed on quota (`RESOURCE_EXHAUSTED … Resets in 4h7m`), it notes the model as out until then, so the next pick skips it.
+  - If messages arrived for the member during the turn, it sends the member round once more with them, marking them read only once they are out. It does this at most 3 times in a row, so a message that keeps being ignored cannot loop.
+  - The hook never waits.
+
+#### Codex members (not tested)
+
+This part has not been tried against a real Codex session yet. The command line, the delivery with `codex queue` and the way the member's thread is found follow Codex's `--help`, not a session that ran. A member tagged `@codex` runs Codex (`rev: reviews diffs @codex`), and needs a Codex subscription of its own. tabmancer never adds a Codex member by itself, and a lead can add one only to a team that already has one. The router does not pick models for it: Codex runs its default model unless the member names one of its OpenAI models as a tag. A Claude or Gemini model on a Codex member is left out.
+
+A Codex member gets the bus as MCP tools for its session alone, with `-c` overrides on its command line, so nothing is written to Codex's own config. The tool timeout is raised too: Codex's default is shorter than a `team_wait`.
+
+```bash
+codex -c "mcp_servers.tabmancer.command='tabmancer'" \
+      -c "mcp_servers.tabmancer.args=['mcp', '--team', 'shop', '--member', 'rev']" \
+      -c "mcp_servers.tabmancer.tool_timeout_sec=3600"
+```
+
+Codex has no background command that wakes an idle session. Instead, the member's `tabmancer team run` wrapper watches the bus and puts each message into the member's thread with `codex queue --thread <id> --message <text> --resume`. The thread is the Codex session whose first prompt carries the member's `[tabmancer:<team>-<member>]` tag. A batch too long for one command line goes as a note to read the messages with `team_inbox`. A message counts as read only once `codex queue` has taken it. What happened last shows in the member's presence (`delivery`).
+
+To use the tools in a Codex session you started yourself, `codex mcp add tabmancer -- tabmancer mcp --team shop --member qa` keeps the server for every session instead. Set `tool_timeout_sec` under `[mcp_servers.tabmancer]` in Codex's config then.
 
 `Enter` on a team's row opens that team's view. `T` lists the teams anywhere, to open one
 or start a new one (on a team's row or a member, with that team picked). `←` `→` pick

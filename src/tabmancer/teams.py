@@ -48,7 +48,7 @@ from .sessions import (
 
 FILE = "teams.json"
 SETTINGS_FILE = "team-settings.json"
-TEAM_CLIS = ("claude", "agy")
+TEAM_CLIS = ("claude", "agy", "codex")  # codex: only when a member asks for it (@codex), never picked
 LEAD = "lead"
 LEAD_FOCUS = "plans the work, hands it out and checks it"
 YOU = "you"
@@ -519,6 +519,16 @@ def reopen(team: Team, bus: str = BUS_CMD) -> str:
             "named, every closed one does.")
 
 
+def _agy_plugin_installed() -> bool:
+    """Whether agy has tabmancer's plugin (agyplugin: the bus as MCP tools), as installed or older."""
+    try:
+        from . import agyplugin
+
+        return agyplugin.status() != "missing"
+    except Exception:  # noqa: BLE001  (a role without the sentence beats no role)
+        return False
+
+
 def _bus_role(team: Team, member: Member) -> str:
     """Role prompt for a member of a mixed-CLI (Claude + Antigravity) or Antigravity team."""
     others = roster(team, member)
@@ -526,7 +536,15 @@ def _bus_role(team: Team, member: Member) -> str:
     bus = bus_cmd(team, member)
     send_cmd = f'{bus} send {team.name} <member> "<message>" --from {member.name}'
     listen_cmd = f"{bus} listen {team.name} {member.name}"
-    if member.cli == "agy":
+    if member.cli == "codex":
+        send_cmd = 'the team_send tool (to: "<member>", message: "...")'
+        listen_how = (
+            "Nothing to run to receive messages: tabmancer queues each message for you into this conversation, "
+            "where it arrives as a new turn. When you have nothing else to do, end your turn. team_inbox "
+            "(ack: true) reads what is waiting, and team_who and team_status show the team: use the team_* "
+            "tools rather than shell commands, which may not reach the bus from Codex's sandbox."
+        )
+    elif member.cli == "agy":
         listen_how = (
             f"To receive messages without polling, run `{listen_cmd}` via run_command with "
             "WaitMsBeforeAsync: 500 (and IsDaemon: false) so it runs in the background as a task, then end your "
@@ -534,6 +552,19 @@ def _bus_role(team: Team, member: Member) -> str:
             "Never poll in a loop or use timers. After handling a message and replying, start "
             f"`{listen_cmd}` in the background again before ending your turn."
         )
+        if _agy_plugin_installed():
+            # The tools run outside agy's terminal sandbox; a shell send from inside it may be refused.
+            send_cmd = 'the team_send tool (to: "<member>", message: "...")'
+            listen_how += (
+                " The bus is also yours as tools (team_send, team_inbox, team_who, team_status): send and look "
+                "with them, not with shell commands, and keep waiting with the background listen above. Your "
+                "first team_* call may ask for approval in your tab: make it alone, and no other team_* call "
+                "until it is answered. If the listen says [acks off], call team_inbox with ack: true once "
+                "you have read its messages, or they come again.")
+        else:
+            listen_how += (
+                " The bus commands write to the bus folder, which agy's terminal sandbox may refuse: if one "
+                "fails with a permission error or the listen says [acks off], run it with BypassSandbox: true.")
     else:
         listen_how = (
             f"To receive messages without polling, run `{listen_cmd}` in the background (run_in_background: true) "
@@ -549,7 +580,10 @@ def _bus_role(team: Team, member: Member) -> str:
         + f"This team communicates through tabmancer's cross-CLI team bus (Claude and Antigravity members share it). "
         f"Send a message with `{send_cmd}` (optional `--summary \"short gist\"`). "
         f"See who is online with `{bus} who {team.name}`. {listen_how} "
-        "Keep messages short and concrete: what you did, which files you changed, what you need. "
+        + ("The same bus is also yours as tools (mcp__tabmancer__team_send, team_inbox, team_status, team_who; "
+           "team_wait blocks your turn, so the background listen above is the way to wait). "
+           if member.cli == "claude" else "")
+        + "Keep messages short and concrete: what you did, which files you changed, what you need. "
         "Coordinate before you touch another member's area."
     )
     if member.lead and team.decide:
@@ -921,6 +955,30 @@ def bus_env(team: Team, member: Member) -> tuple[tuple[str, str], ...]:
             (teambus.BUS_ENV, str(teambus.bus_root())))
 
 
+MCP_SERVER = "tabmancer"  # its tools reach Claude Code as mcp__tabmancer__team_send, ...
+# The tools a Claude member runs unasked. Not team_request: what it starts or adds is asked of you.
+MCP_ALLOWED = ("team_send", "team_inbox", "team_wait", "team_who", "team_status")
+
+
+def mcp_config(team: Team, member: Member) -> Path | None:
+    """The --mcp-config file that gives a Claude member of a bus team the bus as tools (`tabmancer
+    mcp`, mcpserver), named for it: written when it changed, None when it cannot be."""
+    if not team.uses_bus or member.cli != "claude":
+        return None
+    command, *args = _tabmancer_cmd()
+    entry = {"type": "stdio", "command": command,
+             "args": [*args, "mcp", "--team", team.name, "--member", member.name]}
+    text = json.dumps({"mcpServers": {MCP_SERVER: entry}}, indent=2)
+    path = teambus.team_dir(team.name) / "mcp" / f"{team.session_name(member)}.json"
+    try:
+        if not path.is_file() or path.read_text(encoding="utf-8") != text:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+    except OSError:
+        return None
+    return path
+
+
 def agy_notes(team: Team, only: set[str] | None = None) -> list[str]:
     """'ui: opus never runs through agy: Argon instead (...)', for each agy member (of only, by name,
     when given) whose model was asked for and is not the one it gets: said where the team starts."""
@@ -936,7 +994,37 @@ def agy_notes(team: Team, only: set[str] | None = None) -> list[str]:
     return notes
 
 
+# A model Codex runs (OpenAI's): only one of these goes to it with -m. Not "auto", an effort, or a
+# Claude or Gemini model: Codex then runs its default.
+CODEX_MODEL = re.compile(r"(?i)^(gpt-|o\d|codex-)[\w.\-]*$")
+
+
+def _toml_literal(text: str) -> str:
+    """A TOML literal string ('...': backslashes as written) for Codex's -c, or a basic one when
+    the text holds a single quote."""
+    return f"'{text}'" if "'" not in text else json.dumps(text)
+
+
+def codex_options(team: Team, member: Member) -> tuple[str, ...]:
+    """A Codex member's -c overrides, for its session alone (never ~/.codex): tabmancer's MCP server
+    for this member, with a tool timeout longer than a team_wait. Its model with -m only when one was
+    asked for that Codex runs (CODEX_MODEL)."""
+    teambus.install(team.name, team.created, [m.name for m in team.members])  # its team file: when it began
+    command, *args = _tabmancer_cmd()
+    served = [*args, "mcp", "--team", team.name, "--member", member.name]
+    key = f"mcp_servers.{MCP_SERVER}"
+    flags = ["-c", f"{key}.command={_toml_literal(command)}",
+             "-c", f"{key}.args=[{', '.join(_toml_literal(a) for a in served)}]",
+             "-c", f"{key}.tool_timeout_sec=3600"]
+    model = member.model.strip()
+    if CODEX_MODEL.match(model):
+        flags += ["-m", model]
+    return tuple(flags)
+
+
 def options(team: Team, member: Member) -> tuple[str, ...]:
+    if member.cli == "codex":
+        return codex_options(team, member)
     if member.cli == "agy":
         bdir = teambus.team_dir(team.name)
         # The bus copy and team.json it runs from (in the folder --add-dir lets agy read): the
@@ -951,8 +1039,11 @@ def options(team: Team, member: Member) -> tuple[str, ...]:
     # --allowedTools=... in one piece: written apart it takes every word after it as a tool.
     # A deciding lead may add members without asking: that one command, and only it.
     # A lead may bring its closed members back without asking: that one command, and only it.
+    served = mcp_config(team, member)
     if team.uses_bus:
-        tools = f"Bash({BUS_CMD}:*)"
+        # The bus as shell commands, and as tools when its MCP server is there (mcp_config).
+        tools = f"Bash({BUS_CMD}:*)" + ("".join(f",mcp__{MCP_SERVER}__{t}" for t in MCP_ALLOWED)
+                                         if served is not None else "")
     else:
         tools = "SendMessage,ListAgents" + (f",Bash({START}:*)" if member.lead else "") + (
             f",Bash({ADD}:*)" if member.lead and team.decide else "")
@@ -961,6 +1052,7 @@ def options(team: Team, member: Member) -> tuple[str, ...]:
             ("--append-system-prompt", " ".join(role(team, member).split())))
     return ("--name", team.session_name(member), *member.pick.flags(), *picks.cap_flags(team.cap),
             "--settings", str(settings_file()),
+            *((f"--mcp-config={served}",) if served is not None else ()),  # one piece: it takes several
             f"--allowedTools={tools}", *told)
 
 
@@ -1022,6 +1114,34 @@ def _agy_first_prompt(team: Team, member: Member, bus_role: Path | None, prompt:
     return f"{tag} {role_hint} {body}"
 
 
+def _codex_first_prompt(team: Team, member: Member, bus_role: Path | None, prompt: str | None,
+                        resuming: bool = False) -> str:
+    """Initial prompt for a Codex member: its team tag (how its thread is found) and its role."""
+    tag = f"[tabmancer:{team.session_name(member)}]"
+    role_hint = (f"Read your full team role in {bus_role} and follow it strictly." if bus_role is not None
+                 else " ".join(role(team, member).split()))
+    if resuming:
+        return f"{tag} You are resuming your role on team {team.name}. {role_hint} {prompt or 'Continue your work.'}"
+    if prompt:
+        return f"{tag} {role_hint} {prompt}"
+    if member.lead:
+        body = (f"Goal: {goal_line(team)} Your team is starting now. Plan the work and send each member its first "
+                "task with the team_send tool; their reports arrive here as new turns.")
+    elif team.lead is None:
+        body = (f"Goal: {goal_line(team)} Your part: {member.focus or member.name}. The others start alongside you: "
+                "say hello to them with team_send, agree where your parts meet, then start on yours.")
+    else:
+        body = (f"Goal: {goal_line(team)} Your area: {member.focus or member.name}. Your first task comes from "
+                f"{team.lead.name} as a new turn here: end your turn now.")
+    return f"{tag} {role_hint} {body}"
+
+
+def _first_prompt(team: Team, member: Member, bus_role: Path | None, prompt: str | None,
+                  resuming: bool = False) -> str:
+    made = _codex_first_prompt if member.cli == "codex" else _agy_first_prompt
+    return made(team, member, bus_role, prompt, resuming=resuming)
+
+
 def _agy_wrapper(team: Team, member: Member) -> tuple[str, ...]:
     return (*_tabmancer_cmd(), "team", "run", team.name, member.name, "--")
 
@@ -1029,7 +1149,7 @@ def _agy_wrapper(team: Team, member: Member) -> tuple[str, ...]:
 def launch(team: Team, member: Member, resume: Session | None = None, prompt: str | None = None) -> Launch:
     """A member's tab: a fresh session, or its last one resumed with the same name and role."""
     env = bus_env(team, member)
-    if member.cli == "agy":
+    if member.cli in ("agy", "codex"):  # each under `team run`, its role in the bus folder
         role_file(team, member)
         bus_role = teambus.write_role_file(team.name, team.session_name(member), role(team, member))
         if resume is not None:
@@ -1038,8 +1158,8 @@ def launch(team: Team, member: Member, resume: Session | None = None, prompt: st
                 cwd=home_of(team, resume.cwd),
                 mode=Mode.RESUME,
                 session_id=resume.session_id,
-                prompt=_agy_first_prompt(team, member, bus_role, prompt, resuming=True),
-                cli="agy",
+                prompt=_first_prompt(team, member, bus_role, prompt, resuming=True),
+                cli=member.cli,
                 options=options(team, member),
                 env=env,
                 wrapper=_agy_wrapper(team, member),
@@ -1054,8 +1174,8 @@ def launch(team: Team, member: Member, resume: Session | None = None, prompt: st
             cwd=cwd,
             mode=Mode.NEW,
             session_id="",
-            prompt=_agy_first_prompt(team, member, bus_role, prompt, resuming=False),
-            cli="agy",
+            prompt=_first_prompt(team, member, bus_role, prompt, resuming=False),
+            cli=member.cli,
             options=options(team, member),
             env=env,
             wrapper=_agy_wrapper(team, member),
@@ -1214,12 +1334,12 @@ def as_member(session: Session, plain: Launch, saved: dict[str, Team] | None = N
     if found is None:
         return plain
     team, member = found
-    if member.cli == "agy":
+    if member.cli in ("agy", "codex"):
         role_file(team, member)
         bus_role = teambus.write_role_file(team.name, team.session_name(member), role(team, member))
         return replace(plain, title=f"{team.name}: {member.name}", options=options(team, member),
                        env=bus_env(team, member), wrapper=_agy_wrapper(team, member),
-                       prompt=_agy_first_prompt(team, member, bus_role, plain.prompt, resuming=True))
+                       prompt=_first_prompt(team, member, bus_role, plain.prompt, resuming=True))
     return replace(plain, title=f"{team.name}: {member.name}", options=options(team, member),
                    env=bus_env(team, member))
 
@@ -1255,12 +1375,16 @@ def live_names() -> dict[str, dict]:
 
 
 def _agy_live_state(session: Session | None, presence: dict) -> str:
-    """Live state for a running agy team member: resting when listening, busy when active, else idle."""
+    """Live state for a running agy team member: needs your OK when a step waits for it (a permission
+    prompt in its tab: it looks busy otherwise, and its turn never ends), resting when listening, busy
+    when active, else idle."""
+    from . import agy
+
+    if session is not None and agy.waiting_for_you(session.session_id):
+        return "permission"
     if presence.get("listening"):
         return "resting"
     if session is not None and session.path is not None and session.path.suffix == ".jsonl":
-        from . import agy
-
         meta = agy._read_transcript(session.path)
         if meta.get("busy"):
             return "busy"
@@ -1278,7 +1402,7 @@ def member_sessions(team: Team, sessions: list[Session], live: dict[str, dict] |
     out: dict[str, Session | None] = {}
     for member in team.members:
         name = team.session_name(member)
-        if member.cli == "agy":
+        if member.cli in ("agy", "codex"):  # found by binding or the tag of its first prompt
             pinfo = presence.get(member.name)
             binfo = bindings.get(member.name)
             found: Session | None = None
@@ -1289,18 +1413,20 @@ def member_sessions(team: Team, sessions: list[Session], live: dict[str, dict] |
                     break
             if found is None:
                 tag = f"[tabmancer:{name}]".lower()
-                named = [s for s in sessions if s.cli == "agy" and in_team_folder(team, s.cwd) and since_made(team, s)
+                named = [s for s in sessions if s.cli == member.cli and in_team_folder(team, s.cwd) and since_made(team, s)
                          and (s.title.lower() == name.lower() or tag in (s.first_prompt or "").lower())]
                 found = max(named, key=lambda s: s.last_active, default=None)
                 if found is not None and (not binfo or binfo.get("session_id") != found.session_id):
-                    teambus.save_binding(team.name, member.name, found.session_id, cli="agy", created=team.created)
+                    teambus.save_binding(team.name, member.name, found.session_id, cli=member.cli,
+                                         created=team.created)
             if pinfo and pinfo.get("runner_alive"):
-                state = _agy_live_state(found, pinfo)
+                state = (_agy_live_state(found, pinfo) if member.cli == "agy"  # codex.read gives no live state yet
+                         else (found.live_state if found is not None and found.live_state else "idle"))
                 if found is not None:
                     found = replace(found, title=name, exit=Exit.RUNNING, status=Status.RUNNING, live_state=state)
                 else:
-                    found = Session(session_id=str(pinfo.get("session_id") or f"agy:{name}"), path=None,
-                                    cwd=team.cwd, title=name, cli="agy", exit=Exit.RUNNING,
+                    found = Session(session_id=str(pinfo.get("session_id") or f"{member.cli}:{name}"), path=None,
+                                    cwd=team.cwd, title=name, cli=member.cli, exit=Exit.RUNNING,
                                     status=Status.RUNNING, live_state=state)
             elif found is not None and found.title != name:
                 found = replace(found, title=name)
@@ -1410,6 +1536,8 @@ def conversation(team: Team, sessions: dict[str, Session | None], live: dict[str
     for member, session in sessions.items():
         if session is None or session.path is None:
             continue
+        if session.cli == "codex":
+            continue  # not a Claude transcript: what it was sent is on the bus, read below
         if session.cli == "agy":
             from . import agy
 
