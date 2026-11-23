@@ -191,15 +191,18 @@ async def test_a_busy_teams_keys_all_show_beside_the_list(fake_home, tmp_path, m
             lines = app.meta.render_lines(app.meta.region.reset_offset)[:visible]
             return "\n".join("".join(segment.text for segment in line) for line in lines)
 
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if "message 0" in shown() and app.team_graph is not None and app.team_graph.region.height:
-                break
-        await pilot.pause(0.2)
+        def last() -> str:
+            return plain(app.meta.content).rstrip().split("\n")[-1].strip()
+
+        # By the clock, not a fixed wait: once the cards are in, the footer takes a second row on the
+        # team's row, after the fit that followed the first layout. The spin tick's fit (every 0.08 s)
+        # then measures the messages again; on a loaded machine that tick came after a 0.2 s wait,
+        # and the keys' last line was found a row below the screen (seen once in a full run).
+        await until(pilot, lambda: "message 0" in shown() and app.team_graph is not None
+                    and app.team_graph.region.height and last() in shown(), "the keys' last line on the screen")
         text = shown()
         assert "message 5" in text and "Enter  team view" in text
-        last = plain(app.meta.content).rstrip().split("\n")[-1].strip()
-        assert last and last in text  # the keys' last line is on the screen
+        assert last() and last() in text  # the keys' last line is on the screen
 
 
 def team_pane_ok(app) -> tuple[bool, str]:
