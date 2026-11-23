@@ -27,6 +27,12 @@ classifiers = [
     "Topic :: Utilities",
 ]
 
+[project.optional-dependencies]
+# The desktop window (`tabmancer desktop`, `pip install "tabmancer[desktop]"`): Qt's essential modules,
+# LGPL, used as they are installed. No Add-ons: Qt Charts and Qt Graphs are GPL, so charts are drawn
+# by hand. Nothing outside tabmancer.desktop imports Qt; without it tabmancer runs as ever.
+desktop = ["PySide6-Essentials>=6.8"]
+
 [project.urls]
 Homepage = "https://github.com/SinanTufekci/tabmancer"
 Issues = "https://github.com/SinanTufekci/tabmancer/issues"
