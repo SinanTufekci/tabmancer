@@ -68,7 +68,15 @@ from . import (
 )
 from . import viewmodel as VM
 from .actions import clip as _clip
-from .actions import close_tabs, handing_note, open_names, still_opening, team_handover_problem
+from .actions import (
+    close_tabs,
+    closing_note,
+    cold_note,
+    handing_note,
+    open_names,
+    still_opening,
+    team_handover_problem,
+)
 from .clisettings import CliSettings
 from .config import merge_json, read_json
 from .dialogs import frame, title
@@ -106,8 +114,6 @@ from .teamview import (
     TeamScreen,
     TeamsDialog,
     TellTeam,
-    closing_note,
-    cold_note,
 )
 from .teamview import colours as team_colours
 from .theme import (
@@ -2846,15 +2852,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """Every member not open: a closed one resumed as itself, one never started new; the lead last."""
         sessions = {name: self.sessions.get(s.session_id, s) if s is not None else None
                     for name, s in state.sessions.items()}
-        recent = still_opening(self.opening, time.monotonic())
-        launches = [launch for launch in teams.start(state.team, sessions)
-                    if not launch.session_id or launch.session_id not in recent]
-        if not launches:
-            self.notify(f"Every member of {state.team.name} is open already, or opening.", timeout=3)
+        start = actions.start_team(state.team, sessions, still_opening(self.opening, time.monotonic()))
+        if not start.launches:
+            self.notify(start.words, timeout=3)
             return
         if not self.cold_start_ok(state.team, sessions):
             return
-        self.open_team(state.team, launches)
+        self.open_team(state.team, start.launches)
 
     def cold_start_ok(self, team: teams.Team, members: dict[str, Session | None]) -> bool:
         """Whether a closed team starts now: at once, unless its members' cache is gone; then the
@@ -2875,18 +2879,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         at_work = self.team_open(state.team.name)
 
         def add(text: str | None) -> None:
-            new, note = teams.add_members(state.team, text or "")
-            if note:
-                self.notify(note[0].upper() + note[1:] + ".", severity="warning", timeout=8)
-            if not new:
+            added = actions.add_members(state.team, text or "")
+            if added.warning:
+                self.notify(added.warning, severity="warning", timeout=8)
+            if not added.new:
                 return
-            names = ", ".join(m.name for m in new)
             if at_work:
-                team = teams.load().get(state.team.name, state.team)
-                self.open_team(team, teams.joining(team, new))
+                self.open_team(added.team, added.launches)
             else:
-                self.notify(f"{names} joined {state.team.name}: they start with the team (Enter on its row).",
-                            timeout=6)
+                self.notify(added.joined_words, timeout=6)
             self.poll_teams()
 
         self.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter="add them"), add)
@@ -2899,35 +2900,20 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if any(launch.cli == "claude" for launch in launches) and self.after_update(
                 f"{team.name} starts", lambda: self.open_team(team, launches)):
             return
-        coming = teams.opening()
-        launches = [launch for launch in launches if teams.session_name_of(team, launch) not in coming]
-        if not launches:
-            self.notify(f"The members of {team.name} are opening already.", timeout=3)
+        opening = actions.team_opening(team, launches)
+        if opening.words:
+            self.notify(opening.words, timeout=3)
             return
-        teams.note_opening([teams.session_name_of(team, launch) for launch in launches])
-        quiet = [launch for launch in launches if teams.in_background(team, launch)]
-        tabs = [launch for launch in launches if launch not in quiet]
-        if quiet:
-            self.start_in_background(team, quiet, tabs)
-        elif tabs:
-            self.open_sessions(tabs)
+        if opening.quiet:
+            self.start_in_background(team, opening.quiet, opening.tabs)
+        elif opening.tabs:
+            self.open_sessions(opening.tabs)
 
     @work(thread=True, group="team-background")
     def start_in_background(self, team: teams.Team, launches: list[Launch], then: list[Launch]) -> None:
-        """claude --bg for each (a few seconds each), then the tabs: the lead finds its members up."""
-        started, failed = [], []
-        for launch in launches:
-            try:
-                run_in_background(teams.background_start(team, launch))
-                started.append(launch.title.partition(": ")[2])
-            except OSError as error:
-                failed.append(f"{launch.title.partition(': ')[2]}: {error}")
-        if started:
-            self.call_from_thread(self.notify, f"Started {', '.join(started)} of {team.name} in the background. "
-                                               "B lists them; T shows the team.", timeout=6)
-        if failed:
-            self.call_from_thread(self.notify, "Could not start in the background: " + "; ".join(failed),
-                                  severity="warning", timeout=12)
+        """claude --bg for each (actions.start_in_background), then the tabs: the lead finds its members up."""
+        for note in actions.start_in_background(team, launches, run_in_background):
+            self.call_from_thread(self.notify, note.words, severity=note.severity, timeout=note.seconds)
         if then:
             self.call_from_thread(self.open_sessions, then)
 
@@ -2949,8 +2935,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     @work(thread=True, group="team-close")
     def close_team_tabs(self, names: list[str]) -> None:
-        said, severity = close_tabs(names)
-        self.call_from_thread(self.notify, said, severity=severity, timeout=8 if severity == "warning" else 4)
+        note = actions.closed_note(names, close_tabs)
+        self.call_from_thread(self.notify, note.words, severity=note.severity, timeout=note.seconds)
 
     def action_new_sessions(self) -> None:
         found = newsessions.projects(list(self.sessions.values()))

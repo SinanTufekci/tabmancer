@@ -241,3 +241,103 @@ def test_going_to_a_tab(monkeypatch):
     monkeypatch.setattr(focus, "focus_tab", lambda title: False)
     note = actions.go_to_tab(session)
     assert (note.severity, note.seconds) == ("warning", 8) and note.words.startswith("Could not find the tab of")
+
+
+# --- a team's keys ------------------------------------------------------------------------------------
+
+def test_a_team_start_and_when_there_is_nothing_to_start():
+    team = shop_team()
+    start = actions.start_team(team, {})
+    assert [launch.title.partition(": ")[2] for launch in start.launches][-1] == "lead"  # the lead last
+    everyone = {m.name: member(m.name) for m in team.members}
+    assert actions.start_team(team, everyone) == actions.TeamStart([], "Every member is open already.")
+    assert actions.start_team(team, everyone, set()).words == "Every member of shop is open already, or opening."
+
+
+def test_a_team_opening_leaves_out_who_is_opening_already(monkeypatch):
+    team = shop_team()
+    launches = actions.start_team(team, {}).launches
+    noted = []
+    monkeypatch.setattr(teams, "opening", lambda now=None: {teams.session_name_of(team, launches[0])})
+    monkeypatch.setattr(teams, "note_opening", noted.extend)
+    opening = actions.team_opening(team, launches)
+    assert opening.quiet == [] and opening.tabs == launches[1:] and len(noted) == len(launches) - 1
+    monkeypatch.setattr(teams, "opening", lambda now=None: {teams.session_name_of(team, x) for x in launches})
+    assert actions.team_opening(team, launches).words == "The members of shop are opening already."
+
+
+def test_members_started_in_the_background(monkeypatch):
+    team = shop_team()
+    launches = actions.start_team(team, {}).launches[:2]
+    monkeypatch.setattr(teams, "background_start", lambda team, launch: [launch.title])
+
+    def run(argv):
+        if argv[0].endswith("ui"):
+            raise OSError("no claude")
+    notes = actions.start_in_background(team, launches, run)
+    names = [launch.title.partition(": ")[2] for launch in launches]
+    assert notes[0] == actions.Note(f"Started {names[0]} of shop in the background. B lists them; T shows the team.",
+                                    seconds=6)
+    assert notes[1] == actions.Note(f"Could not start in the background: {names[1]}: no claude", "warning", 12)
+
+
+def test_members_added_removed_and_the_goal_changed():
+    teams.save({"shop": shop_team()})
+    added = actions.add_members(shop_team(), "docs: the README; api: again")
+    assert [m.name for m in added.new] == ["docs"] and "docs" in {m.name for m in added.team.members}
+    assert added.warning == "Already on the team: api."
+    assert added.joined_words == "docs joined shop: they start with the team (Enter on its row)."
+    assert added.launches  # it introduces itself
+    assert actions.add_members(added.team, "").new == []
+
+    lead = next(m for m in added.team.members if m.lead)
+    assert actions.removal_refusal(None).words == "Pick a member with ← → first."
+    assert actions.removal_refusal(lead).severity == "warning"
+    docs = next(m for m in added.team.members if m.name == "docs")
+    assert actions.removal_refusal(docs) is None
+    assert actions.removal_ask(docs, member("docs")).words == (
+        "Press d again to take docs off the team. Its sessions stay. Its tab stays open, as an ordinary session.")
+    removed = actions.remove_member(added.team, "docs")
+    assert removed.done == "docs is off the team." and "docs" not in {m.name for m in removed.team.members}
+    assert removed.note
+
+    assert actions.change_goal(removed.team, "  ") is None
+    assert actions.change_goal(removed.team, removed.team.goal) is None
+    changed = actions.change_goal(removed.team, "A checkout and a cart")
+    assert changed.team.goal == "A checkout and a cart" and changed.done == "The goal is changed." and changed.note
+
+
+def test_who_hears_of_a_change(monkeypatch):
+    sent = []
+    monkeypatch.setattr(actions.teambus, "send", lambda *a, **kw: sent.append(a[1:3]))
+    team = shop_team()
+    told = actions.tell_lead(team, {}, "note", "Done.")
+    assert told == actions.Told("Done. The lead is not open: it starts with the change in its role.", seconds=6)
+    lead = member("lead")
+    told = actions.tell_lead(team, {"lead": lead}, "note", "Done.")
+    assert (told.clipboard, told.go_to, told.title, told.seconds) == ("note", lead, "Tell the lead", 12)
+    bus = shop_team()
+    bus.members[1].cli = "agy"
+    told = actions.tell_lead(bus, {"lead": lead}, "note", "Done.")
+    assert told.words == "Done. Sent the update to lead over the team bus." and not told.clipboard
+    assert sent == [(teams.YOU, "lead")]
+
+
+def test_peers_hear_of_a_change_each(monkeypatch):
+    peers = teams.new_team("pair", "C:/shop", "A checkout", teams.parse_members("api: endpoints; ui: screens"),
+                            peers=True)
+    assert peers.lead is None
+    told = actions.tell_lead(peers, {"api": member("api"), "ui": member("ui", running=False)}, "note", "Done.")
+    assert told.go_to.session_id == "api" and told.clipboard == "note" and "(api; Ctrl+V, Enter)" in told.words
+    assert actions.tell_lead(peers, {}, "note", "Done.").words == (
+        "Done. Nobody is open: each starts with the change in its role.")
+
+
+def test_a_team_closed():
+    assert actions.closing_note(shop_team(), {"api": member("api", state="busy"), "ui": member("ui")}) == (
+        "Press x again to close the 2 open members' tabs. 1 of them is working and would stop. Their sessions "
+        "stay, and s starts them again.")
+    assert actions.closing_note(shop_team(), {"api": None}) is None
+    assert actions.closed_note(["shop-api"], lambda names: ("Could not close shop-api.", "warning")) == actions.Note(
+        "Could not close shop-api.", "warning", 8)
+    assert actions.closed_note(["shop-api"], lambda names: ("Closed 1.", "information")).seconds == 4

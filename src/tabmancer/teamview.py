@@ -21,18 +21,25 @@ from textual.widgets import Input, Label, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from . import (
+    actions,
     agy,
     context,
     improve,
     newsessions,
     picks,
     summarize,
-    teambus,
     teams,
     teamtree,
     viewmodel,
 )
-from .actions import close_tabs, handing_note, open_names, team_handover_problem  # noqa: F401  (re-exported)
+from .actions import (  # noqa: F401  (re-exported)
+    close_tabs,
+    closing_note,
+    cold_note,
+    handing_note,
+    open_names,
+    team_handover_problem,
+)
 from .dialogs import Choice, FolderSuggester, cards, frame, light_rows, pill, pills, tilde, title
 from .safework import work
 from .sessions import Exit, Session, Status, folder_key
@@ -426,36 +433,6 @@ ADD_QUESTION = "Add members as name: area (several with ;, @agy picks Antigravit
 ADD_EXAMPLE = "docs: the README and the user guide @agy"
 
 
-def closing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:
-    """What x says before it closes a team's open members (None: nobody is open)."""
-    open_now = [s for s in sessions.values() if s is not None and s.exit is Exit.RUNNING]
-    if not open_now:
-        return None
-    busy = sum(s.live_state.lower() in ("busy", "working", "aside") for s in open_now)
-    at_work = f" {busy} of them {'is' if busy == 1 else 'are'} working and would stop." if busy else ""
-    return (f"Press x again to close the {len(open_now)} open members' tabs.{at_work} Their sessions stay, and "
-            "s starts them again.")
-
-
-def cold_note(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:
-    """What starting a closed team says first when its members' cache is gone (an hour after their
-    last reply): going on writes their whole conversations again as each gets its first message,
-    where a handover starts them fresh. None when no member's context is big enough to matter (the
-    lead's alone is written again by a handover too)."""
-    cold = [(member, session) for member in team.members
-            if (session := sessions.get(member.name)) is not None and session.exit is not Exit.RUNNING
-            and session.path is not None and context.cold(session)]
-    members = [session for member, session in cold if not member.lead]
-    if not members:
-        return None
-    total = sum(session.context or 0 for _, session in cold)
-    spared = sum(session.context or 0 for session in members)
-    last = max(session.last_active for _, session in cold if session.last_active is not None)
-    return (f"{team.name} was last at work {viewmodel.ago(last)} ago and its cache is gone: going on writes "
-            f"{human(total)} of conversation again ({len(cold)} sessions). Again goes on; h twice hands it over "
-            f"instead: the lead writes a handover and the members start fresh, {human(spared)} less.")
-
-
 class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
     """The new generation of a team handed over: the lead's handover (to read), the line-up it
     suggests and the context cap its members start under (yours to change). Ctrl+S starts it, and
@@ -798,29 +775,29 @@ class TeamScreen(Screen):
 
     @work(thread=True, group="team-close")
     def close_members(self, names: list[str]) -> None:
-        said, severity = close_tabs(names)
-        self.app.call_from_thread(self.notify, said, severity=severity, timeout=8 if severity == "warning" else 4)
+        note = actions.closed_note(names, close_tabs)
+        self.app.call_from_thread(self.notify, note.words, severity=note.severity, timeout=note.seconds)
 
     def action_start_team(self) -> None:
         getattr(self.app, "kept_handovers", {}).pop(self.team.name, None)  # going on as it was, not handed over
-        launches = teams.start(self.team, self.sessions)
-        if not launches:
-            self.notify("Every member is open already.", timeout=3)
+        start = actions.start_team(self.team, self.sessions)
+        if not start.launches:
+            self.notify(start.words, timeout=3)
             return
         ok = getattr(self.app, "cold_start_ok", None)
         if ok is not None and not ok(self.team, dict(self.sessions)):
             return  # its cache is gone: said what going on costs, s again starts it
-        self.open_team(launches)
+        self.open_team(start.launches)
 
     def action_add_member(self) -> None:
         def add(text: str | None) -> None:
-            new, note = teams.add_members(self.team, text or "")
-            if note:
-                self.notify(note[0].upper() + note[1:] + ".", severity="warning", timeout=8)
-            if not new:
+            added = actions.add_members(self.team, text or "")
+            if added.warning:
+                self.notify(added.warning, severity="warning", timeout=8)
+            if not added.new:
                 return
-            self.adopt(teams.load().get(self.team.name, self.team))
-            self.open_team(teams.joining(self.team, new))
+            self.adopt(added.team)
+            self.open_team(added.launches)
 
         self.app.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter="add them"), add)
 
@@ -829,83 +806,49 @@ class TeamScreen(Screen):
         from then on, and the lead (or, among peers, the others) is told: it started with the old
         line-up."""
         member = self.graph.selected_member()
-        if member is None:
-            self.notify("Pick a member with ← → first.", timeout=3)
+        refusal = actions.removal_refusal(member)
+        if refusal is not None or member is None:  # removal_refusal says why when none is picked
+            if refusal is not None:
+                self.notify(refusal.words, severity=refusal.severity, timeout=refusal.seconds)
             return
-        if member.lead:
-            self.notify("The lead stays: a team has one. h hands it over to a fresh session instead.",
-                        severity="warning", timeout=6)
-            return
-        session = self.sessions.get(member.name)
         if self.removing != member.name:
             self.removing = member.name
-            still = " Its tab stays open, as an ordinary session." if session and session.exit is Exit.RUNNING else ""
-            self.notify(f"Press d again to take {member.name} off the team. Its sessions stay.{still}", timeout=6)
+            ask = actions.removal_ask(member, self.sessions.get(member.name))
+            self.notify(ask.words, timeout=ask.seconds)
             self.set_timer(6, lambda: setattr(self, "removing", None))
             return
         self.removing = None
-        team = teams.remove_member(self.team.name, member.name)
-        if team is None:
+        changed = actions.remove_member(self.team, member.name)
+        if changed is None:
             return
         self.graph.selected = 0
-        self.adopt(team)
-        self.tell_lead(teams.left_note(team, member.name), f"{member.name} is off the team.")
+        self.adopt(changed.team)
+        self.tell_lead(changed.note, changed.done)
 
     def action_edit_goal(self) -> None:
         """g: the team's goal, changed. Members started from now on get the new one; the lead is told."""
 
         def chosen(goal: str | None) -> None:
-            goal = teams.tidy(goal or "")
-            if not goal or goal == teams.tidy(self.team.goal):
+            changed = actions.change_goal(self.team, goal or "")
+            if changed is None:
                 return
-            team = teams.set_goal(self.team.name, goal)
-            if team is None:
-                return
-            self.adopt(team)
-            self.tell_lead(teams.goal_note(team), "The goal is changed.")
+            self.adopt(changed.team)
+            self.tell_lead(changed.note, changed.done)
 
         # In a box of several lines, as the new-team form writes it: one line flattened a plan pasted
         # there for good, the moment it was changed at all.
         self.app.push_screen(GoalDialog(self.team.goal), chosen)
 
     def tell_lead(self, note: str, done: str) -> None:
-        """A change made here, for the lead to hear: over the team bus when this team uses one, else
-        to the clipboard and you to its tab, to paste it. A closed lead gets it in its role. Peers
-        each started with the old team in their role: the note is for every open one."""
-        if self.team.lead is None:
-            open_ones = [name for name, s in self.sessions.items()
-                         if s is not None and s.exit is Exit.RUNNING and any(m.name == name for m in self.team.members)]
-            if not open_ones:
-                self.notify(f"{done} Nobody is open: each starts with the change in its role.", timeout=6)
-                return
-            if self.team.uses_bus:
-                for name in open_ones:
-                    teambus.send(self.team.name, teams.YOU, name, note, summary="team change")
-                self.notify(f"{done} Sent the update over the team bus to {', '.join(open_ones)}.",
-                            title="Told the team", timeout=8)
-                return
-            copy_text(self.app, note)
-            go = getattr(self.app, "go_to_tab", None)
-            if go is not None:
-                go(self.sessions[open_ones[0]])
-            self.notify(f"{done} A note for the team is on the clipboard: paste it into each open member's tab "
-                        f"({', '.join(open_ones)}; Ctrl+V, Enter).", title="Tell the team", timeout=14)
-            return
-        lead = self.sessions.get(self.team.lead.name)
-        if lead is None or lead.exit is not Exit.RUNNING:
-            self.notify(f"{done} The lead is not open: it starts with the change in its role.", timeout=6)
-            return
-        if self.team.uses_bus:
-            teambus.send(self.team.name, teams.YOU, self.team.lead.name, note, summary="team change")
-            self.notify(f"{done} Sent the update to {self.team.lead.name} over the team bus.",
-                        title="Told the lead", timeout=8)
-            return
-        copy_text(self.app, note)
+        """A change made here, for the lead to hear (actions.tell_lead): over the team bus when this team
+        uses one, else to the clipboard and you to its tab, to paste it."""
+        told = actions.tell_lead(self.team, self.sessions, note, done)
+        if told.clipboard:
+            copy_text(self.app, told.clipboard)
         go = getattr(self.app, "go_to_tab", None)
-        if go is not None:
-            go(lead)
-        self.notify(f"{done} A note for the lead is on the clipboard: paste it into its tab (Ctrl+V, Enter).",
-                    title="Tell the lead", timeout=12)
+        if told.go_to is not None and go is not None:
+            go(told.go_to)
+        self.notify(told.words, title=told.title, timeout=told.seconds)
 
     def action_monitor(self) -> None:
         """M: this team's monitor in a window of its own (the dashboard's action_monitor)."""

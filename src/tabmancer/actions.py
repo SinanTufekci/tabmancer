@@ -7,7 +7,8 @@ or checks it, so a window that only watches cannot act by calling one. What only
 knows (the open sessions, how a session stands now) comes in as an argument.
 
 Slice 1: the handover of one session (h). Slice 2: a whole team's (h twice on a team). Slice 3:
-opening sessions (Enter, o) and going to an open one's tab.
+opening sessions (Enter, o) and going to an open one's tab. Slice 4: a team's keys (start, add,
+remove, goal, close) on its row and in its view.
 """
 
 from __future__ import annotations
@@ -15,9 +16,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from . import clis, focus, handover, picks, summarize, teams, wrapped
-from .launch import Launch, Mode, continue_prompt
+from . import clis, context, focus, handover, picks, summarize, teambus, teams, viewmodel, wrapped
+from .launch import Launch, Mode, continue_prompt, run_in_background
 from .sessions import Exit, Session, Status
+from .tokens import human
 
 
 class ActionError(Exception):
@@ -316,3 +318,209 @@ def go_to_tab(session: Session) -> Note:
         return Note(f"Switched to {session.project}. Type your prompt there.", seconds=4)
     return Note(f"Could not find the tab of {session.project}. It may be open outside Windows Terminal, or its tab "
                 "has been renamed.", "warning", 8)
+
+
+# --- a team's keys ----------------------------------------------------------------------------------
+
+@dataclass
+class Told(Note):
+    """What a team change said, and what the front end does with it: `clipboard`, a note to paste ('' when
+    it went over the bus or nobody is open), and `go_to`, the tab to paste it into."""
+
+    title: str = ""
+    clipboard: str = ""
+    go_to: Session | None = None
+
+
+def closing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:
+    """What x says before it closes a team's open members (None: nobody is open)."""
+    open_now = [s for s in sessions.values() if s is not None and s.exit is Exit.RUNNING]
+    if not open_now:
+        return None
+    busy = sum(s.live_state.lower() in ("busy", "working", "aside") for s in open_now)
+    at_work = f" {busy} of them {'is' if busy == 1 else 'are'} working and would stop." if busy else ""
+    return (f"Press x again to close the {len(open_now)} open members' tabs.{at_work} Their sessions stay, and "
+            "s starts them again.")
+
+
+def cold_note(team: teams.Team, sessions: dict[str, Session | None]) -> str | None:
+    """What starting a closed team says first when its members' cache is gone (an hour after their
+    last reply): going on writes their whole conversations again as each gets its first message,
+    where a handover starts them fresh. None when no member's context is big enough to matter (the
+    lead's alone is written again by a handover too)."""
+    cold = [(member, session) for member in team.members
+            if (session := sessions.get(member.name)) is not None and session.exit is not Exit.RUNNING
+            and session.path is not None and context.cold(session)]
+    members = [session for member, session in cold if not member.lead]
+    if not members:
+        return None
+    total = sum(session.context or 0 for _, session in cold)
+    spared = sum(session.context or 0 for session in members)
+    last = max(session.last_active for _, session in cold if session.last_active is not None)
+    return (f"{team.name} was last at work {viewmodel.ago(last)} ago and its cache is gone: going on writes "
+            f"{human(total)} of conversation again ({len(cold)} sessions). Again goes on; h twice hands it over "
+            f"instead: the lead writes a handover and the members start fresh, {human(spared)} less.")
+
+
+def closed_note(names: list[str], close: Callable[[list[str]], tuple[str, str]] | None = None) -> Note:
+    """x twice: the open members' tabs closed (`close`: close_tabs), and what it says."""
+    said, severity = (close or close_tabs)(names)
+    return Note(said, severity, 8 if severity == "warning" else 4)
+
+
+@dataclass
+class TeamStart:
+    """The tabs a team's start opens, or the words when there are none."""
+
+    launches: list[Launch]
+    words: str = ""
+
+
+def start_team(team: teams.Team, members: dict[str, Session | None], recent: set[str] | None = None) -> TeamStart:
+    """Every member not open: a closed one resumed as itself, one never started new; the lead last.
+    `recent`: the sessions opened from here a moment ago (still_opening), left out; None when the
+    front end does not keep them."""
+    launches = teams.start(team, members)
+    if recent is not None:
+        launches = [launch for launch in launches if not launch.session_id or launch.session_id not in recent]
+    if launches:
+        return TeamStart(launches)
+    return TeamStart([], f"Every member of {team.name} is open already, or opening." if recent is not None
+                     else "Every member is open already.")
+
+
+@dataclass
+class TeamOpening:
+    """A team's sessions to open: its members that run in the background (`quiet`) and the tabs, or the
+    words when they are all opening already."""
+
+    quiet: list[Launch]
+    tabs: list[Launch]
+    words: str = ""
+
+
+def team_opening(team: teams.Team, launches: list[Launch]) -> TeamOpening:
+    """A team's sessions, split into background members and tabs. A member opened a moment ago, here or
+    by `tabmancer team start`, is not opened again: s twice, while the first claude --bg calls were
+    still running, started every member twice. The ones that go ahead are noted as opening."""
+    coming = teams.opening()
+    launches = [launch for launch in launches if teams.session_name_of(team, launch) not in coming]
+    if not launches:
+        return TeamOpening([], [], f"The members of {team.name} are opening already.")
+    teams.note_opening([teams.session_name_of(team, launch) for launch in launches])
+    quiet = [launch for launch in launches if teams.in_background(team, launch)]
+    return TeamOpening(quiet, [launch for launch in launches if launch not in quiet])
+
+
+def start_in_background(team: teams.Team, launches: list[Launch],
+                        run: Callable[[list[str]], object] | None = None) -> list[Note]:
+    """claude --bg for each (a few seconds each: not on a screen's thread), and what came of it. `run`:
+    launch.run_in_background."""
+    started, failed = [], []
+    for launch in launches:
+        try:
+            (run or run_in_background)(teams.background_start(team, launch))
+            started.append(launch.title.partition(": ")[2])
+        except OSError as error:
+            failed.append(f"{launch.title.partition(': ')[2]}: {error}")
+    notes = []
+    if started:
+        notes.append(Note(f"Started {', '.join(started)} of {team.name} in the background. B lists them; T shows "
+                          "the team.", seconds=6))
+    if failed:
+        notes.append(Note("Could not start in the background: " + "; ".join(failed), "warning", 12))
+    return notes
+
+
+@dataclass
+class Added:
+    """New members written to a team: the team as saved now, the new ones, and what was left out."""
+
+    team: teams.Team
+    new: list[teams.Member]
+    warning: str = ""
+
+    @property
+    def launches(self) -> list[Launch]:
+        """Their tabs, for a team at work: each introduces itself to the lead (teams.joining)."""
+        return teams.joining(self.team, self.new)
+
+    @property
+    def joined_words(self) -> str:
+        """For a closed team: they start with it."""
+        return f"{', '.join(m.name for m in self.new)} joined {self.team.name}: they start with the team (Enter on its row)."
+
+
+def add_members(team: teams.Team, text: str) -> Added:
+    """New members for a team, from a line as name: area (teams.add_members)."""
+    new, note = teams.add_members(team, text)
+    return Added(teams.load().get(team.name, team) if new else team, new,
+                 note[0].upper() + note[1:] + "." if note else "")
+
+
+@dataclass
+class Changed:
+    """A team changed: as saved now, the note for its lead (tell_lead) and what was done."""
+
+    team: teams.Team
+    note: str
+    done: str
+
+
+def removal_refusal(member: teams.Member | None) -> Note | None:
+    """Why d takes no member off; None when it can."""
+    if member is None:
+        return Note("Pick a member with ← → first.", seconds=3)
+    if member.lead:
+        return Note("The lead stays: a team has one. h hands it over to a fresh session instead.", "warning", 6)
+    return None
+
+
+def removal_ask(member: teams.Member, session: Session | None) -> Note:
+    """What the first d says: a second one takes the member off."""
+    still = " Its tab stays open, as an ordinary session." if session and session.exit is Exit.RUNNING else ""
+    return Note(f"Press d again to take {member.name} off the team. Its sessions stay.{still}", seconds=6)
+
+
+def remove_member(team: teams.Team, name: str) -> Changed | None:
+    """A member taken off the team. Its session stays, an ordinary one from then on, and the lead (or,
+    among peers, the others) is to be told: it started with the old line-up."""
+    left = teams.remove_member(team.name, name)
+    return None if left is None else Changed(left, teams.left_note(left, name), f"{name} is off the team.")
+
+
+def change_goal(team: teams.Team, goal: str) -> Changed | None:
+    """The team's goal, changed. Members started from now on get the new one; the lead is to be told.
+    None when it is empty or the same."""
+    goal = teams.tidy(goal)
+    if not goal or goal == teams.tidy(team.goal):
+        return None
+    changed = teams.set_goal(team.name, goal)
+    return None if changed is None else Changed(changed, teams.goal_note(changed), "The goal is changed.")
+
+
+def tell_lead(team: teams.Team, sessions: dict[str, Session | None], note: str, done: str) -> Told:
+    """A change, for the lead to hear: over the team bus when this team uses one (sent here), else a
+    note for the clipboard and the tab to paste it into. A closed lead gets it in its role. Peers each
+    started with the old team in their role: the note is for every open one."""
+    if team.lead is None:
+        open_ones = [name for name, s in sessions.items()
+                     if s is not None and s.exit is Exit.RUNNING and any(m.name == name for m in team.members)]
+        if not open_ones:
+            return Told(f"{done} Nobody is open: each starts with the change in its role.", seconds=6)
+        if team.uses_bus:
+            for name in open_ones:
+                teambus.send(team.name, teams.YOU, name, note, summary="team change")
+            return Told(f"{done} Sent the update over the team bus to {', '.join(open_ones)}.", seconds=8,
+                        title="Told the team")
+        return Told(f"{done} A note for the team is on the clipboard: paste it into each open member's tab "
+                    f"({', '.join(open_ones)}; Ctrl+V, Enter).", seconds=14, title="Tell the team", clipboard=note,
+                    go_to=sessions[open_ones[0]])
+    lead = sessions.get(team.lead.name)
+    if lead is None or lead.exit is not Exit.RUNNING:
+        return Told(f"{done} The lead is not open: it starts with the change in its role.", seconds=6)
+    if team.uses_bus:
+        teambus.send(team.name, teams.YOU, team.lead.name, note, summary="team change")
+        return Told(f"{done} Sent the update to {team.lead.name} over the team bus.", seconds=8, title="Told the lead")
+    return Told(f"{done} A note for the lead is on the clipboard: paste it into its tab (Ctrl+V, Enter).",
+                seconds=12, title="Tell the lead", clipboard=note, go_to=lead)
