@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -149,34 +150,67 @@ def write_itself(session: Session, request: str = REQUEST) -> str:
     request of another kind (a lead's, for its team: team_request), the whole answer comes back."""
     if not session.cwd or not Path(session.cwd).is_dir():
         raise HandoverError(f"its folder is gone ({session.cwd})")
-    if session.cli == "agy":
-        agy_bin = shutil.which("agy")
-        if not agy_bin:
-            raise HandoverError("the agy CLI is not on PATH")
-        model = ["--model", session.model] if session.model else []
-        cmd = [agy_bin, "-p", "--conversation", session.session_id, *model]
-    else:
-        claude = shutil.which("claude")
-        if not claude:
-            raise HandoverError("the claude CLI is not on PATH")
-        model = ["--model", session.model] if session.model else []
-        cmd = [claude, "-p", "--resume", session.session_id, *model]
-    try:
-        # The request goes in on stdin: through a .cmd shim, cmd.exe would take < and > for redirects.
-        result = subprocess.run(
-            cmd, input=request, cwd=session.cwd,
-            env=clean_env(), capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=WRITE_SECONDS, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except subprocess.TimeoutExpired as error:
-        raise HandoverError(f"it was still writing after {WRITE_SECONDS // 60} minutes") from error
-    except (OSError, subprocess.SubprocessError) as error:
-        raise HandoverError(str(error)) from error
-    answer = result.stdout.strip()
+    with tempfile.TemporaryDirectory(prefix="tabmancer-handover-") as scratch:
+        last = Path(scratch) / "answer.md"  # where Codex writes its last message (-o)
+        cmd, model = _resume_command(session, last)
+        try:
+            # The request goes in on stdin: through a .cmd shim, cmd.exe would take < and > for redirects.
+            result = subprocess.run(
+                cmd, input=request, cwd=session.cwd,
+                env=clean_env(), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=WRITE_SECONDS, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired as error:
+            raise HandoverError(f"it was still writing after {WRITE_SECONDS // 60} minutes") from error
+        except (OSError, subprocess.SubprocessError) as error:
+            raise HandoverError(str(error)) from error
+        try:
+            written = last.read_text(encoding="utf-8", errors="replace").strip() if last.is_file() else ""
+        except OSError:
+            written = ""
+    answer = written or result.stdout.strip()
     if result.returncode != 0 or not answer:
+        if session.cli == "agy":
+            from . import agy
+
+            agy.note_quota_error(f"{result.stderr}\n{result.stdout}", model)  # out of quota: the chain moves on
         raise HandoverError(result.stderr.strip()[:300] or f"{session.cli} returned nothing")
     if START in answer and request == REQUEST:
         answer = answer.split(START, 1)[1].split(END, 1)[0].strip()
     return answer
+
+
+def _resume_command(session: Session, last: Path) -> tuple[list[str], str]:
+    """The command that resumes a session once without a tab, the request on stdin and the answer on
+    stdout (Codex: in the file `last` too), and the model it runs on ("" when its CLI picks).
+
+    agy: the chain's model (agy.model_flags), never the one its transcript names when that is out of
+    the chain (Argon, a Claude model); every model out of quota is a HandoverError, and nothing runs.
+    Codex: its own headless resume (codex exec resume), never claude's."""
+    if session.cli == "agy":
+        from . import agy
+
+        agy_bin = shutil.which("agy")
+        if not agy_bin:
+            raise HandoverError("the agy CLI is not on PATH")
+        try:
+            flags, _, _ = agy.model_flags("", session_id=session.session_id)
+        except agy.NoModel as error:
+            raise HandoverError(str(error)) from error
+        return [agy_bin, "-p", "--conversation", session.session_id, *flags], flags[1] if flags else session.model
+    if session.cli == "codex":
+        codex = shutil.which("codex")
+        if not codex:
+            raise HandoverError("the codex CLI is not on PATH")
+        model = ["-m", session.model] if session.model else []
+        return [codex, "exec", "resume", "--skip-git-repo-check", "-o", str(last), *model,
+                session.session_id, "-"], session.model
+    if session.cli != "claude":
+        raise HandoverError(f"a {session.cli} session cannot be resumed to write its handover")
+    claude = shutil.which("claude")
+    if not claude:
+        raise HandoverError("the claude CLI is not on PATH")
+    model = ["--model", session.model] if session.model else []
+    return [claude, "-p", "--resume", session.session_id, *model], session.model
 
 
 def fresh(session: Session, handover: str) -> Launch:
