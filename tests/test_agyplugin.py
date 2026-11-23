@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -63,7 +63,7 @@ def test_the_real_quota_note_runs_from_the_hook():
            "error": "RESOURCE_EXHAUSTED (429): Individual quota reached. Resets in 4h7m"})
     noted = agy.note_quota_error("RESOURCE_EXHAUSTED (429): Individual quota reached. Resets in 4h7m",
                                  "gemini-4-hydrogen-high")
-    assert noted is not None and noted > datetime.now(UTC) + timedelta(hours=4)
+    assert noted is not None and noted > datetime.now(timezone.utc) + timedelta(hours=4)
 
 
 def test_messages_waiting_send_the_member_round_again_with_them(quota_calls):
@@ -87,7 +87,7 @@ def test_the_stop_chain_ends_after_max_continues():
 
 def test_messages_from_before_the_team_started_are_not_handed_over():
     teambus.send("shop", "lead", "ui", "an older team's")
-    teambus.install("shop", (datetime.now(UTC) + timedelta(minutes=10)).isoformat(), ["lead", "ui"])
+    teambus.install("shop", (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(), ["lead", "ui"])
     assert _hook({"executionNum": 0}, TEAM) == ""
 
 

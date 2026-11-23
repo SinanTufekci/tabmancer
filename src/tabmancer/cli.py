@@ -495,7 +495,6 @@ def team_send(name: str, rest: list[str]) -> int:
 
 def team_listen(name: str, rest: list[str]) -> int:
     """Wait until unread message(s) arrive for this member on the team bus, print them and exit."""
-    import os
 
     from . import teambus, teams
 
@@ -567,7 +566,8 @@ def team_run(name: str, rest: list[str]) -> int:
     saved = teams.load()
     team = saved.get(team_name)
     created = team.created if team is not None else ""
-    program = os.path.basename(cmd[0]).lower()
+    # Either separator: a team file (and so its command) may have been written on Windows.
+    program = cmd[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
     cli_name = "agy" if program.startswith("agy") else "codex" if program.startswith("codex") else "claude"
     beside = None
     if cli_name == "codex":  # no background command wakes Codex: its messages are queued into its thread

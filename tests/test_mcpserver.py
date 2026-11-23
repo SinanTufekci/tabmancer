@@ -401,12 +401,12 @@ def test_a_waiting_member_shows_as_listening_the_whole_time(tmp_path):
 
 
 def test_status_names_the_model_an_agy_member_runs_on_by_quota(tmp_path):
-    from datetime import UTC, datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     from tabmancer import agy
 
     _team(tmp_path)
-    agy.note_out_of_quota("gemini-4-neon-high", datetime.now(UTC) + timedelta(hours=2))
+    agy.note_out_of_quota("gemini-4-neon-high", datetime.now(timezone.utc) + timedelta(hours=2))
     server, out = _server("api")
     status = _text(_call(server, out, "team_status"))
     ui = next(line for line in status.splitlines() if line.strip().startswith("ui ("))

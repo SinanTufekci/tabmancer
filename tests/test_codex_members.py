@@ -107,7 +107,7 @@ def test_codex_member_launches_under_team_run_with_its_own_mcp_server(tmp_path):
 
 
 def test_codex_overrides_parse_as_toml(tmp_path):
-    import tomllib
+    tomllib = pytest.importorskip("tomllib")  # 3.11+: skipped on 3.10
 
     team = _team(tmp_path)
     flags = teams.codex_options(team, team.members[1])
