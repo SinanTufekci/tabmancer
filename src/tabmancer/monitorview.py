@@ -116,10 +116,8 @@ def needs_line(view: VM.TeamView, palette: dict[str, str]) -> Text | None:
 
 
 def _model_of(member: VM.MemberView) -> str:
-    model = member.model or "default model"
-    if member.cli == "agy":
-        model = agy.name(member.model) if member.model else "no model now"
-    return f"{member.cli} · {model}" + (f" {member.effort}" if member.effort else "")
+    """'claude · opus 5.5 · high', 'agy · Neon (High)': as the team view and the desktop monitor say it."""
+    return f"{member.cli} · {VM.model_words(member)}"
 
 
 def _facts(member: VM.MemberView) -> list[tuple[str, str]]:

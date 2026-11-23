@@ -417,6 +417,17 @@ def _presence_of(presence: dict[str, dict], team: teams.Team, member: teams.Memb
     return {"runner": bool(info.get("runner_alive")), "listening": bool(info.get("listening")), "since": moment}
 
 
+def model_words(member: MemberView) -> str:
+    """A member's model as the Model column and the team view say it (context.short_model), for every
+    front end: 'opus 5.5 · high', and an agy one by its name, its level in it: 'Neon (High)'."""
+    if not member.model:
+        return "no model now" if member.cli == "agy" else "default model"
+    words = context.short_model(member.model, most=24)
+    if member.effort and not agy.label(member.model):
+        words += f" · {member.effort}"
+    return words
+
+
 def member_model(member: teams.Member, session: Session | None) -> tuple[str, str]:
     """(model, note): the model a member answers with, its session's when known; else the one it
     starts with: for an agy member the picker's (agy's chain by quota, never Claude), with a note

@@ -28,3 +28,18 @@ async def test_the_model_column_and_a_members_card_name_an_agy_model(fake_home):
         await pilot.pause(0.1)
         assert str(app.model_cell(session)) == "Hydrogen (High)"  # the column's whole room: no effort after it
     assert teamview.card_model(session, Pick(), "agy") == ("agy Hydrogen", False)
+
+
+def test_the_monitor_names_a_members_model_as_the_team_view_does():
+    from tabmancer import viewmodel as VM
+    from tabmancer.monitorview import _facts
+
+    def member(cli="claude", model="", effort=""):
+        return VM.MemberView("api", False, "endpoints", "s1", "idle", "idle", "done", cli=cli, model=model,
+                             effort=effort)
+
+    assert VM.model_words(member(model="claude-opus-5-5", effort="high")) == "opus 5.5 · high"
+    assert VM.model_words(member(cli="agy", model="gemini-4-hydrogen-high", effort="high")) == "Hydrogen (High)"
+    assert VM.model_words(member()) == "default model" and VM.model_words(member(cli="agy")) == "no model now"
+    assert _facts(member(model="claude-opus-5-5", effort="high"))[0][0] == "claude · opus 5.5 · high"
+    assert _facts(member(cli="agy", model="gemini-4-neon-high"))[0][0] == "agy · Neon (High)"
