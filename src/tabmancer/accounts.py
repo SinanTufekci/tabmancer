@@ -2,8 +2,10 @@
 shown in the dashboard's top bar, beside the plan limits they are about.
 
 Claude Code keeps the account in .claude.json, in CLAUDE_CONFIG_DIR when that is set, in your home
-folder otherwise: oauthAccount, with its email and the organisation's plan. /login writes it again,
-so a switch to another account shows at the next look. Codex keeps its sign-in in auth.json under
+folder otherwise: oauthAccount, with its email, its account and organisation ids, and the
+organisation's name and plan. /login writes it again, so a switch to another account shows at the next
+look. One email can belong to more than one organisation (a personal one and a Team, say): an account
+is told apart by its account id and organisation id together (Account.key), the email is what is shown. Codex keeps its sign-in in auth.json under
 CODEX_HOME (~/.codex): with ChatGPT, an id token whose middle part says the email and the plan (read
 for showing only: nothing is checked or sent); otherwise an API key, which has no account to show.
 Antigravity keeps its sign-in in the system's credential store, which tabmancer does not read.
@@ -25,9 +27,30 @@ class Account:
     cli: str      # "claude" or "codex"
     email: str    # what it is signed in as; for an API key, "API key"
     plan: str = ""  # "Max 5x", "Pro", "free"...
+    # Claude Code's only, from oauthAccount (all "" when not known, as for Codex):
+    account_id: str = ""  # accountUuid
+    org_id: str = ""      # organizationUuid
+    org_name: str = ""    # organizationName
+    org_type: str = ""    # organizationType: "claude_max", "claude_team"...
+
+    @property
+    def key(self) -> str:
+        """What tells this account apart: its account and organisation ids, the email when either
+        is not known (an account remembered before they were, or Codex's)."""
+        return f"{self.account_id}:{self.org_id}" if self.account_id and self.org_id else self.email
+
+    @property
+    def personal(self) -> bool:
+        """Signed in with a plan of your own (Pro, Max), not as a seat in an organisation's."""
+        return bool(self.org_type) and self.org_type not in ORGANISATIONS
+
+    def org_words(self) -> str:
+        """The organisation as shown: 'personal' for your own plan's, else its name."""
+        return "personal" if self.personal else self.org_name
 
 
 PLANS = {"claude_max": "Max", "claude_pro": "Pro", "claude_team": "Team", "claude_enterprise": "Enterprise"}
+ORGANISATIONS = {"claude_team", "claude_enterprise"}  # seats in an organisation's plan, not your own
 
 
 def claude_file() -> Path:
@@ -65,7 +88,9 @@ def claude() -> Account | None:
     for size in ("20x", "5x"):  # Max comes in two sizes, said only by the rate limit tier
         if plan == "Max" and tier.endswith(size):
             plan = f"Max {size}"
-    return Account("claude", str(account["emailAddress"]), plan)
+    return Account("claude", str(account["emailAddress"]), plan,
+                   *(str(account.get(name) or "") for name in
+                     ("accountUuid", "organizationUuid", "organizationName", "organizationType")))
 
 
 def _claims(token: str) -> dict:
@@ -104,11 +129,15 @@ def signed_in() -> list[Account]:
 
 
 # --- the Claude accounts you use (A switches between them) -----------------------------------------
-# tabmancer's own file keeps the accounts it has seen Claude Code signed in with, their email and plan
-# and nothing more (a sign-in itself stays Claude Code's: A runs `claude auth login --email`), where
-# each one's sign-in page opens (see browsers), and on which of them each session stopped at a usage
-# limit: signed in with another since, it can go on.
+# tabmancer's own file keeps the accounts it has seen Claude Code signed in with, their email, plan,
+# account and organisation ids and organisation's name and type, and nothing more (a sign-in itself
+# stays Claude Code's: A runs `claude auth login --email`; the file stays on this computer), where each
+# one's sign-in page opens (see browsers; by email, as the page is the same for every organisation),
+# and on which of them each session stopped at a usage limit: signed in with another since, it can go
+# on. A file written before the ids were kept holds emails only: an email's record takes its ids the
+# first time that account is seen signed in, and a limit's email reads as the one account it can be.
 KNOWN = "accounts.json"
+SAVED = ("account_id", "org_id", "org_name", "org_type")  # an account's record: these, when known
 
 
 def _known_file() -> dict:
@@ -127,29 +156,61 @@ def _save_known(saved: dict) -> None:
         pass  # a read-only config folder: the list is not kept, nothing else is lost
 
 
+def _record(account: Account, when: str) -> dict:
+    """An account as accounts.json keeps it: the ids only when known."""
+    return {"email": account.email, "plan": account.plan,
+            **{name: getattr(account, name) for name in SAVED if getattr(account, name)}, "seen": when}
+
+
+def _account(entry: dict) -> Account:
+    return Account("claude", str(entry["email"]), str(entry.get("plan") or ""),
+                   *(str(entry.get(name) or "") for name in SAVED))
+
+
 def remember(account: Account | None, when: str) -> None:
-    """Claude Code's account as it is now, first in the list of those seen (when: an ISO time)."""
+    """Claude Code's account as it is now, first in the list of those seen (when: an ISO time). Its
+    email's record from before the ids were kept is this account's: this one takes its place."""
     if account is None or account.cli != "claude" or "@" not in account.email:
         return
     saved = _known_file()
     seen = [e for e in saved.get("claude", []) if isinstance(e, dict) and e.get("email")]
-    if seen and seen[0].get("email") == account.email and seen[0].get("plan") == account.plan:
+    if seen and _account(seen[0]) == account:
         return  # as it was: no write every few seconds
-    saved["claude"] = [{"email": account.email, "plan": account.plan, "seen": when},
-                       *(e for e in seen if e.get("email") != account.email)]
+    saved["claude"] = [_record(account, when), *(
+        e for e in seen if _account(e).key != account.key
+        and not (e["email"] == account.email and not _account(e).account_id))]
     _save_known(saved)
 
 
 def known() -> list[tuple[Account, str]]:
     """The Claude accounts seen signed in, the latest first, each with when it was last seen (ISO)."""
-    return [(Account("claude", str(e["email"]), str(e.get("plan") or "")), str(e.get("seen") or ""))
+    return [(_account(e), str(e.get("seen") or ""))
             for e in _known_file().get("claude", []) if isinstance(e, dict) and e.get("email")]
 
 
+def shared_emails() -> set[str]:
+    """The emails seen signed in to more than one organisation: shown with the organisation's name."""
+    emails = [account.email for account, _ in known()]
+    return {email for email in emails if emails.count(email) > 1}
+
+
+def same(stopped_on: str, account: Account | None) -> bool:
+    """Whether a limit's account (a key, or an email kept before the ids were) is this one."""
+    return account is not None and stopped_on in (account.key, account.email)
+
+
 def limited_on() -> dict[str, str]:
-    """Session id -> the account it was signed in with when it stopped at a usage limit."""
+    """Session id -> the account (its key) it was signed in with when it stopped at a usage limit.
+    An email kept before the ids were reads as the key of the one account seen with that email, and
+    stays an email while there is not exactly one."""
     found = _known_file().get("limited", {})
-    return {str(k): str(v) for k, v in found.items()} if isinstance(found, dict) else {}
+    if not isinstance(found, dict):
+        return {}
+    keys: dict[str, list[str]] = {}
+    for account, _ in known():
+        if account.account_id and account.org_id:
+            keys.setdefault(account.email, []).append(account.key)
+    return {str(k): (keys[str(v)][0] if len(keys.get(str(v), ())) == 1 else str(v)) for k, v in found.items()}
 
 
 def keep_limited(limited: dict[str, str]) -> None:
@@ -176,13 +237,17 @@ def keep_opens_in(email: str, place: str) -> None:
         _save_known(saved)
 
 
-def words(account: Account, room: int) -> str:
+def words(account: Account, room: int, org: bool = False) -> str:
     """The account in at most room cells: the email with its plan; the email whole, without the
-    plan (the email tells accounts apart); the email cut in the middle; "" when not even that fits."""
+    plan (the email tells accounts apart); the email cut in the middle; "" when not even that fits.
+    With org (an email signed in to more than one organisation), its organisation after the email,
+    which goes after the plan does."""
     plan = f" · {account.plan}" if account.plan else ""
     email = account.email
-    if len(email) + len(plan) <= room:
-        return email + plan
+    where = f" · {account.org_words()}" if org and account.org_words() else ""
+    for shown in (email + where + plan, email + where):
+        if len(shown) <= room:
+            return shown
     if len(email) <= room:
         return email
     name, at, host = email.partition("@")

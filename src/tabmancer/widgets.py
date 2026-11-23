@@ -268,6 +268,7 @@ class TopBar(Horizontal):
         self.widths: dict[str, int] = {"brand": cell_len("◆ tabmancer")}  # the parts' contents, in cells
         self.shown: dict[str, int] = {}  # ...as last put, each (put)
         self.accounts: list[Account] = []
+        self.shared: set[str] = set()  # emails seen in more than one organisation: shown with it
 
     def compose(self) -> ComposeResult:
         yield Static("◆ tabmancer", id="brand")
@@ -322,9 +323,10 @@ class TopBar(Horizontal):
         if getattr(event.widget, "id", None) == "account" and hasattr(self.app, "action_accounts"):
             self.app.action_accounts()
 
-    def show_accounts(self, found: list[Account]) -> None:
-        if found != self.accounts:
-            self.accounts = found
+    def show_accounts(self, found: list[Account], shared: set[str] | None = None) -> None:
+        shared = shared or set()
+        if found != self.accounts or shared != self.shared:
+            self.accounts, self.shared = found, shared
             self.fit_accounts()
 
     def on_resize(self, event: events.Resize) -> None:
@@ -350,7 +352,8 @@ class TopBar(Horizontal):
         for account in sorted(self.accounts, key=lambda a: a.cli != "codex"):  # Codex's first, Claude's last
             label = "codex " if account.cli == "codex" else ""
             gap = 3 if text else 0
-            shown = accounts.words(account, room - gap - len(label) - text.cell_len)
+            org = account.cli == "claude" and account.email in self.shared
+            shown = accounts.words(account, room - gap - len(label) - text.cell_len, org=org)
             if not shown:
                 continue  # Codex's gone: Claude Code's, which matters more, may still fit
             email, _, plan = shown.partition(" · ")

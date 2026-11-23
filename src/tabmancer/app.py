@@ -719,7 +719,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.told_update: str | None = None  # the newer tabmancer already told of
         self.updating_claude = False  # claude update running: sessions asked for wait for it
         self.after_claude_update: list[Callable[[], None]] = []
-        self.signed_as: str | None = None  # the Claude account Claude Code is signed in with, as last read
+        # The Claude account Claude Code is signed in with, as last read; signed_as is its key
+        # (account and organisation: one email can be in more than one organisation).
+        self.account: accounts.Account | None = None
+        self.signed_as: str | None = None
         self.limited: set[str] = set()  # the sessions at a limit when the footer last heard of it
         self.search = search.Index.load()  # what was said in each session, for the filter
         self.search_version = 0  # goes up when the index has read more
@@ -3071,12 +3074,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         only when they changed. Claude Code's is remembered for A, and a switch to another one frees
         the sessions a usage limit stopped on the other."""
         found = accounts.signed_in()
-        self.topbar.show_accounts(found)
+        self.topbar.show_accounts(found, accounts.shared_emails())
         account = next((a for a in found if a.cli == "claude"), None)
-        email = account.email if account is not None else None
-        if email != self.signed_as:
-            switched = self.signed_as is not None and email is not None
-            self.signed_as = email
+        key = account.key if account is not None else None
+        if key != self.signed_as or account != self.account:
+            switched = self.signed_as is not None and key is not None and key != self.signed_as
+            self.signed_as, self.account = key, account
             if not self.acts:  # a monitor only shows who is signed in: the dashboard remembers it
                 return
             accounts.remember(account, datetime.now().isoformat(timespec="seconds"))
@@ -3089,14 +3092,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.refresh_usage()
         self.check_limits()
         free = [s for s in self.sessions.values() if at_limit(s) and s.signed_in_again]
+        who = accounts.words(self.account, 80, org=self.account.email in accounts.shared_emails()) \
+            if self.account is not None else ""
         if free:
-            self.mascot.react("lifted", f"Signed in as {self.signed_as}: {len(free)} stopped at a limit can go on. "
+            self.mascot.react("lifted", f"Signed in as {who}: {len(free)} stopped at a limit can go on. "
                               "c continues them", AMBER, seconds=10)
             for session in free:
                 self.update_row(session)
             self.update_detail()
         else:
-            self.mascot.say(f"Signed in as {self.signed_as}", self.accent(), seconds=6)
+            self.mascot.say(f"Signed in as {who}", self.accent(), seconds=6)
 
     def action_accounts(self) -> None:
         """A: the Claude accounts you use, to sign in with another (Claude Code's own sign-in, in a tab),
@@ -3105,7 +3110,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
         current = accounts.claude()
         seen = accounts.known()
-        if current is not None and not any(a.email == current.email for a, _ in seen):
+        if current is not None and not any(a.key == current.key for a, _ in seen):
             seen.insert(0, (current, ""))
         stopped = sum(1 for s in self.sessions.values() if at_limit(s))
         places = browsers.places()
@@ -3606,15 +3611,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """Forget the sessions gone on from a limit; once per session, Bit says which ones a
         usage limit stopped and that c continues them."""
         # On which account each stopped: signed in with another since, it can go on (signed_in_again).
-        limited, current = accounts.limited_on(), self.signed_as
+        # Each one's account by its key (an email when kept before keys were, read as the same account).
+        limited, current = accounts.limited_on(), self.account
         kept = {}
         for session in self.sessions.values():
             if not at_limit(session):
                 continue
-            stopped_on = limited.get(session.session_id) or current
+            stopped_on = limited.get(session.session_id) or self.signed_as
             if stopped_on:
                 kept[session.session_id] = stopped_on
-            if stopped_on and current and stopped_on != current:
+            if stopped_on and current is not None and not accounts.same(stopped_on, current):
                 session.signed_in_again = True
         if self.sessions and self.acts:
             accounts.keep_limited(kept)

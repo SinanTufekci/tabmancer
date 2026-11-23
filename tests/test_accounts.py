@@ -25,9 +25,9 @@ def test_claude_codes_account_and_plan_come_from_its_settings(tmp_path, monkeypa
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     assert accounts.claude() is None  # nothing signed in (and the home folder's is never read instead)
     claude_signed_in(tmp_path)
-    assert accounts.claude() == Account("claude", "you@example.com", "Max 20x")
+    assert accounts.claude() == Account("claude", "you@example.com", "Max 20x", org_type="claude_max")
     claude_signed_in(tmp_path, "other@example.com", "claude_pro", "")  # /login with another account
-    assert accounts.claude() == Account("claude", "other@example.com", "Pro")
+    assert accounts.claude() == Account("claude", "other@example.com", "Pro", org_type="claude_pro")
     monkeypatch.delenv("CLAUDE_CONFIG_DIR")
     assert accounts.claude_file() == accounts.Path.home() / ".claude.json"
 
@@ -92,7 +92,7 @@ def test_the_demo_is_signed_in_as_no_one_real(tmp_path, monkeypatch):
 
     monkeypatch.setenv("TABMANCER_CONFIG_DIR", str(tmp_path / "config"))
     demo.prepare(tmp_path)
-    assert accounts.claude() == Account("claude", "you@example.com", "Max 5x")
+    assert accounts.claude() == Account("claude", "you@example.com", "Max 5x", org_type="claude_max")
     assert accounts.codex_account() is None
 
 
@@ -255,3 +255,134 @@ def test_where_each_account_opens_outlives_the_list_of_accounts_being_written_ag
     accounts.remember(Account("claude", "a@example.com", "Pro"), "2026-11-05T10:00:00")
     accounts.keep_limited({"s1": "a@example.com"})
     assert accounts.opens_in() == {"a@example.com": "edge:private", "*": "chrome:private"}
+
+
+# --- one email in more than one organisation: an account is its account id and organisation id -----
+ME, TEAM_A, MINE = "acc-1", "org-team-a", "org-personal"
+MINE_NAME = "s@example.com's Organization"
+
+
+def claude_in(folder, email="s@example.com", org=TEAM_A, account=ME, kind="claude_team", name="Example Labs"):
+    (folder / ".claude.json").write_text(json.dumps({"oauthAccount": {
+        "emailAddress": email, "accountUuid": account, "organizationUuid": org, "organizationName": name,
+        "organizationType": kind, "organizationRateLimitTier": "default_claude_max_5x"}}), encoding="utf-8")
+
+
+def test_an_account_is_told_apart_by_its_organisation_as_well(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    claude_in(tmp_path)
+    team = accounts.claude()
+    assert team == Account("claude", "s@example.com", "Team", ME, TEAM_A, "Example Labs", "claude_team")
+    assert team.key == f"{ME}:{TEAM_A}" and not team.personal and team.org_words() == "Example Labs"
+    claude_in(tmp_path, org=MINE, kind="claude_max", name=MINE_NAME)
+    mine = accounts.claude()
+    assert mine.plan == "Max 5x" and mine.personal and mine.org_words() == "personal"
+    assert mine.key != team.key and mine.email == team.email
+    assert Account("claude", "s@example.com", "Pro").key == "s@example.com"  # no ids known: its email
+
+
+def test_an_email_in_two_organisations_is_remembered_twice_and_shown_with_them():
+    from tabmancer.config import config_dir
+
+    team = Account("claude", "s@example.com", "Team", ME, TEAM_A, "Example Labs", "claude_team")
+    mine = Account("claude", "s@example.com", "Max 5x", ME, MINE, MINE_NAME, "claude_max")
+    other = Account("claude", "b@example.com", "Pro")
+    accounts.remember(team, "2026-11-23T09:00:00")
+    accounts.remember(other, "2026-11-23T09:30:00")
+    assert accounts.shared_emails() == set()
+    accounts.remember(mine, "2026-11-23T10:00:00")
+    assert [a for a, _ in accounts.known()] == [mine, other, team]
+    assert accounts.shared_emails() == {"s@example.com"}
+    accounts.remember(team, "2026-11-23T11:00:00")  # back to the Team: still one record each
+    assert [a.key for a, _ in accounts.known()] == [team.key, mine.key, "b@example.com"]
+    saved = json.loads((config_dir() / accounts.KNOWN).read_text(encoding="utf-8"))["claude"]
+    assert saved[0] == {"email": "s@example.com", "plan": "Team", "account_id": ME, "org_id": TEAM_A,
+                        "org_name": "Example Labs", "org_type": "claude_team", "seen": "2026-11-23T11:00:00"}
+    assert accounts.words(team, 60, org=True) == "s@example.com · Example Labs · Team"
+    assert accounts.words(team, 30, org=True) == "s@example.com · Example Labs"  # the plan goes first
+    assert accounts.words(mine, 60, org=True) == "s@example.com · personal · Max 5x"
+    assert accounts.words(team, 20, org=True) == "s@example.com"
+    assert accounts.words(team, 60) == "s@example.com · Team"  # an email in one organisation: as before
+
+
+def test_a_file_from_before_the_ids_takes_them_the_first_time_its_account_is_seen():
+    from tabmancer.config import write_json
+
+    write_json(accounts.KNOWN, {
+        "claude": [{"email": "s@example.com", "plan": "Team", "seen": "2026-11-20T09:00:00"},
+                   {"email": "b@example.com", "plan": "Pro", "seen": "2026-11-19T09:00:00"}],
+        "limited": {"s1": "s@example.com", "s2": "b@example.com"},
+        "opens_in": {"s@example.com": "chrome:Profile 3"}}, indent=2)
+    assert accounts.limited_on() == {"s1": "s@example.com", "s2": "b@example.com"}  # no ids known yet
+    team = Account("claude", "s@example.com", "Team", ME, TEAM_A, "Example Labs", "claude_team")
+    accounts.remember(team, "2026-11-23T09:00:00")
+    assert [a for a, _ in accounts.known()] == [team, Account("claude", "b@example.com", "Pro")]  # took its place
+    assert accounts.limited_on() == {"s1": team.key, "s2": "b@example.com"}  # the one account it can be
+    assert accounts.opens_in() == {"s@example.com": "chrome:Profile 3"}  # by email, untouched
+    mine = Account("claude", "s@example.com", "Pro", ME, MINE, MINE_NAME, "claude_pro")
+    accounts.remember(mine, "2026-11-23T10:00:00")
+    assert accounts.limited_on()["s1"] == "s@example.com"  # two accounts with that email now: not guessed
+    assert accounts.same("s@example.com", team) and accounts.same("s@example.com", mine)  # either: unknown
+    assert accounts.same(team.key, team) and not accounts.same(team.key, mine)
+    assert not accounts.same("b@example.com", team) and not accounts.same(team.key, None)
+
+
+async def test_the_same_email_in_another_organisation_frees_the_sessions_a_limit_stopped(fake_home, monkeypatch):
+    """A Team seat at its limit, then signed in to a personal plan with the same email: the stopped
+    sessions can go on, as with another email; and the top bar says which organisation."""
+    from test_limits import stopped_at, write
+
+    claude_in(fake_home)
+    write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(200, 44)) as pilot:
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if "lim" in app.sessions and accounts.limited_on():
+                break
+        assert app.signed_as == f"{ME}:{TEAM_A}" and accounts.limited_on() == {"lim": f"{ME}:{TEAM_A}"}
+        assert not app.sessions["lim"].signed_in_again
+        account = app.topbar.query_one("#account", Static)
+        assert str(account.render()) == "s@example.com · Team"  # one organisation seen: no name needed
+        claude_in(fake_home, org=MINE, kind="claude_max", name=MINE_NAME)
+        os.utime(fake_home / ".claude.json", (1, 2))
+        app.show_accounts()
+        await pilot.pause(0.1)
+        assert app.signed_as == f"{ME}:{MINE}" and app.sessions["lim"].signed_in_again
+        assert accounts.limited_on() == {"lim": f"{ME}:{TEAM_A}"}
+        app.show_accounts()  # the next look: the top bar names the organisation now both are known
+        await pilot.pause(0.1)
+        assert str(account.render()) == "s@example.com · personal · Max 5x"
+        assert any("Signed in as s@example.com · personal" in saying.text for saying in app.mascot.bubbles)
+
+
+async def test_a_lists_each_organisation_of_an_email_and_signs_in_with_that_email(fake_home, monkeypatch):
+    from textual.widgets import OptionList
+
+    from tabmancer import app as app_module
+    from tabmancer.accountsview import AccountsDialog
+
+    claude_in(fake_home)
+    accounts.remember(Account("claude", "s@example.com", "Pro", ME, MINE, MINE_NAME, "claude_pro"),
+                      "2026-11-22T10:00:00")
+    opened = []
+    monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("A")
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if isinstance(app.screen, AccountsDialog):
+                break
+        options = app.screen.query_one(OptionList)
+        ids = [options.get_option_at_index(i).id for i in range(options.option_count)]
+        assert ids == [f"{ME}:{TEAM_A}", f"{ME}:{MINE}", "+"] and options.get_option_at_index(0).disabled
+        said = [str(options.get_option_at_index(i).prompt) for i in range(2)]
+        assert "Example Labs" in said[0] and "personal" in said[1]
+        await pilot.press("enter")
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if opened:
+                break
+        assert opened[0].argv == ["claude", "auth", "login", "--email", "s@example.com"]
