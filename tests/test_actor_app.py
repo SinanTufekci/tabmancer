@@ -31,7 +31,7 @@ def another(monkeypatch):
 
 def stub_acting(monkeypatch) -> list[str]:
     done: list[str] = []
-    monkeypatch.setattr(usage, "record", lambda limits: done.append("usage.record"))
+    monkeypatch.setattr(usage, "record", lambda limits, **_: done.append("usage.record"))
     monkeypatch.setattr(accounts, "remember", lambda *a, **k: done.append("accounts.remember"))
     monkeypatch.setattr(accounts, "keep_limited", lambda kept: done.append("accounts.keep_limited"))
     monkeypatch.setattr(claudeupdate, "due", lambda *a, **k: not claudeupdate._elsewhere)

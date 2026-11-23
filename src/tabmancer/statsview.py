@@ -966,7 +966,7 @@ class StatsScreen(ModalScreen[None]):
         self.counting = True
         self.show_head()
         self.query_one("#overview-scroll").focus()
-        self.query_one("#limits-body", Static).update(render_limits(usage.history(7), self.accent))
+        self.query_one("#limits-body", Static).update(render_limits(usage.chart_history(7), self.accent))
         self.show_report()
         self.recount(self.period, first=True)  # what it was given at once, then with the kept days and ▲ ▼
 
@@ -994,7 +994,7 @@ class StatsScreen(ModalScreen[None]):
         self.show_head()
         for key, tab in parts.items():
             self.run_worker(self.fill(key, tab), group="fill")
-        self.query_one("#limits-body", Static).update(render_limits(usage.history(7), self.accent))
+        self.query_one("#limits-body", Static).update(render_limits(usage.chart_history(7), self.accent))
         self.show_report()
 
     def tab_parts(self, shown: Report, before: stats.Before | None, name: str) -> dict[str, list]:
@@ -1162,4 +1162,4 @@ def plain_text(report: Report, sessions: dict[str, Session], accent: str, before
     """Every tab one after another, for `tabmancer stats`."""
     return [in_text(overview_parts(report, sessions, accent, before), accent), Text(""),
             render_tokens(report, sessions, accent), Text(""), render_work(report, sessions, accent), Text(""),
-            render_tools(report, sessions, accent), Text(""), render_limits(usage.history(7), accent)]
+            render_tools(report, sessions, accent), Text(""), render_limits(usage.chart_history(7), accent)]

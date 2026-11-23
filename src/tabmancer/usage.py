@@ -172,15 +172,18 @@ class Reading:
     label: str
     percent: int
     resets: datetime | None
+    account: str = ""  # the Claude account's key (accounts.Account.key); "" in a line from before
 
 
-def record(limits: list[Limit], now: datetime | None = None) -> None:
+def record(limits: list[Limit], now: datetime | None = None, account: str = "") -> None:
     """Add a reading to the history. The dashboard reads the limits every five minutes;
-    each reading is kept, so the stats can chart them and see how fast they fill."""
+    each reading is kept, so the stats can chart them and see how fast they fill. account: the key
+    of the Claude account signed in while it was read (the limits are that account's)."""
     if not limits:
         return
     now = now or datetime.now()
     line = {"at": now.isoformat(timespec="seconds"),
+            **({"account": account} if account else {}),
             "limits": [{"label": lim.label, "percent": lim.percent,
                         "resets": lim.resets.isoformat(timespec="minutes") if lim.resets else None}
                        for lim in limits]}
@@ -215,15 +218,8 @@ def _raw_history() -> list[tuple[datetime, dict]]:
 SHARED_FOR = 15 * 60  # a team's monitor takes the dashboard's reading up to this old
 
 
-def latest(max_age: float = SHARED_FOR, now: datetime | None = None) -> list[Limit] | None:
-    """The newest reading in the history (the dashboard's, every five minutes) when it is at most
-    max_age seconds old, else None: a team's monitor shows it instead of asking claude again."""
-    raw = _raw_history()
-    if not raw:
-        return None
-    at, data = raw[-1]
-    if not 0 <= ((now or datetime.now()) - at).total_seconds() <= max_age:
-        return None
+def _limits(data: dict) -> list[Limit] | None:
+    """A history line's limits, or None when it cannot be read."""
     try:
         return [Limit(str(item["label"]), int(item["percent"]),
                       datetime.fromisoformat(item["resets"]) if item.get("resets") else None, "")
@@ -232,20 +228,93 @@ def latest(max_age: float = SHARED_FOR, now: datetime | None = None) -> list[Lim
         return None
 
 
-def history(days: float = 7, now: datetime | None = None) -> list[Reading]:
-    """Readings from the last `days` days, oldest first."""
+def latest(max_age: float = SHARED_FOR, now: datetime | None = None, account: str | None = None) -> list[Limit] | None:
+    """The newest reading in the history (the dashboard's, every five minutes) when it is at most
+    max_age seconds old, else None: a team's monitor shows it instead of asking claude again. With an
+    account (its key), only a reading of that account's, or one from before readings named theirs."""
+    raw = _raw_history()
+    if not raw:
+        return None
+    at, data = raw[-1]
+    if not 0 <= ((now or datetime.now()) - at).total_seconds() <= max_age:
+        return None
+    if account and data.get("account") not in (None, "", account):
+        return None  # another account's: signed in with this one since
+    return _limits(data)
+
+
+def history(days: float = 7, now: datetime | None = None, account: str | None = None) -> list[Reading]:
+    """Readings from the last `days` days, oldest first: with an account (its key), that account's
+    only (and none from before readings named theirs)."""
     since = (now or datetime.now()) - timedelta(days=days)
     readings = []
     for at, data in _raw_history():
-        if at < since:
+        whose = str(data.get("account") or "")
+        if at < since or (account is not None and whose != account):
             continue
         for item in data.get("limits") or []:
             try:
                 resets = datetime.fromisoformat(item["resets"]) if item.get("resets") else None
-                readings.append(Reading(at, str(item["label"]), int(item["percent"]), resets))
+                readings.append(Reading(at, str(item["label"]), int(item["percent"]), resets, whose))
             except (KeyError, TypeError, ValueError):
                 continue
     return sorted(readings, key=lambda r: r.at)
+
+
+def accounts_read(days: float = 7, now: datetime | None = None) -> set[str]:
+    """The accounts with readings in the last `days` days ("" for lines from before they were named)."""
+    since = (now or datetime.now()) - timedelta(days=days)
+    return {str(data.get("account") or "") for at, data in _raw_history() if at >= since}
+
+
+def chart_history(days: float = 7, now: datetime | None = None) -> list[Reading]:
+    """The readings the stats chart and forecast from: see chart_account."""
+    from . import accounts
+
+    signed_in = accounts.claude()
+    return history(days, now, chart_account(signed_in.key if signed_in else None, days, now))
+
+
+def chart_account(current: str | None, days: float = 7, now: datetime | None = None) -> str | None:
+    """Whose readings the stats chart: the account signed in now, once another account's readings are
+    in the history too (two accounts' limits on one line would mean nothing); else all of them."""
+    named = accounts_read(days, now) - {""}
+    return current if current and named - {current} else None
+
+
+def last_by_account() -> dict[str, tuple[datetime, list[Limit]]]:
+    """Each account's newest reading in the history (its key -> when, its Claude limits): what the
+    other account had left when you last used it. Lines from before readings named an account are
+    not in it."""
+    found: dict[str, tuple[datetime, list[Limit]]] = {}
+    for at, data in _raw_history():
+        limits = _limits(data) if data.get("account") else None
+        claude = [limit for limit in limits or [] if not limit.label.startswith("codex ")]
+        if claude:
+            found[str(data["account"])] = (at, claude)
+    return found
+
+
+def last_words(at: datetime, limits: list[Limit], now: datetime | None = None) -> str:
+    """An account's last reading in words: 'session 100% · opens 16:00 · week 40% · read 2h ago'.
+    A full limit whose reset time has passed is 'probably open': nothing has read it since."""
+    now = now or datetime.now()
+    parts = []
+    for limit in limits:
+        if limit.label not in ("session", "week") and limit.percent < 100:
+            continue  # a model's own week only when it is the one in the way
+        passed = limit.resets is not None and limit.resets <= now
+        if limit.percent >= 100 and passed:
+            parts.append(f"{limit.label} probably open")
+        elif passed:
+            parts.append(f"{limit.label} reset since")
+        elif limit.percent >= 100 and limit.resets is not None:
+            day = "" if limit.resets.date() == now.date() else f"{limit.resets:%a} "
+            parts.append(f"{limit.label} 100% · opens {day}{limit.resets:%H:%M}")
+        else:
+            parts.append(f"{limit.label} {limit.percent}%")
+    ago = until(now, at) if at <= now else ""
+    return " · ".join([*parts, f"read {ago} ago" if ago and ago != "0m" else "read just now"])
 
 
 @dataclass
@@ -270,12 +339,14 @@ class Forecast:
         return min(100, round(self.percent + self.per_hour * hours))
 
 
-def forecast(readings: list[Reading], label: str, now: datetime | None = None) -> Forecast | None:
-    """From the readings of one limit since its last reset, how fast it fills and when it is full.
+def forecast(readings: list[Reading], label: str, now: datetime | None = None,
+             account: str | None = None) -> Forecast | None:
+    """From the readings of one limit since its last reset, how fast it fills and when it is full:
+    with an account (its key), from that account's readings only.
 
     None with too few readings to tell (less than twenty minutes of them).
     """
-    mine = [r for r in readings if r.label == label]
+    mine = [r for r in readings if r.label == label and (account is None or r.account == account)]
     if not mine:
         return None
     latest = mine[-1]

@@ -55,7 +55,7 @@ async def test_the_monitor_is_all_there_is(fake_home, shop, size):
 
 async def test_the_monitor_does_nothing_by_itself(fake_home, shop, monkeypatch):
     done = []
-    monkeypatch.setattr(usage, "record", lambda limits: done.append("usage.record"))
+    monkeypatch.setattr(usage, "record", lambda limits, **_: done.append("usage.record"))
     monkeypatch.setattr(accounts, "remember", lambda *a, **k: done.append("accounts.remember"))
     monkeypatch.setattr(accounts, "keep_limited", lambda kept: done.append("accounts.keep_limited"))
     monkeypatch.setattr(claudeupdate, "due", lambda *a, **k: True)

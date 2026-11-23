@@ -18,7 +18,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
-from . import accounts
+from . import accounts, usage
 from .accounts import Account
 from .browsers import DEFAULT, Place, guess
 from .dialogs import frame, title
@@ -51,9 +51,11 @@ class AccountsDialog(ModalScreen[tuple[str, str] | None]):
     ]
 
     def __init__(self, current: Account | None, seen: list[tuple[Account, str]], stopped: int,
-                 places: list[Place] | None = None, picked: dict[str, str] | None = None) -> None:
+                 places: list[Place] | None = None, picked: dict[str, str] | None = None,
+                 last: dict[str, tuple[datetime, list[usage.Limit]]] | None = None) -> None:
         super().__init__()
         self.current, self.seen, self.stopped = current, seen, stopped
+        self.last = last or {}  # each account's last limits reading (usage.last_by_account), by key
         # Where each one's page can open; with nothing but the system's own way, no choice to show.
         self.places = places if places is not None and len(places) > 1 else []
         known = {place.id for place in self.places}
@@ -86,6 +88,8 @@ class AccountsDialog(ModalScreen[tuple[str, str] | None]):
                 ("  signed in now" if now else f"  {seen_words(when)}", GREEN if now else MUTED))
             if now:
                 return text  # nothing to sign in to: where it would open does not matter now
+            if account.key in self.last:  # how its limits stood when last read: room there, or not yet
+                text.append_text(Text.assemble(("\n    ", MUTED), (usage.last_words(*self.last[account.key]), MUTED)))
         if self.places:
             words = next((p.words for p in self.places if p.id == self.place[option_id]), "default browser")
             text.append_text(Text.assemble(("\n    opens in ", MUTED), (words, CYAN)))

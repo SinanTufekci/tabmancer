@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import usage
+from . import accounts, usage
 from .sessions import Session, folder_key
 from .tokens import Day, Report, Tokens, duration, human
 
@@ -120,6 +120,11 @@ def export(report: Report, sessions: dict[str, Session]) -> dict:
                  "minutes": round(row["seconds"] / 60), **_use(row["tokens"])}
                 for row in per_project(report, sessions)]
     readings = usage.history(report.days)
+    # Whose each reading is, without the account's ids (an export gets shared): "account 1", "account 2"
+    # in the order they first appear, and which one is signed in now.
+    labels = {key: f"account {n}" for n, key in enumerate(dict.fromkeys(r.account for r in readings if r.account), 1)}
+    signed_in = accounts.claude()
+    current = signed_in.key if signed_in else None
     return {
         "first_day": report.first.isoformat(), "days": report.days,
         "daily": daily_rows(report),
@@ -135,8 +140,15 @@ def export(report: Report, sessions: dict[str, Session]) -> dict:
         "hours": {day: [round(s / 60) for s in hours]
                   for day, hours in zip(("mon", "tue", "wed", "thu", "fri", "sat", "sun"), activity.slot_seconds)},
         "limits": [{"at": r.at.isoformat(timespec="seconds"), "label": r.label, "percent": r.percent,
-                    "resets": r.resets.isoformat(timespec="minutes") if r.resets else None} for r in readings],
+                    "resets": r.resets.isoformat(timespec="minutes") if r.resets else None,
+                    **_whose(r.account, labels, current)} for r in readings],
     }
+
+
+def _whose(key: str, labels: dict[str, str], current: str | None) -> dict:
+    if not key:
+        return {}  # read before readings named their account
+    return {"account": labels[key], **({"current": True} if key == current else {})}
 
 
 def to_csv(report: Report) -> str:

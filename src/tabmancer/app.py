@@ -3061,12 +3061,18 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     @work(thread=True, exclusive=True, group="usage")
     def refresh_usage(self) -> None:
+        before = accounts.claude()
         if not self.acts:  # a monitor: the dashboard's last reading, if it is fresh (one claude -p, not two)
-            shared = usage.latest()
+            shared = usage.latest(account=before.key if before else None)
             self.call_from_thread(self.show_usage, shared if shared is not None else usage.read_all())
             return  # recorded by the dashboard alone: a monitor's readings would count twice
         limits = usage.read_all()  # Codex's too, when it is turned on
-        usage.record(limits)  # the stats chart these readings and forecast from them
+        after = accounts.claude()
+        if (before.key if before else None) != (after.key if after else None):
+            # Signed in with another account while it was read: whose limits these are is not known.
+            # Dropped; the switch reads them again (signed_in_elsewhere).
+            return
+        usage.record(limits, account=after.key if after else "")  # the stats chart and forecast from them
         self.call_from_thread(self.show_usage, limits)
 
     def show_accounts(self) -> None:
@@ -3136,7 +3142,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.notify(f"Signing in{f' as {email}' if email else ''} in a new tab: finish it in {where}. "
                             "The top bar says when it is done.", timeout=8)
 
-        self.push_screen(AccountsDialog(current, seen, stopped, places, accounts.opens_in()), chosen)
+        self.push_screen(AccountsDialog(current, seen, stopped, places, accounts.opens_in(), usage.last_by_account()),
+                         chosen)
+
+    def other_accounts_words(self) -> list[str]:
+        """How the other Claude accounts' limits stood when last read, one line each, for where you
+        choose to go on: 'b@example.com: session 12% · week 40% · read 45m ago'. None read: nothing."""
+        last = usage.last_by_account()
+        shared = accounts.shared_emails()
+        return [f"{accounts.words(account, 60, org=account.email in shared)}: {usage.last_words(*last[account.key])}"
+                for account, _ in accounts.known() if account.key != self.signed_as and account.key in last]
 
     @work(thread=True, exclusive=True, group="updates")
     def check_updates(self) -> None:
@@ -3504,6 +3519,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         session_limit = next((limit for limit in self.limits if limit.label == "session"), None)
         plan = ("Your plan now: " + " · ".join(f"{limit.label} {limit.percent}%" for limit in self.limits
                                                  if limit.label in ("session", "week"))) if self.limits else ""
+        plan = "\n".join([*([plan] if plan else []), *self.other_accounts_words()])
         room = session_limit is not None and session_limit.percent < 95
 
         def chosen(picked: tuple[str, list[str]] | None) -> None:
