@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- **Teams that mix Claude Code and Antigravity.** Tag a member `@agy` and it runs on `agy` in a
+  tab of its own. A team with one talks over tabmancer's local bus (`tabmancer team send`,
+  `listen`, `who`), which works inside `agy`'s sandbox; a pure Claude Code team keeps Claude's own
+  messaging. agy sessions show in the list with their model, files and state, resume, and hand
+  over; an agy member gets a worktree of its own like a Claude one. See [docs/teams.md](docs/teams.md).
+- **agy models by quota: Neon, then Hydrogen.** Without a model named, an agy session or member
+  gets `gemini-4-neon-high`, then `gemini-4-hydrogen-high` once Neon is out of quota. With both
+  out, nothing opens and you are told until when, to name a model or wait. Claude and GPT models
+  never run through `agy`. `agy_models` in `config.json` sets another chain. The Model column
+  names them "Neon (High)".
+- **agy's quota in the top bar.** While an agy session or member is in the list, the top bar
+  shows how much of each model's quota is left, or until when it is out, and Bit says once when
+  every model of the chain is out. Read from what tabmancer last saw, so it never runs `agy`.
+- **Antigravity as the main CLI.** `tabmancer clis main agy` (or `m` in the `,` dialog) runs
+  tabmancer without a Claude account: new sessions and untagged members start `agy`, and the
+  router, summaries, handovers and the report run on the agy chain. The top bar puts agy's quota
+  first. See [docs/setup.md](docs/setup.md).
+- **The team bus as MCP tools.** `tabmancer mcp` serves `team_send`, `team_inbox`, `team_wait`,
+  `team_who`, `team_status` and, for the lead, `team_request`. `tabmancer agy-plugin install`
+  gives them to agy members, adds the five everyday tools to agy's allow list so it stops asking
+  (never `team_request`), and adds a Stop hook that hands a member the messages that came during
+  its turn and notes a model that ran out of quota.
+- **Codex members (not tested yet).** `@codex` runs a member on Codex, with the bus as MCP tools
+  and its messages put into its thread with `codex queue`. A Codex lead is told its tools and adds
+  or brings back members with `team_request`. This follows Codex's `--help`; it has not met a
+  real Codex session.
+- **`h` lets an agy or Codex session write its own handover**, resumed once in the background:
+  agy on the chain's model, Codex with `codex exec resume`. Handing over an open agy or Codex
+  member waits for it to exit.
+- **A team's monitor (`M`).** One team's members, messages and quota in a window of its own,
+  maximized on a second screen, only watching. In a window of 180x40 or more the preview stands
+  beside the list, with a team's cards in it (`V` puts it back under the list).
+- **One dashboard acts.** With several open, only one reads limits, sends desktop notes, updates
+  Claude Code and runs queued handovers; the others watch and take over when it closes.
 - **An account is an account in an organisation.** The same email in your personal plan and in a
   Team is two accounts: the top bar and `A` name the organisation when an email has more than
   one, and a seat in a Team is told apart by its ids, not its email. Accounts kept from before are
