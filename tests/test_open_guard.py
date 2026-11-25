@@ -5,7 +5,7 @@ import pytest
 from conftest import box_has_focus
 
 from tabmancer import app as app_module
-from tabmancer import store
+from tabmancer import openings, store
 from tabmancer.app import SessionPicker
 from tabmancer.launch import Launch, Mode
 
@@ -69,7 +69,7 @@ async def test_a_prompt_for_a_session_opened_elsewhere_meanwhile_is_not_sent(fak
 
 
 async def test_a_session_that_never_comes_up_is_named(fake_home, opened, monkeypatch):
-    monkeypatch.setattr(app_module, "CAME_UP_SECONDS", 0.5)
+    monkeypatch.setattr(openings, "CAME_UP_SECONDS", 0.5)
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
         await loaded(pilot, app)
@@ -84,7 +84,7 @@ async def test_a_session_that_never_comes_up_is_named(fake_home, opened, monkeyp
 
 
 async def test_a_session_that_comes_up_is_not_named(fake_home, opened, monkeypatch):
-    monkeypatch.setattr(app_module, "CAME_UP_SECONDS", 1.0)
+    monkeypatch.setattr(openings, "CAME_UP_SECONDS", 1.0)
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
         await loaded(pilot, app)

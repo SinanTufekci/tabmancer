@@ -24,8 +24,9 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Protocol
 
-from . import accounts, actions, actor, alerts, claudeupdate, store, toast, usage, wrapped
+from . import accounts, actions, actor, alerts, claudeupdate, openings, store, toast, usage, wrapped
 from .actions import Note
+from .launch import Launch
 from .openings import Openings
 from .sessions import Session
 from .viewmodel import at_limit
@@ -184,6 +185,39 @@ class Front(Protocol):
         """A newer tabmancer, kept in sight while the front is open (the top bar's name)."""
         ...
 
+    def open_in_dashboard_window(self, launches: list[Launch]) -> None:
+        """A monitor's tabs go to the dashboard's window (actions.window_for), looked for off the UI
+        thread; then Engine.open with that window, the update seen to (updated)."""
+        ...
+
+    def live_ids(self) -> set[str]:
+        """The sessions a Claude process has open right now, asked afresh (actions.open_elsewhere)."""
+        ...
+
+    def open_tabs(self, launches: list[Launch], window: str | None) -> list[str]:
+        """New tabs (launch.open_tabs), in that window when given; the commands left to run by hand."""
+        ...
+
+    def untick(self, ids: set[str]) -> None:
+        """These sessions are no longer ticked."""
+        ...
+
+    def poll_live(self, full: bool = True) -> None:
+        """A live poll now (a full one asks `claude agents --json`)."""
+        ...
+
+    def exit_with(self, leftover: list[str]) -> None:
+        """No terminal here opens tabs: close, the commands left to run by hand."""
+        ...
+
+    def later(self, seconds: float, then: Callable[[], None]) -> None:
+        """then, once, on the UI thread, in that many seconds."""
+        ...
+
+    def opened_rows(self, ids: set[str]) -> None:
+        """The sessions just opened: their rows (opening now), and the counts."""
+        ...
+
     def send_toast(self, title: str, body: str) -> None:
         """A desktop note (toast.show): only from the one that acts."""
         ...
@@ -201,6 +235,7 @@ class EngineState:
     notes: dict[str, tuple[str, str]] = field(default_factory=dict)  # messages for members: id -> (name, message)
     told_crowded: set[str] = field(default_factory=set)  # sessions already said to be crowded
     told_idle: bool = False  # Bit pointed out idle background sessions
+    background_live: dict[str, dict] = field(default_factory=dict)  # background sessions' jobs, the last full poll's
     openings: Openings = field(default_factory=Openings)  # opened from here: not again while starting, came up?
     full_poll_due: bool = False  # a full live poll is on its way: quick ones wait
     full_polls: int = 0  # full live polls come back so far
@@ -295,11 +330,15 @@ class Engine:
             self.state.told_idle = True
             self.front.show_bit(event.bit)
 
-    def live(self, updates: dict[str, Session], full: bool, resting: set[str]) -> None:
+    def live(self, updates: dict[str, Session], full: bool, resting: set[str],
+             background: dict[str, dict] | None = None) -> None:
         """A live poll came back (updates: the sessions it brought up to date; resting: the team
-        members that wait for their lead, not for you): what turned is said, a queued handover that
-        finished is handed over, the list takes them, waiting messages go in."""
+        members that wait for their lead, not for you; background: the background sessions' jobs it
+        kept, store.live_entries): what turned is said, a queued handover that finished is handed
+        over, the list takes them, waiting messages go in."""
         state, front = self.state, self.front
+        if background is not None:
+            state.background_live = background
         if full:
             state.full_poll_due = False
             state.full_polls += 1
@@ -356,6 +395,43 @@ class Engine:
             self.front.put_on_clipboard(told.clipboard)
             self.front.go_to_tab(told.go_to)
         self.front.say_note(told)
+
+    def open(self, launches: list[Launch], window: str | None = None, updated: bool = False) -> None:
+        """Open sessions in new tabs beside the dashboard, which stays open. One that a Claude process
+        has open right now, in another tab or in the background, is not opened again
+        (actions.open_launches). While claude update runs, they open once it is done; one due now is
+        started first (update_due), never run on the UI thread. window: the terminal window they go to
+        (launch.open_tabs); a monitor finds the dashboard's first (Front.open_in_dashboard_window).
+        updated: the update was seen to first. What opened is kept (openings.Openings.took), and a
+        while later the ones that never came up are named (came_up_check)."""
+        state, front = self.state, self.front
+        if front.monitoring() and window is None:
+            front.open_in_dashboard_window(launches)
+            return
+        if not updated:
+            self.update_due(launch.cli for launch in launches)
+            if self.after_update("the session opens" if len(launches) == 1 else f"the {len(launches)} sessions open",
+                                 lambda: self.open(launches, window, True)):
+                return
+        opened = actions.open_launches(launches, front.live_ids, lambda rest: front.open_tabs(rest, window))
+        if opened.skipped:
+            front.say_note(Note(opened.skipped_words, "warning", 10))
+            front.untick(opened.skipped_ids)
+            front.poll_live()  # show them as open
+        if opened.error:
+            front.say_note(Note(opened.error, "error", 15))
+            return
+        if opened.leftover:
+            front.exit_with(opened.leftover)  # no terminal that can open tabs: the commands, to run by hand
+            return
+        if not opened.opened:
+            return
+        resumed = state.openings.took(opened, look_later=False)  # looked for on a timer of the front's
+        front.later(openings.CAME_UP_SECONDS, lambda: self.came_up_check(resumed))
+        front.untick(opened.opened_ids)
+        front.opened_rows(opened.opened_ids)
+        front.say_note(Note(opened.words, seconds=4))
+        front.later(5, lambda: front.poll_live(full=True))  # show them as open once started
 
     def came_up_check(self, ids: set[str]) -> None:
         """A while after they were opened: which of these never showed up open (Claude Code would not

@@ -191,7 +191,6 @@ NAMELESS = ("This dashboard could not read its own start time, so it only shows 
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
 FLASH_SECONDS = 1.6  # how long a row stays lit after its state changes
-CAME_UP_SECONDS = openings.CAME_UP_SECONDS  # by then one opened from here shows open, or it is said that not
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
 COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon starts it (cold_note)
 KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
@@ -702,7 +701,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.model_shown = True  # the Model column has room; on a narrow screen the title has it
         self.frame = 0  # spinner frame
         self.polls = 0
-        self.background_live: dict[str, dict] = {}  # from the last full poll
         self.token_report: tokens.Report | None = None
         self.kept_back = False  # the days a 45-day count keeps in the history: counted once (refresh_tokens)
         self.last_row = 0  # where the cursor was, so it steps over a heading the same way
@@ -951,12 +949,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if any(launch.cli == "claude" for launch in launches):
             claudeupdate.before_opening(lambda words: self.call_from_thread(self.notify, words, timeout=8))
         before = focus.foreground() if unasked else 0  # after the update: you may have moved on meanwhile
-        if self.tabs_window:
-            window = self.tabs_window
-        elif self.watch is None:
-            window = DASHBOARD_WINDOW if unasked and teamwatch.monitor_open() else "0"
-        else:
-            window = "0" if not unasked and focus.focus_tab(self.TITLE) else "new"
+        window = actions.window_for(self.tabs_window, self.watch is not None, unasked, teamwatch.monitor_open,
+                                    lambda: focus.focus_tab(self.TITLE), DASHBOARD_WINDOW)
         self.call_from_thread(self.open_sessions, launches, window, True)
         if before:
             focus.give_back(before)
@@ -3021,18 +3015,19 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     @work(thread=True, exclusive=True, group="live")
     def read_live(self, full: bool) -> None:
         known = dict(self.sessions)
-        live, self.background_live = store.live_entries(full, self.background_live)
+        live, kept = store.live_entries(full, self.background_live)
         if full:
             idle = sum(bool(e.get("pid")) and background.state_of(e).lower() in background.IDLE
-                       for e in self.background_live.values())
+                       for e in kept.values())
             if not self.told_idle:
                 self.call_from_thread(self.engine.idle, idle)
         updates = store.fresh_sessions(known, live, full)
-        self.call_from_thread(self.apply_live_updates, updates, full)
+        self.call_from_thread(self.apply_live_updates, updates, full, kept)  # kept: on the UI thread
 
-    def apply_live_updates(self, updates: dict[str, Session], full: bool = False) -> None:
+    def apply_live_updates(self, updates: dict[str, Session], full: bool = False,
+                           kept: dict[str, dict] | None = None) -> None:
         self.reread_marks()
-        self.engine.live(updates, full, self.resting_members())
+        self.engine.live(updates, full, self.resting_members(), kept)
 
     def monitoring(self) -> bool:
         return self.watch is not None
@@ -3187,66 +3182,46 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if isinstance(self.focused, Input):  # Enter in the filter box only confirms it
             self.table.focus()
             return
-        chosen = [s for s in self.sessions.values() if s.session_id in self.selected]
-        if not chosen:
-            session = self.current()
-            team = self.team_at() if session is None else None
-            if team is not None:  # a team's row: its view, open or closed (e unfolds it, s starts it)
-                self.push_screen(TeamScreen(team.team, self.accent()))
-                return
-            if session is None:
-                self.notify("Select sessions with Space first.", severity="warning")
-                return
-            if session.status is Status.RUNNING:  # already open: go there
-                self.go_to_tab(session)
-                return
-            chosen = [session]
-        chosen = self.openings.choose(chosen)  # not the ones opened a moment ago, still starting
+        ticked = [s for s in self.sessions.values() if s.session_id in self.selected]
+        session = self.current() if not ticked else None
+        enter = actions.enter_choice(ticked, session, self.team_at() if not ticked and session is None else None)
+        if enter.team is not None:  # a team's row: its view, open or closed (e unfolds it, s starts it)
+            self.push_screen(TeamScreen(enter.team.team, self.accent()))
+            return
+        if enter.note is not None:
+            self.say_note(enter.note)
+            return
+        if enter.tab is not None:
+            self.go_to_tab(enter.tab)
+            return
+        chosen = self.openings.choose(enter.open or [])  # not the ones opened a moment ago, still starting
         if not chosen:
             self.say_note(openings.ALREADY)
             return
         self.open_sessions(self.openings.launches(chosen, self.mode, self.background_live))
 
     def open_sessions(self, launches: list[Launch], window: str | None = None, updated: bool = False) -> None:
-        """Open sessions in new tabs beside the dashboard, which stays open. One that a Claude
-        process has open right now, in another tab or in the background, is not opened again.
-        While claude update runs (claudeupdate.py), they open once it is done; one due now (the day
-        turned while the dashboard was open) is started in its thread first, never run here on
-        the screen's. window: the terminal window they go to (launch.open_tabs); a monitor finds
-        the dashboard's first. updated: the update was seen to first, in a worker (open_in_dashboard_window)."""
-        if self.watch is not None and window is None:
-            self.open_in_dashboard_window(launches)
-            return
-        if not updated:
-            self.engine.update_due(launch.cli for launch in launches)
-            if self.after_update("the session opens" if len(launches) == 1
-                                 else f"the {len(launches)} sessions open",
-                                 lambda: self.open_sessions(launches, window, True)):
-                return
-        opened = actions.open_launches(
-            launches, self.live_ids, lambda rest: open_tabs(rest) if window is None else open_tabs(rest, window))
-        if opened.skipped:
-            self.notify(opened.skipped_words, severity="warning", timeout=10)
-            self.selected -= opened.skipped_ids
-            self.poll_live()  # show them as open
-        if opened.error:
-            self.notify(opened.error, severity="error", timeout=15)
-            return
-        if opened.leftover:
-            # No terminal that can open tabs: close, and leave the commands to run by hand.
-            self.exit(opened.leftover)
-            return
-        if not opened.opened:
-            return
-        ids = opened.opened_ids
-        resumed = self.openings.took(opened, look_later=False)  # looked for on this front's own timer
-        self.set_timer(CAME_UP_SECONDS, lambda: self.check_came_up(resumed))
+        """Open sessions in new tabs beside the dashboard, which stays open (Engine.open)."""
+        self.engine.open(launches, window, updated)
+
+    def open_tabs(self, launches: list[Launch], window: str | None) -> list[str]:
+        """New tabs (launch.open_tabs), in that window when given."""
+        return open_tabs(launches) if window is None else open_tabs(launches, window)
+
+    def untick(self, ids: set[str]) -> None:
         self.selected -= ids
+
+    def exit_with(self, leftover: list[str]) -> None:
+        """No terminal that can open tabs: close, and leave the commands to run by hand."""
+        self.exit(leftover)
+
+    def later(self, seconds: float, then: Callable[[], None]) -> None:
+        self.set_timer(seconds, then)
+
+    def opened_rows(self, ids: set[str]) -> None:
         for sid in ids & self.sessions.keys():
             self.update_row(self.sessions[sid])
         self.update_status()
-        self.notify(opened.words, timeout=4)
-        self.set_timer(5, lambda: self.poll_live(full=True))  # show them as open once started
 
     def check_came_up(self, ids: set[str]) -> None:
         """Say which of the sessions opened a while ago never showed up open: Claude Code would not

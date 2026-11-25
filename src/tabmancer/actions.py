@@ -347,7 +347,52 @@ def go_to_tab(session: Session) -> Note:
                 "has been renamed.", "warning", 8)
 
 
-NONE_WAITING = Note("No session is waiting for you.", seconds=3)
+PICK_FIRST = Note("Select sessions with Space first.", "warning")
+
+
+@dataclass
+class EnterChoice:
+    """What Enter on the list does: open these sessions (open); bring an open one's tab to the front
+    (tab); show a team (team: the front end's own, its row's); or only say why nothing happens (note)."""
+
+    open: list[Session] | None = None
+    tab: Session | None = None
+    team: object | None = None
+    note: Note | None = None
+
+
+def enter_choice(ticked: list[Session], current: Session | None, team: object | None = None) -> EnterChoice:
+    """Enter: the ticked sessions, else the one the cursor is on (current); on an open one, its tab; on a
+    team's row (team, when no session is under the cursor), the team. Which of them are still opening
+    is the front end's to leave out (openings.Openings.choose)."""
+    if ticked:
+        return EnterChoice(open=list(ticked))
+    if current is None:
+        return EnterChoice(team=team) if team is not None else EnterChoice(note=PICK_FIRST)
+    if current.status is Status.RUNNING:  # already open: go there
+        return EnterChoice(tab=current)
+    return EnterChoice(open=[current])
+
+
+def window_for(tabs_window: str | None, watching: bool, unasked: bool, monitor_open: Callable[[], bool],
+               bring_dashboard: Callable[[], bool], dashboard_window: str) -> str:
+    """The Windows Terminal window tabs belong in when they go to the dashboard's, not the one used last:
+    a monitor's (its own window would be "0"), and the dashboard's unasked ones. By the window's name
+    when it is known (tabs_window). Else, asked in a monitor (watching), the dashboard's tab brought to
+    the front first (bring_dashboard: True when found), which makes its window "0"; unasked, never: keys
+    typed meanwhile elsewhere would land in the dashboard. With no name and no tab found: the
+    dashboard's go to "0", a monitor's to a new window; but the dashboard's unasked ones go to the
+    window named for them (dashboard_window) when a team's monitor is open (monitor_open), as that may
+    be the one used last. monitor_open and bring_dashboard are asked only when it comes to them, in
+    that order: bringing a tab forward is felt."""
+    if tabs_window:
+        return tabs_window
+    if not watching:
+        return dashboard_window if unasked and monitor_open() else "0"
+    return "0" if not unasked and bring_dashboard() else "new"
+
+
+NONE_WAITING =Note("No session is waiting for you.", seconds=3)
 
 
 @dataclass
