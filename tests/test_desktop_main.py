@@ -407,11 +407,11 @@ def test_a_greyed_command_says_why_and_does_nothing(qapp, window):
     read(qapp, shown)
     shown.open_commands()
     bar = shown.command_bar
-    QTest.keyClicks(bar.line, "backgro")
-    assert bar.picked().key == "B" and not bar.picked().enabled  # Background sessions first, greyed here
+    QTest.keyClicks(bar.line, "wrapped")
+    assert bar.picked().key == "W" and not bar.picked().enabled  # Claude Code Wrapped first, greyed here
     assert bar.note.text() == main.ELSEWHERE
     ran = []
-    shown.actions_by_key["B"].triggered.connect(lambda *_: ran.append(1))
+    shown.actions_by_key["W"].triggered.connect(lambda *_: ran.append(1))
     QTest.keyClick(bar.line, Qt.Key.Key_Return)
     assert bar.isVisible() and ran == []
     QTest.keyClicks(bar.line, "zzqqx")

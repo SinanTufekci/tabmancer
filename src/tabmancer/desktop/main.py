@@ -17,7 +17,8 @@ does as the terminal's keys do. Enter opens the ticked sessions, or the picked o
 brings an open one's tab to the front (a team's card: its Team panel tab); j goes to the next open
 session waiting for you, and m changes how the picked one opens (opening.py, each on a thread of its
 own); p opens a closed one with a prompt, in a new tab or in the background, and r renames one (naming.py,
-in prompting.py's and rename.py's words). M opens the picked team's monitor (a member's: its team's) in a window of its own (monitor.py), on
+in prompting.py's and rename.py's words); B lists the background sessions, to attach to, stop, remove
+and clean up (backgrounds.py, in backgroundwords.py's). M opens the picked team's monitor (a member's: its team's) in a window of its own (monitor.py), on
 another screen when there is one; open already, here or from the terminal, it comes to the front. Space
 and a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the rail, the project; on a
 team with members open, x twice closes their tabs, as on /exit), X shows the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and
@@ -72,6 +73,7 @@ from PySide6.QtWidgets import (
 from .. import (
     __version__,
     actions,
+    backgroundwords,
     bitart,
     clis,
     commands,
@@ -84,11 +86,13 @@ from .. import (
     teams,
 )
 from .. import viewmodel as VM
+from ..bgjobs import Job
 from ..keys import KEYS
 from ..palette import mix
 from ..sessions import Exit, Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
 from . import commandbar, frame, look, monitor, teamgraph
+from .backgrounds import OPEN, BackgroundDialog, Jobs
 from .board import Board
 from .closing import CloseDialog
 from .drawer import BUTTONS, ROOM, Drawer
@@ -109,7 +113,7 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p"}
+        "j", "M", "h", "r", "p", "B"}
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
@@ -253,6 +257,9 @@ class MainWindow(QMainWindow):
         self.renamer.done.connect(self.renamed)
         self.renamer.failed.connect(self.rename_failed)
         self.naming: Session | None = None  # r: the session its dialog names
+        self.jobs = Jobs(self)  # B: the background sessions read, and stopped or removed, on threads
+        self.jobs.read.connect(self.background_read)
+        self.listing_background = False  # B pressed, its list not read yet
         self.monitors: dict[str, MonitorWindow] = {}  # M: each team's monitor opened from here
         self.popup: QMenu | None = None  # a card's or a row's menu, while it is shown
         self.leaving = False  # closing anyway: the handovers queued here dropped (CloseDialog), or the app quit
@@ -428,7 +435,8 @@ class MainWindow(QMainWindow):
                  "Space": self.toggle, "a": self.toggle_all, "e": self.expand, "E": self.fold_teams, "x": self.hide,
                  "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
                  "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key,
-                 "h": self.handover_key, "r": self.rename_key, "p": self.prompt_key}
+                 "h": self.handover_key, "r": self.rename_key, "p": self.prompt_key,
+                 "B": self.background_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -503,6 +511,7 @@ class MainWindow(QMainWindow):
                 thread.join(seconds)
         self.opener.settle(seconds)
         self.renamer.settle(seconds)
+        self.jobs.settle(seconds)
         self.front.settle(seconds)
         for shown in self.monitors.values():
             shown.settle(seconds)  # a read of its own (Python's: there after the window is deleted too)
@@ -1286,6 +1295,29 @@ class MainWindow(QMainWindow):
             self.poll()
         elif sent.outcome in ("opened", "started"):
             self.after_open.start(AFTER_OPEN_MS)
+
+    def background_key(self) -> None:
+        """B: the background sessions listed (BackgroundDialog), as the terminal dashboard's B lists them, read
+        on a thread first (`claude agents --json`)."""
+        if not self.listing_background:
+            self.listing_background = True
+            self.jobs.fetch(OPEN)
+
+    def background_read(self, why: str, found: list[Job] | None) -> None:
+        if why != OPEN:
+            return  # the list shown, reading itself again
+        self.listing_background = False
+        if found is None:
+            self.say_note(backgroundwords.NO_ANSWER, 8, "warning")
+            return
+        listed = BackgroundDialog(self, found, self.jobs, self.accent)
+        listed.attach.connect(self.attach_job)
+        listed.changed.connect(self.poll)  # stopped or removed: shown so at once
+        listed.open()
+
+    def attach_job(self, job: Job) -> None:
+        """Enter on a background session: a tab attached to it (`claude attach`), opened as any other."""
+        self.engine.open([backgroundwords.attach_launch(job)])
 
     def next_waiting(self) -> None:
         """j: the next open session that needs you, else the next one waiting for you: picked in the list
