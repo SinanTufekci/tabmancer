@@ -368,7 +368,10 @@ class Engine:
     def due(self) -> None:
         """Continue the sessions whose limit has lifted (the one that acts, on its timer): a closed one in
         a new tab, an open one with the prompt typed into its own tab, which is never closed. One gone on
-        by hand meanwhile is left alone."""
+        by hand meanwhile is left alone. Only the one that acts: one that watches continues nothing,
+        whatever runs this."""
+        if not self.state.acts:
+            return
         due = actions.due(self.state.armed, self.state.sessions, self.clock())
         if not due.gone:
             return

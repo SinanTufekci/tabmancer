@@ -426,3 +426,10 @@ async def test_the_dashboards_timers_are_the_schedule(fake_home, monkeypatch):
                     assert (("set_timer", every.first, every.name) in started) is runs, every
             assert len(app.actor_timers) == (sum(1 + (e.first is not None) for e in engine.SCHEDULE if e.acting)
                                              if acts else 0)
+
+
+def test_one_that_watches_continues_nothing_whatever_runs_due(kept):
+    front = Front()
+    eng = made(front, sessions={"l1": lim("l1")}, armed={"l1": LIFTS - timedelta(hours=2)})
+    eng.due()
+    assert front.calls == [] and eng.state.armed == {"l1": LIFTS - timedelta(hours=2)} and kept["armed"] == []
