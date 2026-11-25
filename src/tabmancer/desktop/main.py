@@ -4,7 +4,9 @@ The terminal dashboard in its black, with room: monospace, the accent, panels yo
 float and close (Panels puts them back), menus that name every key of the dashboard, and the key
 bar under the window. The top bar says what the terminal dashboard's says, in the same words
 (viewmodel): the sessions listed, who each CLI is signed in as, the plan limits and agy's chain,
-a live dot and the clock.
+a live dot and the clock. The Sessions panel is the Board (board.py): the sessions as cards in
+lanes by what they want from you, the cards' rules (a switch under the top bar picks the view; the
+table comes later).
 
 It only watches, as a second dashboard does: the dashboard's store (store.DashboardStore) is read
 on a thread of its own every two seconds, and nothing here claims the actor lock, records a plan
@@ -27,11 +29,13 @@ from PySide6.QtGui import QAction
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QDockWidget,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenuBar,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -42,7 +46,8 @@ from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
 from ..store import DashboardStore, DashSnapshot
-from . import frame, look
+from . import frame, look, teamgraph
+from .board import Board
 from .frame import KeysDialog, made_up_world
 from .monitor import sequences, short
 from .teampanel import TeamPanel
@@ -62,15 +67,14 @@ KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), 
 # The top bar's tones (viewmodel.usage_parts, account_parts) as colours.
 TONES = {"muted": look.MUTED, "text": look.TEXT, "empty": "#2a2a2a", "ok": look.GREEN, "low": look.AMBER,
          "out": look.RED}
-PANELS = ("Sessions", "Preview", "Projects", "Cards", "Bit", "Team")
+PANELS = ("Sessions", "Preview", "Projects", "Bit", "Team")
 SOON = {
-    "Sessions": "The sessions, their teams and members",
     "Preview": "The highlighted session: how it stands, what it said last",
-    "Projects": "The projects, with where each stands in git",
-    "Cards": "Open now · need you · to continue · this week",
-    "Bit": "",
-    "Team": "",
+    "Projects": "The projects, with where each stands in git, and the week's tokens",
 }
+VIEWS = (("board", "Board"), ("table", "Table"), ("live", "Live"))  # what the Sessions panel shows
+SHOWN_HERE = {"board"}
+BOARD_HINT = "↑ ↓ ← → pick a card · a click on DONE opens it"
 
 
 def parts_html(parts: list[tuple[str, str]]) -> str:
@@ -126,6 +130,7 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.tick()
+        self.board.setFocus()  # the arrows pick a card from the start
         if start:
             self.ticker.start(TICK_MS)
             self.timer.start(poll_ms)
@@ -141,20 +146,19 @@ class MainWindow(QMainWindow):
         self.setDockNestingEnabled(True)
         self.setMenuWidget(self.build_top())  # the menus, and the top bar under them
         self.docks = {name: self.dock(name) for name in PANELS}
-        # The cards over the projects and the list, Bit under the list, the preview beside them all:
-        # in the side areas, which run the window's height (the top one would take what is left over).
+        # The projects beside the board, Bit under it, the preview beside them all: in the side areas,
+        # which run the window's height (the top one would take what is left over).
         docks = self.docks
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, docks["Cards"])
-        self.splitDockWidget(docks["Cards"], docks["Projects"], Qt.Orientation.Vertical)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, docks["Projects"])
         self.splitDockWidget(docks["Projects"], docks["Sessions"], Qt.Orientation.Horizontal)
         self.splitDockWidget(docks["Sessions"], docks["Bit"], Qt.Orientation.Vertical)
         self.tabifyDockWidget(docks["Sessions"], docks["Team"])  # a tab beside the list: T, or its tab
         docks["Sessions"].raise_()
         docks["Team"].visibilityChanged.connect(self.team_panel.wake)  # behind a tab: its picture rests
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, docks["Preview"])
-        self.resizeDocks([docks["Projects"], docks["Sessions"], docks["Preview"]], [230, 760, 500],
+        self.resizeDocks([docks["Projects"], docks["Sessions"], docks["Preview"]], [210, 900, 390],
                          Qt.Orientation.Horizontal)
-        self.resizeDocks([docks["Cards"], docks["Sessions"], docks["Bit"]], [120, 560, 110], Qt.Orientation.Vertical)
+        self.resizeDocks([docks["Sessions"], docks["Bit"]], [700, 100], Qt.Orientation.Vertical)
         self.build_menus()
         self.keybar = KeyBar(KEY_BAR, "greyed: in the terminal dashboard for now (tabmancer)",
                              dim={key for key, _ in KEY_BAR if key not in HERE})
@@ -186,7 +190,36 @@ class MainWindow(QMainWindow):
         for part in (self.pills, self.account, self.usage, self.live, self.clock):
             row.addWidget(part)
         column.addWidget(self.topbar)
+        column.addWidget(self.build_toolbar())
         return holder
+
+    def build_toolbar(self) -> QWidget:
+        """Under the top bar: the switch of what the Sessions panel shows (the board; the table and the
+        live view are the terminal dashboard's for now)."""
+        bar = QWidget()
+        bar.setObjectName("toolbar")
+        bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        bar.setStyleSheet(f"QWidget#toolbar {{ background:{look.SUNKEN}; }}")  # its own: the buttons keep theirs
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(12, 5, 12, 5)
+        row.setSpacing(0)
+        self.hint = text_label(BOARD_HINT, look.DIM, 9)
+        row.addWidget(self.hint)
+        row.addStretch(1)
+        self.views = QButtonGroup(self)
+        for name, words in VIEWS:
+            button = QPushButton(words)
+            button.setObjectName("view")
+            button.setFont(look.font(9))
+            button.setCheckable(True)
+            button.setChecked(name == "board")
+            button.setEnabled(name in SHOWN_HERE)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setToolTip("The sessions as cards, by what they want from you" if name in SHOWN_HERE
+                              else f"{words}: {ELSEWHERE.lower()}")
+            self.views.addButton(button)
+            row.addWidget(button)
+        return bar
 
     def rich_label(self) -> QLabel:
         made = text_label("", look.TEXT, 9.5)
@@ -208,6 +241,10 @@ class MainWindow(QMainWindow):
             self.team_panel = TeamPanel(self.accent)
             box.setContentsMargins(0, 0, 0, 0)
             box.addWidget(self.team_panel)
+        elif title == "Sessions":
+            self.board = Board(self.accent)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.addWidget(self.board)
         elif title == "Bit":
             line = QHBoxLayout()
             self.bit = QLabel()
@@ -231,8 +268,10 @@ class MainWindow(QMainWindow):
         bar.setFont(look.font(9.5))
         self.actions_by_key: dict[str, QAction] = {}
         doing = {"?": self.show_keys, "q": self.close, "T": self.show_teams}
+        self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
+            self.menus_by_group[group] = menu
             menu.setToolTipsVisible(True)
             for key, _action, words in keys:
                 made = QAction(short(words), self)
@@ -248,6 +287,10 @@ class MainWindow(QMainWindow):
                 menu.addAction(made)
                 self.addAction(made)  # the key works with the menu closed
                 self.actions_by_key[key] = made
+        views = self.menus_by_group["Views"]
+        views.addSeparator()
+        self.motion = teamgraph.MotionMenu(self, views.addMenu("Reduce motion"))
+        self.motion.changed.connect(self.motion_changed)
         panels = bar.addMenu("&Panels")
         for dock in self.docks.values():
             panels.addAction(dock.toggleViewAction())
@@ -298,6 +341,7 @@ class MainWindow(QMainWindow):
         self.snap, self.agy_first = snap, first
         self.show_top()
         self.show_bit()
+        self.board.set(snap)
         self.team_panel.set(snap)
 
     # --- showing ----------------------------------------------------------------------------------
@@ -354,6 +398,10 @@ class MainWindow(QMainWindow):
 
     def show_keys(self) -> None:
         KeysDialog(self, "Keys · tabmancer", KEYS, HERE, ELSEWHERE).show()
+
+    def motion_changed(self) -> None:
+        """View ▸ Reduce motion picked: the Team panel moves as it says now."""
+        self.team_panel.show_team()
 
     def show_teams(self) -> None:
         """T: the Team panel to the front (back where it was, if it was closed), its tabs to pick with."""

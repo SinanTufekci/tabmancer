@@ -20,7 +20,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
@@ -300,8 +300,8 @@ class MonitorWindow(QMainWindow):
             menu.setToolTipsVisible(True)
             for key, _action, words in keys:
                 if key == "← →":
-                    made = [self.action(menu, "Next member", [QKeySequence("Right")], lambda: self.pick(1), words),
-                            self.action(menu, "Previous member", [QKeySequence("Left")], lambda: self.pick(-1), words)]
+                    made = [self.action(menu, "Next member", [QKeySequence("Right")], self.pick_next, words),
+                            self.action(menu, "Previous member", [QKeySequence("Left")], self.pick_previous, words)]
                 else:
                     made = [self.action(menu, short(words), sequences(key), doing.get(key), words)]
                 for action in made:
@@ -318,17 +318,9 @@ class MonitorWindow(QMainWindow):
         reset.triggered.connect(self.reset_layout)
         view.addAction(reset)
         view.addSeparator()
-        moves = view.addMenu("Reduce motion")
-        self.motions = QActionGroup(self)
-        for mode, words in teamgraph.MOTIONS.items():
-            made = QAction(words, self)
-            made.setCheckable(True)
-            made.setData(mode)
-            made.triggered.connect(lambda _checked=False, mode=mode: self.pick_motion(mode))
-            self.motions.addAction(made)
-            moves.addAction(made)
-        moves.aboutToShow.connect(self.show_motions)
-        self.show_motions()
+        self.motion = teamgraph.MotionMenu(self, view.addMenu("Reduce motion"))
+        self.motion.changed.connect(self.motion_changed)
+        self.motions = self.motion.group
         helping = bar.addMenu("&Help")
         keys = QAction("All keys…", self)
         keys.triggered.connect(self.show_keys)
@@ -550,6 +542,12 @@ class MonitorWindow(QMainWindow):
     def members(self) -> list:
         return list(self.snap.view.members) if self.snap is not None else []
 
+    def pick_next(self) -> None:  # methods, not lambdas: a lambda holds the window, closed yet alive
+        self.pick(1)
+
+    def pick_previous(self) -> None:
+        self.pick(-1)
+
     def pick(self, step: int) -> None:
         members = self.members()
         if not members:
@@ -611,22 +609,10 @@ class MonitorWindow(QMainWindow):
         if self.member_popup is menu:  # not a newer one
             self.member_popup = None
 
-    def show_motions(self) -> None:
-        """View ▸ Reduce motion: the one picked ticked, and what Bit's calm does to full."""
-        saved = teamgraph.saved_motion()
-        for action in self.motions.actions():
-            mode = str(action.data())
-            action.setChecked(mode == saved)
-            words = teamgraph.MOTIONS[mode]
-            if mode == "full" and saved == "full" and teamgraph.motion() == "calm":
-                words += " (calm while Bit is calm: b in the dashboard)"
-            action.setText(words)
-
-    def pick_motion(self, mode: str) -> None:
-        teamgraph.save_motion(mode)
+    def motion_changed(self) -> None:
+        """View ▸ Reduce motion picked: the picture moves as it says now."""
         self.graph.set_motion(teamgraph.motion())
         self.lanes.set_motion(teamgraph.motion())
-        self.show_motions()
 
     def go_to_tab(self) -> None:
         """Enter: the picked member's tab to the front, where it is open in one."""

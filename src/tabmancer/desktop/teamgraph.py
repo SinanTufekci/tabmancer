@@ -28,8 +28,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
     QColor,
     QFontMetricsF,
     QPainter,
@@ -40,7 +42,7 @@ from PySide6.QtGui import (
     QPolygonF,
     QWindow,
 )
-from PySide6.QtWidgets import QToolTip, QWidget
+from PySide6.QtWidgets import QMenu, QToolTip, QWidget
 
 from .. import teams
 from .. import viewmodel as VM
@@ -86,6 +88,42 @@ def motion() -> str:
 
 def save_motion(mode: str) -> bool:
     return merge_json("config.json", motion=mode)
+
+
+class MotionMenu(QObject):
+    """View ▸ Reduce motion in a window's menu: full, calm or off, saved for every window; the one picked
+    ticked, and what Bit's calm does to full said. changed is sent after a pick (a signal: a kept callback
+    would hold its window in a cycle, closed yet alive till the cycle collector came by)."""
+
+    changed = Signal()
+
+    def __init__(self, owner: QWidget, menu: QMenu) -> None:
+        super().__init__(owner)
+        self.group = QActionGroup(owner)
+        for mode, words in MOTIONS.items():
+            made = QAction(words, owner)
+            made.setCheckable(True)
+            made.setData(mode)
+            self.group.addAction(made)
+            menu.addAction(made)
+        self.group.triggered.connect(self.pick)
+        menu.aboutToShow.connect(self.show)
+        self.show()
+
+    def show(self) -> None:
+        saved = saved_motion()
+        for action in self.group.actions():
+            mode = str(action.data())
+            action.setChecked(mode == saved)
+            words = MOTIONS[mode]
+            if mode == "full" and saved == "full" and motion() == "calm":
+                words += " (calm while Bit is calm: b in the dashboard)"
+            action.setText(words)
+
+    def pick(self, action: QAction) -> None:
+        save_motion(str(action.data()))
+        self.changed.emit()
+        self.show()
 
 
 def clamp(x: float) -> float:

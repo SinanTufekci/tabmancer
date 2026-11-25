@@ -2,10 +2,12 @@
 `tabmancer --demo`. Skipped without the desktop extra (pip install "tabmancer[desktop]")."""
 
 import dataclasses
+import gc
 import importlib
 import os
 import re
 import time
+import weakref
 from datetime import datetime, timedelta
 
 import pytest
@@ -19,12 +21,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QTextDocument
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMenu
+from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
 
 from tabmancer import accounts, actor, agy, cli, demo, sessions, store, teambus, teams, usage
 from tabmancer import viewmodel as VM
 from tabmancer.config import merge_json, read_json
-from tabmancer.desktop import frame, look, main, teampanel
+from tabmancer.desktop import frame, look, main, teamgraph, teampanel
 from tabmancer.keys import KEYS
 from tabmancer.widgets import bar_text
 
@@ -98,7 +100,7 @@ def test_it_opens_on_the_demo(qapp, window):
     assert shown.snap is not None and len(shown.snap.sessions) >= len(demo.SESSIONS)  # and the team's agy member
     listed = len(shown.snap.sessions)
     assert shown.info.text() == VM.info_words(listed, 0, 14)[0] == f"{listed} sessions, last 14 days"
-    assert list(shown.docks) == ["Sessions", "Preview", "Projects", "Cards", "Bit", "Team"]
+    assert list(shown.docks) == ["Sessions", "Preview", "Projects", "Bit", "Team"]
     assert all(dock.isVisible() for dock in shown.docks.values())
     assert shown.windowTitle() == "tabmancer"
     assert [w for w in qapp.topLevelWidgets() if w.isVisible()] == [shown]  # no panel a window of its own
@@ -241,6 +243,77 @@ def test_the_team_panel_is_a_tab_beside_the_list_and_t_brings_it(qapp, window):
     assert panel.graph.breaths.isActive()  # in front: its members breathe
     assert "T" not in shown.keybar.dim  # the key bar and the menus in step
     assert shown.keybar.dim == {key for key in shown.keybar.keys if not shown.actions_by_key[key].isEnabled()}
+
+
+def test_the_sessions_panel_is_the_board(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    snap, board = shown.snap, shown.board
+    expected = VM.board(VM.visible(snap.sessions.values(), lambda s: s.session_id in snap.hidden),
+                        snap.team_states, snap.pinned)
+    assert [(lane.key, lane.items, lane.count) for lane in board.lanes] == \
+        [(lane.key, lane.items, lane.count) for lane in expected]
+    on_cards = {card.key for view in board.views.values() for card in view.column.cards}
+    assert on_cards == {key for lane in expected if not lane.folded for key in lane.items}
+    assert any(key.startswith(VM.TEAM_CARD) for key in on_cards)  # the demo's team, one card
+    assert shown.docks["Sessions"].isAncestorOf(board)
+    first = board.pick
+    assert first == board.keys()[0] and board.hasFocus()  # the arrows pick from the start
+    QTest.keyClick(board, Qt.Key.Key_Down)
+    assert board.pick == board.keys()[1]
+    views = {button.text(): button for button in shown.views.buttons()}
+    assert list(views) == ["Board", "Table", "Live"] and views["Board"].isChecked() and views["Board"].isEnabled()
+    for name in ("Table", "Live"):  # the terminal dashboard's for now, and said so
+        assert not views[name].isEnabled() and main.ELSEWHERE.lower() in views[name].toolTip()
+
+
+def test_a_layout_kept_with_the_cards_panel_opens_without_it(qapp, window):
+    old = window()
+    cards = QDockWidget("Cards", old)  # the panel the board's lane headings took over
+    cards.setObjectName("dock-cards")
+    old.splitDockWidget(old.docks["Projects"], cards, Qt.Orientation.Vertical)
+    old.close()
+    assert "dock-cards" in read_json(frame.LAYOUT_FILE)["main"]["docks"]
+    shown = window()
+    read(qapp, shown)
+    listed = shown.docks["Sessions"]
+    assert not listed.isHidden() and listed.width() > 400 and not listed.visibleRegion().isEmpty()
+    assert not any(dock.isHidden() for dock in shown.docks.values())
+    panels = next(a.menu() for a in shown.menus.actions() if a.text() == "&Panels")
+    assert "Cards" not in [action.text() for action in panels.actions()]
+
+
+def test_views_says_how_much_moves(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    views = shown.menus_by_group["Views"]
+    assert "Reduce motion" in [action.text() for action in views.actions()]
+    picks = {str(action.data()): action for action in shown.motion.group.actions()}
+    assert list(picks) == list(teamgraph.MOTIONS) and picks["full"].isChecked()
+    graph = shown.team_panel.graph
+    assert graph.mode == "full"
+    picks["off"].trigger()
+    assert read_json("config.json")["motion"] == "off" and graph.mode == "off" and shown.team_panel.lanes.mode == "off"
+    assert picks["off"].isChecked() and not picks["full"].isChecked()
+    picks["full"].trigger()
+    assert graph.mode == "full"
+
+
+def test_a_closed_window_goes_with_its_last_name(qapp, world):
+    """Nothing in the window holds the window (a kept callback did): closed and let go, it goes at once,
+    not whenever the cycle collector next comes by, mid-way through something else (a test run aborted)."""
+    gc.disable()
+    try:
+        shown = main.MainWindow(start=False)
+        shown.show()
+        read(qapp, shown)
+        shown.close()
+        shown.settle()
+        gone = weakref.ref(shown)
+        del shown
+        assert gone() is None
+    finally:
+        gc.enable()
 
 
 def test_a_broken_layout_file_is_left_alone(qapp, window):

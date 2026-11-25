@@ -2,10 +2,12 @@
 `tabmancer --demo`. Skipped without the desktop extra (pip install "tabmancer[desktop]")."""
 
 import dataclasses
+import gc
 import importlib
 import os
 import sys
 import time
+import weakref
 from datetime import datetime, timedelta
 
 import pytest
@@ -105,6 +107,23 @@ def test_the_window_shows_the_team(qapp, window):
     card, member = shown.cards["tests"], shown.snap.view.members[3]
     assert card.state.text() == member.label == "needs you"
     assert card.bar.share == member.context and member.context
+
+
+def test_a_closed_monitor_goes_with_its_last_name(qapp, world):
+    """Nothing in the monitor holds the monitor (its ← → lambdas and a kept callback did): closed and let
+    go, it goes at once, not whenever the cycle collector next comes by."""
+    gc.disable()
+    try:
+        shown = monitor.MonitorWindow("shop", start=False)
+        shown.show()
+        read(qapp, shown)
+        shown.close()
+        shown.settle()
+        gone = weakref.ref(shown)
+        del shown
+        assert gone() is None
+    finally:
+        gc.enable()
 
 
 def test_words_are_the_dashboards(qapp, window):
@@ -380,7 +399,7 @@ def test_view_says_how_much_moves(qapp, window):
     merge_json("config.json", mascot="calm")  # b in the dashboard: Bit calm
     read(qapp, shown)
     assert shown.graph.mode == "calm"  # calm with it
-    shown.show_motions()
+    shown.motion.show()
     assert picks["full"].isChecked() and "calm while Bit is calm" in picks["full"].text()
 
 
