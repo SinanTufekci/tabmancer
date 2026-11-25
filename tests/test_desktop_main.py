@@ -821,7 +821,8 @@ def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch):
 
 
 def test_the_demo_puts_the_world_back(qapp, monkeypatch):
-    """`tabmancer desktop --demo`: the made-up sessions, and afterwards nothing of them left."""
+    """`tabmancer desktop --demo`: the made-up sessions, and afterwards nothing of them left; the days
+    and --all given reach the window's store and its info line."""
     before = {name: os.environ.get(name) for name in frame.DEMO_ENV}
     agents = sessions._agents_json
     seen = []
@@ -829,14 +830,17 @@ def test_the_demo_puts_the_world_back(qapp, monkeypatch):
     def look_then_quit():
         windows = [w for w in qapp.topLevelWidgets() if isinstance(w, main.MainWindow) and w.isVisible()]
         if windows and windows[0].snap is not None:
-            seen.append((windows[0].brand.text(), len(windows[0].snap.sessions)))
+            shown = windows[0]
+            seen.append((shown.brand.text(), len(shown.snap.sessions), shown.store.days, shown.store.include_all,
+                         shown.info.text()))
             qapp.quit()
         else:
             QTimer.singleShot(100, look_then_quit)
 
     QTimer.singleShot(100, look_then_quit)
     QTimer.singleShot(30_000, qapp.quit)
-    assert main.run(demo=True) == 0
+    assert main.run(demo=True, days=30, include_all=True) == 0
     assert len(seen) == 1 and seen[0][0] == "◆ tabmancer demo" and seen[0][1] >= len(demo.SESSIONS)
+    assert seen[0][2:4] == (30, True) and "last 30 days" in seen[0][4]
     assert {name: os.environ.get(name) for name in frame.DEMO_ENV} == before
     assert sessions._agents_json is agents

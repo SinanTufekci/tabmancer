@@ -36,6 +36,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
@@ -61,7 +62,7 @@ from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
 from ..sessions import Session
-from ..store import DashboardStore, DashSnapshot
+from ..store import DAYS, DashboardStore, DashSnapshot
 from . import commandbar, frame, look, teamgraph
 from .board import Board
 from .drawer import BUTTONS, ROOM, Drawer
@@ -110,10 +111,11 @@ def parts_html(parts: list[tuple[str, str]]) -> str:
     return f'<span style="white-space:pre">{"".join(shown)}</span>'
 
 
-def watching_store() -> DashboardStore:
+def watching_store(days: float = DAYS, include_all: bool = False) -> DashboardStore:
     # As the terminal dashboard that watches (another one acts): it asks for the plan limits when it
-    # has no fresh reading of the acting dashboard's, and records neither them nor an account.
-    return DashboardStore(ask_limits=True)
+    # has no fresh reading of the acting dashboard's, and records neither them nor an account. days
+    # and include_all as `tabmancer --days N --all` give them.
+    return DashboardStore(days=days, include_all=include_all, ask_limits=True)
 
 
 class Relay(QObject):
@@ -768,9 +770,10 @@ def knock() -> bool:
     return frame.knock(door())
 
 
-def run(demo: bool = False) -> int:
+def run(demo: bool = False, days: float = DAYS, include_all: bool = False) -> int:
     """The window, till it is closed. With demo, over the made-up sessions of `tabmancer --demo`:
-    nothing real is read (frame.made_up_world)."""
+    nothing real is read (frame.made_up_world). days and include_all: the sessions it lists, as
+    `tabmancer --days N --all` (the last days; sessions started by tools too)."""
     look.fonts_for_offscreen()
     app = QApplication.instance() or QApplication(["tabmancer"])
     with made_up_world(demo):
@@ -778,7 +781,8 @@ def run(demo: bool = False) -> int:
         try:
             if knock():  # open already (the command twice): that window comes forward
                 return 0
-            window = MainWindow(brand="◆ tabmancer demo" if demo else "◆ tabmancer")
+            window = MainWindow(store=partial(watching_store, days, include_all),
+                                brand="◆ tabmancer demo" if demo else "◆ tabmancer")
             window.show()
             code = app.exec()
             if window.isVisible():  # the app was told to quit, the window not closed: its layout is kept too
