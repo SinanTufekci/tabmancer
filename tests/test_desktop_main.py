@@ -29,6 +29,8 @@ from tabmancer.config import merge_json, read_json
 from tabmancer.desktop import commandbar, frame, look, main, rail, teamgraph, teampanel
 from tabmancer.keys import KEYS
 from tabmancer.search import matches
+from tabmancer.teamwords import colours
+from tabmancer.tokens import human
 from tabmancer.widgets import bar_text
 
 look.fonts_for_offscreen()
@@ -474,6 +476,45 @@ def test_a_project_by_name_narrows_the_board_and_a_jump_brings_back_a_card_it_hi
     shown.toggle_card("continue")
     shown.run_command(commands.Command("session", "Rate limiting", target=api))  # kept out: the filters go
     assert shown.board.pick == api and not shown.narrowed() and shown.pills.text() == ""
+
+
+def test_the_rail_draws_each_team_and_a_click_picks_its_card_and_its_tab(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    snap, cards = shown.snap, shown.rail.teams.cards
+    assert cards and [card.name for card in cards] == [view.name for view in snap.view.teams]
+    view, card = snap.view.teams[0], cards[0]
+    needing = sum(1 for member in view.members if member.needs_you)
+    assert card.counts.text() == f"{view.open} open" + (f" · {needing} !" if needing else "")
+    assert card.graph.compact and card.graph.view == view and not card.grab().isNull()
+    assert card.graph.colours == colours(snap.team_states[view.name].team, shown.accent)
+    assert "a click: its card on the board" in card.toolTip()
+    other = next(row for row in shown.rail.projects.rows[1:] if row.name != view.project)
+    shown.set_project(other.key)  # the team's card is off the board now
+    assert VM.TEAM_CARD + view.name not in {item for lane in shown.board.lanes for item in lane.items}
+    QTest.mouseClick(card.graph, Qt.MouseButton.LeftButton, pos=QPoint(4, 4))  # the picture passes it on
+    assert shown.board.pick == VM.TEAM_CARD + view.name and not shown.narrowed()
+    assert shown.team_panel.team == view.name
+    shown.motion.pick(next(a for a in shown.motion.group.actions() if a.data() == "off"))
+    assert card.graph.mode == "off"  # View > Reduce motion: the rail's pictures too
+
+
+def test_the_rails_week_is_the_terminals_chart_and_follows_the_project(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    snap, week = shown.snap, shown.rail.week
+    report = snap.report
+    assert report is not None and len(week.days) == rail.WEEK_DAYS
+    assert [entry.total for entry in week.days] == [use.total for use in report.daily()[-rail.WEEK_DAYS:]]
+    assert week.days[-1].day == report.last and week.where == ""
+    today = human(report.total(last_days=1).total)  # the terminal's TOKENS TODAY card
+    assert shown.rail.tokens_heading.text() == f"TOKENS · TODAY {today}"
+    shop = next(row for row in shown.rail.projects.rows if row.name == "shop")
+    click_project(qapp, shown, shop.key)
+    ids = VM.token_ids(report, snap.sessions, shop.key)
+    assert ids and week.days == VM.week_tokens(report, ids) and week.where == "shop"
+    assert all(mine.total <= every.total for mine, every in zip(week.days, VM.week_tokens(report), strict=True))
+    assert week.tip(len(week.days) - 1).endswith("tokens in shop") and not week.grab().isNull()
 
 
 def test_a_closed_window_goes_with_its_last_name(qapp, world):

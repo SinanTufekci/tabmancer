@@ -1,11 +1,12 @@
 """The board's lanes (viewmodel.board): the cards' rules, a team as one card, pinned first; and the
-projects' lines beside it (viewmodel.project_rows), as the terminal dashboard's sidebar has them."""
+projects' lines beside it (viewmodel.project_rows) and the tokens a day under them (week_tokens), as
+the terminal dashboard's sidebar has them."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
-from tabmancer import teams
+from tabmancer import teams, tokens
 from tabmancer import viewmodel as VM
 from tabmancer.sessions import Exit, Session, Status, folder_key
 
@@ -120,6 +121,26 @@ def test_a_folders_git_is_two_signs():
                 VM.ProjectView("b", "b", now, 1, 0, 0, None), VM.ProjectView("c", "c", now, 1, 0, 0,
                                                                             {"changed": False, "ahead": True})]
     assert VM.project_signs(projects) == {"a": "±", "c": "↑"}
+
+
+def test_a_projects_tokens_a_day_over_the_week():
+    today = date.today()
+    ago = lambda days: (today - timedelta(days=days)).toordinal()
+    cells = {("a", ago(0)): tokens.Tokens(input=5, output=5), ("a", ago(2)): tokens.Tokens(output=7),
+             ("b", ago(0)): tokens.Tokens(output=3), ("gone", ago(9)): tokens.Tokens(output=100)}
+    report = tokens.Report(first=today - timedelta(days=13), days=14, cells=cells,
+                           folders={"a": "C:/elsewhere/web", "gone": "C:/work/web"})
+    sessions = {"a": made("a", project="web"), "b": made("b", project="cli")}
+    web = folder_key("C:/work/web")
+    assert VM.token_ids(report, sessions, VM.ALL_PROJECTS) is None
+    assert VM.token_ids(report, sessions, web) == {"a", "gone"}  # the list's folder, else the report's
+    week = VM.week_tokens(report)
+    assert [entry.day for entry in week] == [today - timedelta(days=6 - n) for n in range(7)]
+    assert [entry.total for entry in week] == [0, 0, 0, 0, 7, 0, 13]  # today last
+    assert week[-1].total == report.total(last_days=1).total  # the TOKENS TODAY card's
+    assert [entry.total for entry in VM.week_tokens(report, {"b"})][-1] == 3
+    assert VM.week_tokens(report, VM.token_ids(report, sessions, web), 14)[4].total == 100
+    assert VM.week_tokens(tokens.Report(first=today, days=1)) == [VM.DayTokens(today, 0)]  # a short window
 
 
 def test_no_sessions_no_cards():

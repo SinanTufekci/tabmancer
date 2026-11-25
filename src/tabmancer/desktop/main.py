@@ -19,7 +19,8 @@ words (commandbar): every key as the menus name it, and a team, a project or a s
 The board narrows as the terminal dashboard's list does (viewmodel.visible): to a project (a click
 on the rail, rail.py), to what a card counts (1 2 3, or a click on a lane's heading) and to words (/,
 the box over the board: a project, a title, or anything said in a session, as search.py indexes the
-conversations, on a thread of its own). The top bar says what it is narrowed to.
+conversations, on a thread of its own). The top bar says what it is narrowed to. The rail also holds
+each team as a small picture (a click picks its card and its Team panel tab) and the week's tokens.
 """
 
 from __future__ import annotations
@@ -193,6 +194,7 @@ class MainWindow(QMainWindow):
         docks["Team"].visibilityChanged.connect(self.team_panel.wake)  # behind a tab: its picture rests
         self.board.card.connect(self.toggle_card)
         self.rail.projects.picked.connect(self.set_project)
+        self.rail.teams.picked.connect(self.pick_team)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, docks["Preview"])
         self.resizeDocks([docks["Projects"], docks["Sessions"], docks["Preview"]], [210, 900, 390],
                          Qt.Orientation.Horizontal)
@@ -609,9 +611,17 @@ class MainWindow(QMainWindow):
                 self.board.reveal(card)
         self.board.setFocus()
 
+    def pick_team(self, name: str) -> None:
+        """A team on the rail: its card on the board (the filters cleared if they kept it out), and its tab
+        in the Team panel, for when that one is brought to the front."""
+        if name in self.team_panel.names:
+            self.team_panel.tabs.setCurrentIndex(self.team_panel.names.index(name))  # its pick_team
+        self.run_command(commands.Command("team", name, target=name))
+
     def motion_changed(self) -> None:
-        """View ▸ Reduce motion picked: the Team panel moves as it says now."""
+        """View ▸ Reduce motion picked: the Team panel and the rail's teams move as it says now."""
         self.team_panel.show_team()
+        self.rail.teams.set_motion(teamgraph.motion())
 
     def show_teams(self) -> None:
         """T: the Team panel to the front (back where it was, if it was closed), its tabs to pick with."""

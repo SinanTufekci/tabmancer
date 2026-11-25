@@ -15,12 +15,12 @@ import hashlib
 import posixpath
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from . import accounts, agy, context, picks, search, teambus, teams
 from .sessions import INTERRUPTED, Exit, Session, Status, folder_key
 from .teams import TeamState, counts
-from .tokens import duration
+from .tokens import Report, duration
 from .usage import until
 
 TONES = ("your-turn!", "your-turn", "working", "open", "aside", "to-continue!", "to-continue", "done", "plain")
@@ -820,6 +820,32 @@ def project_rows(sessions: list[Session], waiting: set[str] | None = None,
             mark = ""
         rows.append(ProjectRow(key, items[0].project, len(items), mark, (git or {}).get(key, "")))
     return rows
+
+
+# --- the tokens a day (the terminal's sidebar chart, the desktop window's rail) -------------------
+
+@dataclass(frozen=True)
+class DayTokens:
+    day: date
+    total: int
+
+
+def token_ids(report: Report, sessions: dict[str, Session], project: str) -> set[str] | None:
+    """The sessions a project's tokens are counted over: None for every project; else those whose
+    folder is the project's. Where the session list knows a session, its folder decides, as in the
+    list; for the others (gone from it), the folder the report saw them in last."""
+    if project == ALL_PROJECTS:
+        return None
+    folders = report.folders | {sid: s.cwd for sid, s in sessions.items()}
+    return {sid for sid, folder in folders.items() if folder_key(folder) == project}
+
+
+def week_tokens(report: Report, ids: set[str] | None = None, days: int = 7) -> list[DayTokens]:
+    """Tokens a day over the report's last days, oldest first: the last is the day it was counted
+    (today, till midnight passes), as the TOKENS TODAY card has it."""
+    daily = report.daily(ids)[-days:]
+    first = report.last - timedelta(days=len(daily) - 1)
+    return [DayTokens(first + timedelta(days=n), use.total) for n, use in enumerate(daily)]
 
 
 # --- the board's lanes (the desktop window's Board) ------------------------------------------------
