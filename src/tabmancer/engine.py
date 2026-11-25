@@ -530,7 +530,11 @@ class Engine:
         self.tell(alerts.newer_event(version, command))
 
     def wrapped(self) -> None:
-        """On Fridays from noon, or the weekend after, once a week: the week is ready (W)."""
+        """On Fridays from noon, or the weekend after, once a week: the week is ready (W). Only the one
+        that acts: wrapped.told is shared, and the desktop note goes out of the window, so one that
+        watches does neither, whatever runs this."""
+        if not self.state.acts:
+            return
         at = self.clock()
         event = alerts.wrapped_event(at)
         if event is None:

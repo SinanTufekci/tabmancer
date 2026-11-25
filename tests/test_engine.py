@@ -523,3 +523,15 @@ def test_claude_update_is_the_ones_that_acts(monkeypatch):
     eng.started()
     eng.stopped()
     assert done == ["take_back", "read_armed", "leave"] and not eng.state.acts
+
+
+def test_one_that_watches_tells_no_wrapped_whatever_runs_it(monkeypatch):
+    monkeypatch.setattr(wrapped, "due", WRAPPED_DUE)
+    monkeypatch.setattr(toast, "enabled", lambda: True)
+    told: list = []
+    monkeypatch.setattr(wrapped, "told", lambda now=None: told.append(now))
+    front = Front()
+    eng = made(front)
+    eng.clock = lambda: datetime(2026, 11, 27, 13, 0)  # a Friday afternoon: due
+    eng.wrapped()
+    assert front.calls == [] and told == []
