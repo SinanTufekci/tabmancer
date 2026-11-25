@@ -164,7 +164,6 @@ TONE = sessionwords.TONE
 STATUS_LABEL = rowwords.STATUS_LABEL
 BADGE, badge = rowwords.BADGE, rowwords.badge  # a loud state as a badge, its colour tinted in behind it
 STATUS_HELP, EXIT_HELP, TOOLTIP_STATUS = VM.STATUS_HELP, VM.EXIT_HELP, VM.OUTCOME
-MODES = [Mode.RESUME, Mode.AUTO, Mode.FORK, Mode.NEW]
 MODE_LABEL = sessionwords.MODE_LABEL
 # Raw states from `claude agents --json` -> label, style, sort rank (lowest first).
 LIVE_STATES = {raw: (label, TONE[tone], rank) for raw, (label, tone, rank, _) in VM.LIVE.items()}
@@ -2685,11 +2684,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         session = self.current()
         if session is None or session.status is Status.RUNNING:
             return
-        cli = clis.CLIS.get(session.cli)
-        modes = [m for m in MODES if m is not Mode.FORK or (cli and cli.can_fork)]
-        current = self.mode(session)
-        self.modes[session.session_id] = modes[(modes.index(current) + 1) % len(modes)] if current in modes \
-            else modes[0]
+        self.modes[session.session_id] = actions.next_mode(session, self.mode(session))
         self.update_row(session)
         self.update_detail()
 
@@ -2839,17 +2834,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def action_next_waiting(self) -> None:
         """Go to the next open session that needs you (a question, a permission), one after another;
         when none does, the next one waiting for you (its turn over)."""
-        open_ones = [s for s in self.sessions.values() if s.exit is Exit.RUNNING and state_of(s)[2] < 2]
-        needs = [s for s in open_ones if state_of(s)[2] == 0]
-        waiting = sorted(needs or open_ones, key=lambda s: (s.project.casefold(), s.session_id))
-        if not waiting:
-            self.notify("No session is waiting for you.", timeout=3)
+        turn = actions.next_waiting(self.sessions.values(), self.waiting_group, self.waiting_turn)
+        if turn.session is None:
+            self.say_note(actions.NONE_WAITING)
             return
-        group = "needs" if needs else "waiting"
-        if group != self.waiting_group:  # from the top of the ones that need you, once there are some
-            self.waiting_group, self.waiting_turn = group, 0
-        session = waiting[self.waiting_turn % len(waiting)]
-        self.waiting_turn += 1
+        session, self.waiting_group, self.waiting_turn = turn.session, turn.group, turn.turn
         team = self.member_rows.get(session.session_id, ("", ""))[0]
         if team and team not in self.unfolded:  # under a folded team's row: unfold it to show the member
             self.toggle_folded(team)
