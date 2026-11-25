@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tabmancer import accounts, actions, actor, alerts, claudeupdate, engine, store, toast, wrapped
+from tabmancer import accounts, actions, actor, alerts, claudeupdate, engine, store, toast, usage, wrapped
 from tabmancer.sessions import Exit, Session, Status
 
 NOW = datetime(2026, 11, 25, 12, 0)
@@ -31,8 +31,6 @@ class Front:
     """Records what the engine has it say and do, in order."""
 
     default_cap = 200_000
-    account = None
-    signed_as = "me"
 
     def __init__(self, monitor: bool = False) -> None:
         self.calls: list[tuple] = []
@@ -68,6 +66,7 @@ def claims(monkeypatch):
 
 
 def made(front, **state) -> engine.Engine:
+    state.setdefault("signed_as", "me")  # signed in as "me" unless a test says otherwise
     return engine.Engine(front, clock=lambda: NOW, state=engine.EngineState(**state))
 
 
@@ -195,7 +194,7 @@ def test_the_dashboards_state_is_the_engines():
     assert engine.FORWARDED == ("acts", "sessions", "queued", "unasked", "notes", "told_crowded", "told_idle",
                                 "opening", "came_up", "full_poll_due", "full_polls", "armed", "armed_unsaved",
                                 "told_limit", "actor_misses", "told_alone", "told_update", "updating_claude",
-                                "after_claude_update")
+                                "after_claude_update", "account", "signed_as", "told_agy_out", "team_seen")
     for name in engine.FORWARDED:
         value = object()
         setattr(app, name, value)
@@ -229,7 +228,7 @@ def test_bit_says_once_which_a_limit_stopped_by_the_clock_given(kept):
     for at, words in ((NOW, "l1: limit until 13:00. c continues then"),
                       (LIFTS + timedelta(minutes=5), "l1: the limit has lifted. c continues now")):
         front = Front()
-        eng = engine.Engine(front, clock=lambda at=at: at, state=engine.EngineState(acts=True, sessions={
+        eng = engine.Engine(front, clock=lambda at=at: at, state=engine.EngineState(acts=True, signed_as="me", sessions={
             "l1": lim("l1"), "w": s("w")}))
         eng.limits()
         eng.limits()
@@ -535,3 +534,96 @@ def test_one_that_watches_tells_no_wrapped_whatever_runs_it(monkeypatch):
     eng.clock = lambda: datetime(2026, 11, 27, 13, 0)  # a Friday afternoon: due
     eng.wrapped()
     assert front.calls == [] and told == []
+
+
+# --- the plan limits, who is signed in, what a team said (E5) --------------------------------------------
+
+A = accounts.Account("claude", "a@example.com", "Max 5x", "acc-a", "org-a", "", "claude_max")
+B = accounts.Account("claude", "b@example.com", "Pro", "acc-b", "org-b", "", "claude_max")
+
+
+def test_a_limit_near_said_each_reading_and_agy_out_once_until_back():
+    front = Front()
+    eng = made(front)
+    near = [usage.Limit("session", 90, None, "")]
+    out = {"all_out": NOW + timedelta(hours=3), "said": "agy: Neon and Hydrogen out", "parts": []}
+    eng.usage(near, {})
+    eng.usage(near, {})
+    eng.usage([], out)
+    eng.usage([], out)  # said already
+    eng.usage([], {})  # back
+    eng.usage([], out)
+    assert [call[1].kind for call in front.calls] == [alerts.LIMIT_NEAR, alerts.LIMIT_NEAR, alerts.AGY_OUT,
+                                                       alerts.AGY_OUT]
+    assert eng.state.told_agy_out == out["all_out"]
+
+
+def test_the_usage_read_recorded_by_the_one_that_acts_dropped_across_a_switch(monkeypatch):
+    done: list = []
+    signed = [A]
+    monkeypatch.setattr(accounts, "claude", lambda: signed[0])
+    monkeypatch.setattr(usage, "read_all", lambda: done.append("read") or [usage.Limit("session", 10, None, "")])
+    monkeypatch.setattr(usage, "record", lambda limits, account="": done.append(("record", account)))
+    shared = [usage.Limit("session", 11, None, "")]
+    monkeypatch.setattr(store, "watched_limits", lambda account, ask=True: done.append(("shared", account)) or shared)
+    assert [x.percent for x in engine.read_usage(True, A)] == [10]
+    assert engine.read_usage(False, A) is shared
+    assert done == ["read", ("record", A.key), ("shared", A)]
+    done.clear()
+    signed[0] = B  # signed in with another while it read: whose limits these are is not known
+    assert engine.read_usage(True, A) is None and done == ["read"]
+
+
+def test_signed_in_remembered_by_the_one_that_acts_and_a_switch_frees_the_stopped(monkeypatch):
+    remembered: list = []
+    monkeypatch.setattr(accounts, "remember", lambda account, at: remembered.append((account, at)))
+    monkeypatch.setattr(accounts, "limited_on", lambda: {"l1": A.key})
+    monkeypatch.setattr(accounts, "keep_limited", lambda kept: None)
+    monkeypatch.setattr(accounts, "shared_emails", set)
+    front = Front()
+    eng = made(front, acts=True, signed_as=None, sessions={"l1": lim("l1"), "w": s("w")})
+    eng.signed_in([A])
+    assert remembered == [(A, NOW.isoformat(timespec="seconds"))] and front.calls == []  # the first: no switch
+    eng.signed_in([A])  # the same: nothing
+    assert len(remembered) == 1
+    eng.signed_in([B])
+    assert eng.state.signed_as == B.key and eng.state.account == B and remembered[-1][0] == B
+    names = front.names()
+    assert names[0] == "refresh_usage" and names[-1] == "show_rows"
+    assert front.calls[-1] == ("show_rows", [eng.state.sessions["l1"]])
+    assert front.calls[-2][1].kind == alerts.SIGNED_IN
+
+
+def test_one_that_watches_only_notes_who_is_signed_in(monkeypatch):
+    remembered: list = []
+    monkeypatch.setattr(accounts, "remember", lambda account, at: remembered.append(account))
+    front = Front()
+    eng = made(front, signed_as=A.key, account=A)
+    eng.signed_in([B])
+    assert eng.state.signed_as == B.key and remembered == [] and front.calls == []
+
+
+def test_a_teams_new_messages_and_its_agy_members_sessions():
+    class Said:
+        def __init__(self, *said):
+            self.said = list(said)
+
+        def between_members(self):
+            return self.said
+
+    hi, done = actions_message("lead", "api", "hi"), actions_message("api", "lead", "done")
+    eng = made(Front())
+    assert eng.heard({"shop": Said(hi)}) == []  # the first look only takes note
+    said = eng.heard({"shop": Said(hi, done)})
+    assert [event.message for event in said] == [done]
+    assert eng.heard({"shop": Said(hi, done)}) == []
+    g = s("g", cli="agy")
+    eng.state.sessions["w"] = w = s("w")
+    assert eng.team_sessions({"g": g, "w": w}) == {"g"} and eng.state.sessions["g"] is g
+    assert eng.team_sessions({"g": g}) == set()
+
+
+def actions_message(sender, receiver, text):
+    from tabmancer import teams
+
+    return teams.Message(NOW, sender, receiver, text)

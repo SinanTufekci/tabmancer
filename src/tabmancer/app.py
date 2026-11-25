@@ -708,10 +708,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.last_row = 0  # where the cursor was, so it steps over a heading the same way
         self.waiting_turn = 0  # j goes round the sessions waiting for you
         self.waiting_group = ""  # j: "needs" while some session needs you, else "waiting"
-        # The Claude account Claude Code is signed in with, as last read; signed_as is its key
-        # (account and organisation: one email can be in more than one organisation).
-        self.account: accounts.Account | None = None
-        self.signed_as: str | None = None
         self.limited: set[str] = set()  # the sessions at a limit when the footer last heard of it
         self.finder = search.Finder(search.Index.load())  # what was said in each session, for the filter
         self.search = self.finder.index
@@ -722,7 +718,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.show_hidden = False  # X: the hidden ones are listed too
         self.session_tokens: dict[str, tokens.Tokens] = {}  # each session over its whole life
         self.team_states: dict[str, teamtree.TeamState] = {}  # the teams with a member open, as last read
-        self.team_seen: dict[str, set[tuple[str, str, str]]] = {}  # what each team said: newer messages fly
         self.team_flights: dict[str, list[tuple[teams.Message, float]]] = {}  # messages in flight, since when
         self.unfolded: set[str] = set()  # teams shown with their members under their row (e); else one row
         self.closing_team: str | None = None  # x once on an open team's row: again closes its members' tabs
@@ -735,7 +730,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.kept_handovers: dict[str, tuple[Session, str, str, bool]] = {}
         self.limits: list[usage.Limit] = []  # the plan limits as last read
         self.agy_bar: dict = {}  # agy's chain as last read from its saved quota (agy.bar_view); {} with no agy
-        self.told_agy_out: datetime | None = None  # Bit said every agy model is out, until this time
         self.card_filter: str | None = None  # 1 2 3: the list shows only what that card counts
         self.bar_info = ""  # the top bar's counts, apart from its pills (watch_sub_title)
         self.focused_at = float("-inf")  # when the terminal last said the window took the focus
@@ -2343,18 +2337,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def show_teams(self, states: dict[str, teamtree.TeamState], agy_updates: dict[str, Session] | None = None) -> None:
         if agy_updates:
-            changed_agy = {sid for sid, s in agy_updates.items() if self.sessions.get(sid) != s}
+            changed_agy = self.engine.team_sessions(agy_updates)
             if changed_agy:
-                self.sessions.update(agy_updates)
                 self.sync_rows(changed_agy)
                 self.update_dashboard()
         now = time.monotonic()
-        said, seen = alerts.team_events(states, self.team_seen)
-        for event in said:  # the first look at a team only takes note: history does not fly
+        for event in self.engine.heard(states):  # the first look at a team only takes note
             self.team_flights.setdefault(event.team, []).append((event.message, now))
             if self.team_graph is not None and self.team_graph.team.name == event.team:
                 self.team_graph.launch_flight(event.message)
-        self.team_seen.update(seen)
         if states == self.team_states:
             return
         self.team_states = states
@@ -2693,17 +2684,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         before = accounts.claude()
         # agy's quota as saved (no agy is run for it), only while agy is in use: read with the plan limits.
         self.agy_bar = agy.bar_view() if self.call_from_thread(self.uses_agy) else {}
-        if not self.acts:  # a monitor: the dashboard's last reading, if it is fresh (one claude -p, not two)
-            self.call_from_thread(self.show_usage, store.watched_limits(before))
-            return  # recorded by the dashboard alone: a monitor's readings would count twice
-        limits = usage.read_all()  # Codex's too, when it is turned on
-        after = accounts.claude()
-        if (before.key if before else None) != (after.key if after else None):
-            # Signed in with another account while it was read: whose limits these are is not known.
-            # Dropped; the switch reads them again (signed_in_elsewhere).
-            return
-        usage.record(limits, account=after.key if after else "")  # the stats chart and forecast from them
-        self.call_from_thread(self.show_usage, limits)
+        limits = engine.read_usage(self.acts, before)
+        if limits is not None:
+            self.call_from_thread(self.show_usage, limits)
 
     def show_accounts(self) -> None:
         """The accounts in the top bar, beside the plan limits: read from the CLIs' own files, again
@@ -2711,30 +2694,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         the sessions a usage limit stopped on the other."""
         found = accounts.signed_in()
         self.topbar.show_accounts(found, accounts.shared_emails())
-        account = next((a for a in found if a.cli == "claude"), None)
-        key = account.key if account is not None else None
-        if key != self.signed_as or account != self.account:
-            switched = self.signed_as is not None and key is not None and key != self.signed_as
-            self.signed_as, self.account = key, account
-            if not self.acts:  # a monitor only shows who is signed in: the dashboard remembers it
-                return
-            accounts.remember(account, datetime.now().isoformat(timespec="seconds"))
-            if switched:
-                self.signed_in_elsewhere()
+        self.engine.signed_in(found)
 
-    def signed_in_elsewhere(self) -> None:
-        """Claude Code is signed in with another account now: its plan limits are read again, and
-        the sessions a limit stopped on the other account can go on (c, or at once if waiting)."""
-        self.refresh_usage()
-        self.check_limits()
-        free = [s for s in self.sessions.values() if at_limit(s) and s.signed_in_again]
-        who = accounts.words(self.account, 80, org=self.account.email in accounts.shared_emails()) \
-            if self.account is not None else ""
-        self.tell(alerts.signed_in_event(len(free), who))
-        if free:
-            for session in free:
-                self.update_row(session)
-            self.update_detail()
+    def show_rows(self, sessions: list[Session]) -> None:
+        for session in sessions:
+            self.update_row(session)
+        self.update_detail()
 
     def action_accounts(self) -> None:
         """A: the Claude accounts you use, to sign in with another (Claude Code's own sign-in, in a tab),
@@ -2817,10 +2782,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.limits = limits
         bar = self.agy_bar
         self.topbar.show_usage(limits, bar.get("parts", []), agy_first=bar != {} and clis.main_cli() == "agy")
-        # A limit at 85% or more: Bit mentions it once per reading; every agy model out: once until it is back.
-        said, self.told_agy_out = alerts.usage_events(limits, bar, self.told_agy_out)
-        for event in said:
-            self.tell(event)
+        self.engine.usage(limits, bar)  # Bit: a limit at 85% or more; every agy model out, once
 
     @work(thread=True)
     def start_background(self, launch: Launch) -> None:

@@ -24,9 +24,10 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Protocol
 
-from . import accounts, actions, actor, alerts, claudeupdate, store, toast, wrapped
+from . import accounts, actions, actor, alerts, claudeupdate, store, toast, usage, wrapped
 from .actions import Note
 from .sessions import Exit, Session
+from .viewmodel import at_limit
 
 # --- when the front runs what: its timers (SCHEDULE) -------------------------------------------------
 
@@ -75,8 +76,6 @@ class Front(Protocol):
     dashboard (app.SessionPicker) is one; the desktop window will be another."""
 
     default_cap: int  # the context cap new sessions get, in tokens
-    account: accounts.Account | None  # the Claude account signed in now, as last read
-    signed_as: str | None  # its key (account and organisation)
 
     def who(self, session: Session) -> str:
         """A session as a note names it: its project, or 'team: member'."""
@@ -167,6 +166,14 @@ class Front(Protocol):
         """Which dashboard acts (held: its lock), and that this one watches."""
         ...
 
+    def refresh_usage(self) -> None:
+        """Read the plan limits again, off the UI thread (read_usage), the reading to show_usage."""
+        ...
+
+    def show_rows(self, sessions: list[Session]) -> None:
+        """These sessions' rows drawn again, and the detail."""
+        ...
+
     def update_claude(self) -> None:
         """Run claude update off the UI thread (alerts.run_claude_update), its outcome to
         Engine.claude_updated."""
@@ -205,6 +212,12 @@ class EngineState:
     told_update: str | None = None  # the newer tabmancer already told of
     updating_claude: bool = False  # claude update running: sessions asked for wait for it
     after_claude_update: list[Callable[[], None]] = field(default_factory=list)  # what waits for it
+    # The Claude account Claude Code is signed in with, as last read; signed_as is its key
+    # (account and organisation: one email can be in more than one organisation).
+    account: accounts.Account | None = None
+    signed_as: str | None = None
+    told_agy_out: datetime | None = None  # Bit said every agy model is out, until this time
+    team_seen: dict[str, set[tuple[str, str, str]]] = field(default_factory=dict)  # what each team said
 
 
 FORWARDED = tuple(f.name for f in fields(EngineState))
@@ -239,6 +252,22 @@ def look(monitor: bool, acts: bool) -> Look:
     if actor.claim():
         return Look("took")
     return Look("watching", armed=store.read_armed())
+
+
+def read_usage(acts: bool, before: accounts.Account | None) -> list[usage.Limit] | None:
+    """The plan limits, read off the UI thread (claude -p /usage: seconds), for Engine.usage. It keeps no
+    state. The one that acts reads and records them (the stats chart and the forecast); one that watches
+    takes its last reading while fresh (one claude -p, not two) and records nothing, or they would count
+    twice. before: the account signed in as the reading started; signed in with another meanwhile,
+    whose limits these are is not known: None, dropped (the switch reads them again, signed_in)."""
+    if not acts:
+        return store.watched_limits(before)
+    limits = usage.read_all()  # Codex's too, when it is turned on
+    after = accounts.claude()
+    if (before.key if before else None) != (after.key if after else None):
+        return None
+    usage.record(limits, account=after.key if after else "")
+    return limits
 
 
 class Engine:
@@ -342,7 +371,7 @@ class Engine:
         stopped and that c continues them. On which account each stopped is kept (by the one that acts):
         signed in with another since, it can go on (signed_in_again)."""
         state, front = self.state, self.front
-        kept, at = actions.limited_now(state.sessions, accounts.limited_on(), front.signed_as, front.account,
+        kept, at = actions.limited_now(state.sessions, accounts.limited_on(), state.signed_as, state.account,
                                        accounts.same)
         if state.sessions and state.acts:
             accounts.keep_limited(kept)
@@ -544,3 +573,58 @@ class Engine:
         self.front.say_note(event.note)
         if event.desktop and toast.enabled():
             self.front.send_toast(*event.desktop)
+
+    # --- the plan limits, who is signed in, what a team said ---------------------------------------------
+
+    def usage(self, limits: list[usage.Limit], bar: dict) -> None:
+        """A plan reading (bar: agy's chain, agy.bar_view, {} without agy): a limit at 85% or more, Bit
+        mentions each reading; every agy model out, once until it is back."""
+        said, self.state.told_agy_out = alerts.usage_events(limits, bar, self.state.told_agy_out)
+        for event in said:
+            self.tell(event)
+
+    def signed_in(self, found: list[accounts.Account]) -> None:
+        """Who the CLIs are signed in as (accounts.signed_in, read again only when changed): Claude
+        Code's is remembered for A by the one that acts, and a switch to another account frees the
+        sessions a usage limit stopped on the other. One that watches only shows who it is."""
+        state = self.state
+        account = next((a for a in found if a.cli == "claude"), None)
+        key = account.key if account is not None else None
+        if key == state.signed_as and account == state.account:
+            return
+        switched = state.signed_as is not None and key is not None and key != state.signed_as
+        state.signed_as, state.account = key, account
+        if not state.acts:
+            return
+        accounts.remember(account, self.clock().isoformat(timespec="seconds"))
+        if switched:
+            self.signed_in_elsewhere()
+
+    def signed_in_elsewhere(self) -> None:
+        """Claude Code is signed in with another account now: its plan limits are read again, and the
+        sessions a limit stopped on the other account can go on (c, or at once if waiting)."""
+        state = self.state
+        self.front.refresh_usage()
+        self.limits()
+        free = [s for s in state.sessions.values() if at_limit(s) and s.signed_in_again]
+        who = accounts.words(state.account, 80, org=state.account.email in accounts.shared_emails()) \
+            if state.account is not None else ""
+        self.tell(alerts.signed_in_event(len(free), who))
+        if free:
+            self.front.show_rows(free)
+
+    def team_sessions(self, updates: dict[str, Session]) -> set[str]:
+        """agy members' sessions as a team's read found them (store.read_team_states): the ones that
+        changed are the list's now. Their ids, for the front to draw again."""
+        changed = {sid for sid, s in updates.items() if self.state.sessions.get(sid) != s}
+        if changed:
+            self.state.sessions.update(updates)
+        return changed
+
+    def heard(self, states: dict) -> list[alerts.Event]:
+        """The messages between each team's members since the last look, for the front to fly along
+        its wires (a picture of its own, so they come back rather than go out). The first look at a
+        team only takes note: its history does not fly."""
+        said, seen = alerts.team_events(states, self.state.team_seen)
+        self.state.team_seen.update(seen)
+        return said
