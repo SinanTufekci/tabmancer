@@ -551,7 +551,7 @@ class TeamForm:
 
 def cap_help(cap: str) -> str:
     """The Context row's help: ←/→, and what the cap picked means."""
-    return f"←/→ the context cap every member starts under. {CAP_SHORT.get(cap, cap)}: {picks.CAP_WORDS[cap]}."
+    return f"←/→ the context cap every member starts under. {CAP_SHORT.get(cap, cap)}: {picks.cap_words(cap)}."
 
 
 CAPS = [*picks.CAPS, picks.NO_CAP]  # the Context row's values (CAP_SHORT names them)

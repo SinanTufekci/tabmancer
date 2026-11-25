@@ -203,7 +203,7 @@ def pick_words(cli: str, values: dict[str, str], focused: str | None = None) -> 
     if focused == "advisor":
         return f"{ADVISOR_SHORT.get(advisor, advisor)}: {picks.ADVISOR_WORDS[advisor]}. For these sessions only."
     if focused == "cap":
-        return f"{CAP_SHORT.get(cap, cap)}: {picks.CAP_WORDS[cap]}"
+        return f"{CAP_SHORT.get(cap, cap)}: {picks.cap_words(cap)}"
     if focused == "effort" or (focused != "model" and effort != picks.DEFAULT and model == picks.DEFAULT):
         return f"{effort}: {picks.EFFORT_WORDS[effort]}"
     if focused == "model" or model != picks.DEFAULT:

@@ -18,6 +18,7 @@ from textual.message import Message
 from textual.suggester import Suggester
 from textual.widgets import Static
 
+from . import picks
 from .theme import CYAN, MUTED, TEXT
 
 WIDTHS = {"small": 72, "medium": 96, "large": 112}
@@ -105,7 +106,9 @@ def tilde(path: str) -> str:
 class Choice(Static, can_focus=True):
     """One of a few words, shown side by side with the one picked marked: ● opus   ○ sonnet, on
     two lines or more where one is too narrow. ←/→ (or Space) moves the mark while it has the
-    focus; a click picks a word. labels: how a word is shown, where it is not shown as it is."""
+    focus; a click picks a word. labels: how a word is shown, where it is not shown as it is. A value
+    given that is not among the words is offered too, first, and stays picked (picks.choices): a 500k
+    cap from config.json is kept, never turned into the first word unasked."""
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("left", "step(-1)", "Previous", show=False),
@@ -127,7 +130,7 @@ class Choice(Static, can_focus=True):
 
     def __init__(self, words: list[str], value: str = "", labels: dict[str, str] | None = None, **kwargs) -> None:
         super().__init__("", **kwargs)
-        self.words = list(words)
+        self.words = picks.choices(words, value)
         self.labels = labels or {}
         self.value = value if value in self.words else self.words[0]
 
