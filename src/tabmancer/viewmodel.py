@@ -451,6 +451,12 @@ def member_model(member: teams.Member, session: Session | None) -> tuple[str, st
     return member.model, ""
 
 
+def members_open(state: TeamState, sessions: dict[str, Session]) -> int:
+    """How many of a team's members are open, each as the list has it (sessions; else as the team's
+    reader saw it, which can lag: a member it read closed can be open in the list)."""
+    return sum(sessions.get(s.session_id, s).exit is Exit.RUNNING for s in state.sessions.values() if s is not None)
+
+
 def team_view(state: TeamState, tokens: dict, sessions: dict[str, Session], *,
               git_of=None, agy_usage: dict | None = None, bus: tuple[dict, dict] | None = None) -> TeamView:
     """A team as the view carries it. git_of: folder -> its git as MemberView.git has it, or None; agy_usage: the
@@ -496,7 +502,7 @@ def team_view(state: TeamState, tokens: dict, sessions: dict[str, Session], *,
     wires = [{"from": a, "to": b, "count": n} for (a, b), n in sorted(counts(state.between_members()).items())]
     latest = [MessageView(m.at, m.sender, m.receiver, " ".join((m.summary or m.text).split()))
               for m in state.said[-LATEST:]]
-    return TeamView(team.name, team.project, team.goal, state.open_count(), state.tokens(tokens), members, wires,
+    return TeamView(team.name, team.project, team.goal, members_open(state, sessions), state.tokens(tokens), members, wires,
                     latest, clis=sorted(team.clis, key=lambda cli: (cli != "claude", cli)), uses_bus=team.uses_bus,
                     cap=team_cap, peers=team.peers, background=team.background, worktrees=team.worktrees,
                     lead=team.lead.name if team.lead is not None else None, folder=team.cwd)

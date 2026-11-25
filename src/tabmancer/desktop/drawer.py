@@ -3,10 +3,12 @@
 A session: how it stands (sessionwords.status_row), whose it is and its title, what Enter does with it,
 the buttons for what acts on it, what was said in it (said_rows: a member's messages, where the
 filter's words were found, its summary, the first and last prompt, the last reply, the files edited)
-and its facts (fact_rows). The inputs are the terminal dashboard's (app.update_detail), read off the
-snapshot: its team and member, its effort, its folder's git, its tokens, its context cap, how it opens.
+and its facts (fact_rows): sessionwords.detail, as the terminal's preview says it, its inputs read off
+the snapshot (sessionwords.read_inputs): its team and member, its effort, its folder's git, its tokens,
+its context cap, how it opens.
 
-A team's card: its name, how many are open and need you, its goal, the team as a small live picture
+A team's card: its head, goal and closed note as the terminal's preview says them (teamwords.team_detail,
+counting its members open as the list has them), who needs you, the team as a small live picture
 (teamgraph, compact) and a line a member.
 
 The buttons are the keys the terminal's footer offers on that row (footer.allowed), worded as its
@@ -22,10 +24,9 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
-from .. import actions, agy, footer, picks, sessionwords, summarize, teams, teamwords
+from .. import footer, picks, sessionwords, summarize, teams, teamwords
 from .. import viewmodel as VM
-from ..launch import Launch, default_mode
-from ..sessions import Session, Status, folder_key
+from ..sessions import Session
 from ..store import DashSnapshot
 from . import look
 from .teamgraph import TeamGraph
@@ -64,53 +65,16 @@ def member_ids(team_states: dict[str, teams.TeamState]) -> dict[str, tuple[str, 
             for member, session in state.sessions.items() if session is not None}
 
 
-class Inputs:
-    """What the preview says of a session, read as the terminal dashboard reads it (app.update_detail,
-    meta_table, launch_for), off the snapshot this window holds."""
-
-    def __init__(self, snap: DashSnapshot, accent: str, default_cap: int, summaries: dict[str, dict]) -> None:
-        self.snap, self.accent, self.default_cap, self.summaries = snap, accent, default_cap, summaries
-        self.members = member_ids(snap.team_states)
-
-    def member(self, session: Session) -> tuple[str, str] | None:
-        return self.members.get(session.session_id)
-
-    def team(self, session: Session) -> teams.Team | None:
-        found = self.member(session)
-        state = self.snap.team_states.get(found[0]) if found else None
-        return state.team if state is not None else None
-
-    def launch(self, session: Session) -> Launch:
-        """How a closed session opens (app.launch_for): a background one is attached to."""
-        job = self.snap.background.get(session.session_id) if session.status is Status.BACKGROUND else None
-        return actions.launch_for(session, default_mode(session.status), job, None)
-
-    def messages(self, session: Session) -> list[sessionwords.Part] | None:
-        """A member's messages ('3 in · 2 out · ← lead 2m: …'); None for a session in no team."""
-        found = self.member(session)
-        state = self.snap.team_states.get(found[0]) if found else None
-        if found is None or state is None:
-            return None
-        return sessionwords.messages(state.said, found[1], teamwords.colours(state.team, self.accent))
-
-    def said(self, session: Session, found: tuple[str, int, int] | None) -> list[sessionwords.Row]:
-        return sessionwords.said_rows(session, messages=self.messages(session), found=found,
-                                      summary=self.summaries.get(session.session_id), summarizing=False,
-                                      summary_model=summarize.MODEL, room=ROOM, more=MORE, accent=self.accent)
-
-    def facts(self, session: Session) -> list[sessionwords.Row]:
-        claude = session.cli == "claude"
-        return sessionwords.fact_rows(
-            session, member=self.member(session),
-            effort=VM.effort_of(session, self.member(session) is not None) if claude else "",
-            git=self.snap.git.get(folder_key(session.cwd)), tokens=self.snap.session_tokens.get(session.session_id),
-            cap=teams.cap_of(session.session_id, self.team(session)) if session.context and claude else 0,
-            default_cap=self.default_cap, launch=lambda: self.launch(session), mode=default_mode(session.status),
-            armed=self.snap.armed.get(session.session_id), queued=session.session_id in self.snap.queued,
-            accent=self.accent)
-
-    def enter(self, session: Session) -> str:
-        return sessionwords.enter_words(session, lambda: self.launch(session), set())
+def detail_of(snap: DashSnapshot, session: Session, members: dict[str, tuple[str, str]], *, accent: str,
+              default_cap: int, summaries: dict[str, dict],
+              found: tuple[str, int, int] | None) -> sessionwords.DetailView:
+    """A session's preview as the terminal's says it (sessionwords.detail), its inputs read off the
+    snapshot this window holds as the terminal reads them off its own state (app.detail_inputs)."""
+    inputs = sessionwords.read_inputs(
+        session, members=members, team_states=snap.team_states, git=snap.git, session_tokens=snap.session_tokens,
+        background=snap.background, armed=snap.armed, queued=snap.queued, modes={}, default_cap=default_cap,
+        accent=accent, summaries=summaries, found=found, room=ROOM, more=MORE)
+    return sessionwords.detail(session, inputs)
 
 
 class Drawer(QScrollArea):
@@ -198,22 +162,19 @@ class Drawer(QScrollArea):
         self.facts_heading.hide()
 
     def show_session(self, snap: DashSnapshot, session: Session, found: tuple[str, int, int] | None) -> None:
-        inputs = Inputs(snap, self.accent, self.default_cap, self.summaries)
-        words, means = sessionwords.status_row(session)
-        self.status.setText(cell_html(words) + look.span("   " + means, look.MUTED))
-        member = inputs.member(session)
+        members = member_ids(snap.team_states)
+        view = detail_of(snap, session, members, accent=self.accent, default_cap=self.default_cap,
+                         summaries=self.summaries, found=found)
+        self.status.setText(cell_html(view.status) + look.span("   " + view.means, look.MUTED))
+        member = members.get(session.session_id)
         whose = f"{member[0]} · {member[1]}" if member else session.project
         self.name.setText(look.span(whose, f"bold {self.accent}"))
-        self.title.setText(look.styled(session.title, look.TEXT))
-        try:
-            enter = look.span("⏎ ", f"bold {self.accent}") + look.styled(inputs.enter(session), self.accent)
-        except agy.NoModel as why:  # agy's chain all out of quota: it would not open (its facts say so too)
-            enter = look.span(str(why), look.AMBER)
-        self.enter.setText(enter)
-        row = footer.row(snap.sessions.values(), None, session, 0, inputs.members)
+        self.title.setText(look.styled(view.head, look.TEXT))
+        self.enter.setText(cell_html(view.enter))  # agy out of quota: when it can open again, in amber
+        row = footer.row(snap.sessions.values(), None, session, 0, members)
         self.offer(self.offered_for(snap, row, pinned=session.session_id in snap.pinned, at_limit=VM.at_limit(session)))
         self.graph.hide()
-        self.rows = (inputs.said(session, found), inputs.facts(session))
+        self.rows = (view.said, view.facts)
         self.said.setText(rows_html(self.rows[0]))
         self.facts_heading.show()
         self.facts.setText(rows_html(self.rows[1]))
@@ -225,16 +186,15 @@ class Drawer(QScrollArea):
             self.show_nothing()
             return
         colours = teamwords.colours(state.team, self.accent)
-        self.status.setText(cell_html(teamwords.head(state, state.tokens(snap.session_tokens), self.accent)))
+        open_now = VM.members_open(state, snap.sessions)  # as the list has them, the count its row goes by
+        words = teamwords.team_detail(state, state.tokens(snap.session_tokens), self.accent, open_now)
+        self.status.setText(cell_html(words.head))
         needing = [member.name for member in view.members if member.needs_you]
         self.name.setText(look.span(f"needs you: {', '.join(needing)}", f"bold {look.RED}") if needing else "")
-        self.title.setText(look.span("Goal  ", look.MUTED) + look.styled(teamwords.one_line(state.team.goal), look.TEXT))
-        if view.open:
-            self.enter.setText(look.span("⏎ ", f"bold {self.accent}") + look.span("team view", self.accent))
-        else:
-            last = f", {state.team.lead.name} last" if state.team.lead is not None else ""
-            self.enter.setText(look.span(f"Closed. Enter starts it: each member resumed as itself{last}.", look.AMBER))
-        at_work = bool(view.open)
+        self.title.setText(cell_html(words.goal))
+        self.enter.setText(cell_html(words.closed) if words.closed else
+                           look.span("⏎ ", f"bold {self.accent}") + look.span("team view", self.accent))
+        at_work = bool(open_now)
         row = footer.row(snap.sessions.values(), (name, at_work, False), None, 0, member_ids(snap.team_states))
         stopped = any(session is not None and VM.at_limit(session) for session in state.sessions.values())
         self.offer(self.offered_for(snap, row, pinned=False, at_limit=stopped))

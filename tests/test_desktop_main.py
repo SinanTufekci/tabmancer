@@ -44,7 +44,7 @@ from tabmancer.config import merge_json, read_json
 from tabmancer.desktop import commandbar, drawer, frame, look, main, rail, teamgraph, teampanel
 from tabmancer.keys import KEYS
 from tabmancer.search import matches
-from tabmancer.teamwords import colours, head, one_line
+from tabmancer.teamwords import colours, team_detail
 from tabmancer.tokens import human
 from tabmancer.widgets import bar_text
 
@@ -53,7 +53,6 @@ look.fonts_for_offscreen()
 NBSP = chr(0xA0)
 # Times change between two readings a second apart: "2h10m" to "2h09m".
 TIMES = re.compile(r"\b\d+h\d{2}m\b|\b\d+[dm]\b")
-OPEN = re.compile(r"\b\d+ of(?= \d+ open)")  # "4 of 5 open"
 
 
 @pytest.fixture(scope="module")
@@ -636,8 +635,8 @@ async def test_the_drawer_says_what_the_terminals_preview_says(qapp, world, monk
             enter = preview_words.enter_words(session, partial(tui.launch_for, session), set())  # none ticked
             terminal[kind] = (flat(facts[sid]), asked[sid], enter, messages)
         name, state = next(iter(tui.team_states.items()))
-        team_head = "".join(words for words, _ in head(state, state.tokens(tui.session_tokens), tui.accent()))
-        team_goal = "Goal  " + one_line(state.team.goal)
+        team_words = team_detail(state, state.tokens(tui.session_tokens), tui.accent(), tui.members_open(name))
+        team_head, team_goal = ("".join(words for words, _ in parts) for parts in team_words[:2])
     assert all(terminal[kind][1][1] is None for kind in terminal if kind != "member")  # a member's messages
     asked.clear()
     shown = main.MainWindow(start=False)
@@ -664,11 +663,12 @@ async def test_the_drawer_says_what_the_terminals_preview_says(qapp, world, monk
         assert "attaches to it" in side.plain()
         shown.show_pick(VM.TEAM_CARD + name)
         said = side.plain().replace(NBSP, " ")
-        # How many are open, as the window's team row counts them: the terminal's preview counts its
-        # team reader's copies of the members (0 open on the demo), not the list's own.
+        # How many are open, as both lists have them: the demo's team reader has its members' copies
+        # closed while the list has them open, and the preview, the rail and the board go by the list.
         view = next(team for team in shown.snap.view.teams if team.name == name)
-        assert f"  ·  {view.open} of {len(view.members)} open  ·  " in said and view.open == len(view.members)
-        assert OPEN.sub("<n> of", team_head) in OPEN.sub("<n> of", said) and team_goal in said
+        assert view.open == len(view.members) > state.open_count() and not team_words.closed
+        assert f"  ·  {view.open} of {len(view.members)} open  ·  " in team_head
+        assert team_head in said and team_goal in said and "Closed. Enter starts it" not in said
     finally:
         shown.settle()
         shown.close()
