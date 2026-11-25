@@ -132,15 +132,12 @@ def crowded_event(sessions: Iterable[Session], cap_of: Callable[[Session], int],
         Bit("react", f"{session.project}: context {human(session.context)}", "crowded"), once_keys=keys)
 
 
-def events(before: dict[str, Session], updates: dict[str, Session], told_crowded: set[str],
-           cap_of: Callable[[Session], int], default_cap: int, who_of: Callable[[Session], str] | None = None,
+def events(before: dict[str, Session], updates: dict[str, Session], who_of: Callable[[Session], str] | None = None,
            skip: Iterable[str] = ()) -> list[Event]:
-    """Two looks a poll apart, as events: the crowded ones first, then each changed session's in the
-    poll's order. skip: sessions handled otherwise (a queued handover that just finished)."""
+    """Two looks a poll apart, as events: each changed session's in the poll's order (the crowded ones
+    are crowded_event's, asked first). skip: sessions handled otherwise (a queued handover that just
+    finished)."""
     out: list[Event] = []
-    crowded = crowded_event(updates.values(), cap_of, default_cap, told_crowded)
-    if crowded is not None:
-        out.append(crowded)
     skipped = set(skip)
     for sid, fresh in updates.items():
         if sid not in skipped:
@@ -169,9 +166,10 @@ def toast_words(turned: list[Session], others_note: Callable[[datetime | None], 
 # --- limits and accounts ------------------------------------------------------------------------
 
 
-def stopped_event(stopped: list[Session], others_for: Callable[[datetime], str]) -> Event:
+def stopped_event(stopped: list[Session], others_for: Callable[[datetime], str],
+                  now: datetime | None = None) -> Event:
     """Once per session, what Bit says of the ones a usage limit stopped (actions.limit_say)."""
-    said = limit_say(stopped, others_for)
+    said = limit_say(stopped, others_for, now)
     return Event(STOPPED, bit=Bit("react" if said.mood else "say", said.words, said.mood, seconds=said.seconds),
                  once_keys=tuple(s.session_id for s in stopped))
 

@@ -679,7 +679,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         # actor lock (actor.py), once however many dashboards and monitors are open. Taken in on_mount;
         # a dashboard without it watches like a monitor, and takes it over when its holder is gone.
         self.actor_timers: list[Timer] = []  # what acting runs on a timer: stopped if the lock is lost
-        self.armed_unsaved = False  # the sessions to continue could not be saved, and that was said
         self.actor_misses = 0  # looks in a row that found no lock it could read (tick_actor)
         self.told_alone = False  # a monitor said no dashboard is open
         # The Windows Terminal window sessions open in, by name (--tabs-window), when tabmancer's own
@@ -707,8 +706,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.last_row = 0  # where the cursor was, so it steps over a heading the same way
         self.waiting_turn = 0  # j goes round the sessions waiting for you
         self.waiting_group = ""  # j: "needs" while some session needs you, else "waiting"
-        self.armed: dict[str, datetime] = {}  # c: session id -> when it continues (its limit lifts)
-        self.told_limit: set[str] = set()  # sessions Bit has said are stopped at a limit
         self.told_update: str | None = None  # the newer tabmancer already told of
         self.updating_claude = False  # claude update running: sessions asked for wait for it
         self.after_claude_update: list[Callable[[], None]] = []
@@ -932,9 +929,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def show_armed(self, armed: dict[str, datetime]) -> None:
         """A dashboard that watches: the sessions to continue at their reset, as the one that acts saved them."""
-        if armed == self.armed or self.acts:
-            return
-        self.armed = armed
+        self.engine.show_armed(armed)
+
+    def armed_changed(self) -> None:
         if self.screen_stack:
             for session in self.sessions.values():
                 if at_limit(session):
@@ -2378,11 +2375,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.open_handover(session, how if how in ("self", "transcript") else None)
             return "handing over" if how in ("self", "transcript") else "asking how"
         if action == "continue_at_reset":
-            refused = actions.arm_refusal(session, self.acts)
+            refused = self.engine.arm(session)
             if refused is not None:
                 return refused
-            self.armed.update(actions.arm([session]))
-            self.save_armed()
             self.update_row(session)
             self.update_detail()
             return actions.armed_words(self.armed[session_id])
@@ -3204,22 +3199,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if picked is None:
                 return
             answer, ids = picked
-            refused = actions.answer_refusal(answer, self.acts)
-            if refused is not None:
-                self.say_note(refused)
-                return
-            choice = actions.continue_choice(answer, ids, stopped, self.armed, when)
-            if choice is None:
-                return
-            self.armed = choice.armed
-            if choice.note is not None:
-                self.notify(choice.note.words, timeout=choice.note.seconds)
-            self.save_armed()
-            if choice.go_on:
-                self.continue_these(choice.go_on)
-            for session in choice.hand_over:
-                self.open_handover(session, how="transcript")
-            if not choice.rows:
+            if not self.engine.choose(answer, ids, stopped, when):
                 return
             for session in stopped:
                 self.update_row(session)
@@ -3242,31 +3222,18 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def load_armed(self) -> None:
         """The sessions to continue at their reset, as saved: the dashboard that acts saves them as it
         continues them, and one that watches shows them."""
-        self.armed = store.read_armed()
+        self.engine.load_armed()
 
     def save_armed(self) -> None:
         """The sessions to continue at their reset, saved: only by the dashboard that acts. A monitor
         and a dashboard that watches continue nothing, and their copy is the saved one, read again."""
-        if not self.acts:
-            return
-        saved = actions.save_armed(self.armed)
-        if not saved and not self.armed_unsaved:  # said once, not at each continue_due
-            note = actions.ARMED_UNSAVED
-            self.notify(note.words, severity=note.severity, timeout=note.seconds)
-        self.armed_unsaved = not saved
+        self.engine.save_armed()
 
     def continue_due(self) -> None:
         """Continue the sessions whose limit has lifted: a closed one in a new tab, an open one with
         the prompt typed into its own tab, which is never closed. One gone on by hand meanwhile is
         left alone."""
-        due = actions.due(self.armed, self.sessions, datetime.now())
-        if not due.gone:
-            return
-        for sid in due.gone:
-            del self.armed[sid]
-        self.save_armed()
-        if due.lifted:
-            self.continue_these(due.lifted, unasked=True)
+        self.engine.due()
 
     @work(thread=True, group="limits")
     def continue_open(self, still_open: list[Session], opened: int) -> None:
@@ -3281,26 +3248,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def check_limits(self) -> None:
         """Forget the sessions gone on from a limit; once per session, Bit says which ones a
-        usage limit stopped and that c continues them."""
-        # On which account each stopped: signed in with another since, it can go on (signed_in_again).
-        # Each one's account by its key (an email when kept before keys were, read as the same account).
-        kept, at = actions.limited_now(self.sessions, accounts.limited_on(), self.signed_as, self.account,
-                                       accounts.same)
-        if self.sessions and self.acts:
-            accounts.keep_limited(kept)
-        self.told_limit &= at
-        if self.sessions and self.acts and not self.armed.keys() <= at:
-            self.armed = actions.still_armed(self.armed, at)
-            self.save_armed()
+        usage limit stopped and that c continues them (Engine.limits)."""
+        self.engine.limits()
+
+    def limits_at(self, at: set[str]) -> None:
         if at != self.limited and self.screen_stack:  # not while the app shuts down: no screen then
             self.limited = at
             self.refresh_bindings()  # c is in the footer only while there is something to continue
-        stopped = actions.newly_stopped(self.sessions, at, self.told_limit, self.armed)
-        if not stopped:
-            return
-        event = alerts.stopped_event(stopped, lambda soon: self.other_accounts_note(soon)[1])
-        self.told_limit.update(event.once_keys)
-        self.show_bit(event.bit)
 
     def save_queued(self) -> None:
         """This window's queued handovers, saved for the other windows to show (actions.read_queued)."""

@@ -10,7 +10,12 @@ ticks).
 Threads and timers are the front's. Every Engine method is called on the front's UI thread only:
 the work off it (reading `claude agents`, the transcripts, typing into a tab) only reads and passes
 its result in, so the engine has no lock and no thread of its own. Time comes from the clock it is
-given, never read here, so a scripted run can say when it is."""
+given, never read here, so a scripted run can say when it is.
+
+The engine calls the front as it goes, not by handing back a list of effects to carry out after: the
+order of what is said and done is part of what it does (a finished handover's note before the list
+takes the poll, a row's flash before, its tick gone after), and a list carried out later would change
+it. The desktop window is a Front as the terminal dashboard is; test_engine pins the order."""
 
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Protocol
 
-from . import actions, actor, alerts, store
+from . import accounts, actions, actor, alerts, store
 from .sessions import Exit, Session
 
 
@@ -28,6 +33,8 @@ class Front(Protocol):
     dashboard (app.SessionPicker) is one; the desktop window will be another."""
 
     default_cap: int  # the context cap new sessions get, in tokens
+    account: accounts.Account | None  # the Claude account signed in now, as last read
+    signed_as: str | None  # its key (account and organisation)
 
     def who(self, session: Session) -> str:
         """A session as a note names it: its project, or 'team: member'."""
@@ -39,6 +46,10 @@ class Front(Protocol):
 
     def monitoring(self) -> bool:
         """A team's monitor, not a dashboard."""
+        ...
+
+    def other_accounts_note(self, opens: datetime | None) -> tuple[str, str]:
+        """What the other accounts offer while a limit stands (accountwords.other_accounts_note)."""
         ...
 
     def tell(self, event: alerts.Event) -> None:
@@ -78,7 +89,24 @@ class Front(Protocol):
         ...
 
     def rows_changed(self, ids: set[str]) -> None:
-        """The sessions changed: their rows, the counts, the limits as they stand now."""
+        """The sessions changed: their rows, the counts, the limits as they stand now (Engine.limits)."""
+        ...
+
+    def limits_at(self, at: set[str]) -> None:
+        """The sessions at a usage limit now (c is in the footer only while there is one)."""
+        ...
+
+    def armed_changed(self) -> None:
+        """The sessions to continue at their reset changed (a dashboard that watches): their rows."""
+        ...
+
+    def continue_these(self, stopped: list[Session], unasked: bool = False) -> None:
+        """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt typed
+        into its own tab. unasked: by itself, the limit lifted."""
+        ...
+
+    def open_handover(self, session: Session | None, how: str | None = None) -> None:
+        """Hand it over as asked (how: "self", "transcript", or None to ask how)."""
         ...
 
 
@@ -98,6 +126,9 @@ class EngineState:
     came_up: set[str] = field(default_factory=set)  # opened from here and seen open since
     full_poll_due: bool = False  # a full live poll is on its way: quick ones wait
     full_polls: int = 0  # full live polls come back so far
+    armed: dict[str, datetime] = field(default_factory=dict)  # c: session id -> when it continues (its limit lifts)
+    armed_unsaved: bool = False  # the sessions to continue could not be saved, and that was said
+    told_limit: set[str] = field(default_factory=set)  # sessions Bit has said are stopped at a limit
 
 
 FORWARDED = tuple(f.name for f in fields(EngineState))
@@ -141,8 +172,7 @@ class Engine:
         turned: list[Session] = []  # were working and now wait for you, or stopped at a limit
         handing = {sid for sid, fresh in updates.items() if sid in state.queued and actions.finished(fresh)}
         said: dict[str, list[alerts.Event]] = {}
-        for event in alerts.events(state.sessions, updates, state.told_crowded, front.cap_of, front.default_cap,
-                                   front.who, skip=handing):
+        for event in alerts.events(state.sessions, updates, front.who, skip=handing):
             said.setdefault(event.session, []).append(event)
         for sid, fresh in updates.items():
             if sid in handing:
@@ -197,3 +227,93 @@ class Engine:
         event = alerts.not_up_event(ids, self.state.came_up, self.state.sessions)
         if event is not None:
             self.tell(event)
+
+    # --- usage limits: the sessions stopped at one, and those to continue when it lifts (c) ----------
+
+    def limits(self) -> None:
+        """Forget the sessions gone on from a limit; once per session, Bit says which ones a usage limit
+        stopped and that c continues them. On which account each stopped is kept (by the one that acts):
+        signed in with another since, it can go on (signed_in_again)."""
+        state, front = self.state, self.front
+        kept, at = actions.limited_now(state.sessions, accounts.limited_on(), front.signed_as, front.account,
+                                       accounts.same)
+        if state.sessions and state.acts:
+            accounts.keep_limited(kept)
+        state.told_limit &= at
+        if state.sessions and state.acts and not state.armed.keys() <= at:
+            state.armed = actions.still_armed(state.armed, at)
+            self.save_armed()
+        front.limits_at(at)
+        stopped = actions.newly_stopped(state.sessions, at, state.told_limit, state.armed)
+        if not stopped:
+            return
+        event = alerts.stopped_event(stopped, lambda soon: front.other_accounts_note(soon)[1], now=self.clock())
+        state.told_limit.update(event.once_keys)
+        front.show_bit(event.bit)
+
+    def load_armed(self) -> None:
+        """The sessions to continue at their reset, as saved: the one that acts saves them as it continues
+        them, and one that watches shows them."""
+        self.state.armed = store.read_armed()
+
+    def save_armed(self) -> None:
+        """The sessions to continue at their reset, saved: only by the one that acts. A monitor and a
+        dashboard that watches continue nothing, and their copy is the saved one, read again."""
+        state = self.state
+        if not state.acts:
+            return
+        saved = actions.save_armed(state.armed)
+        if not saved and not state.armed_unsaved:  # said once, not at each due()
+            self.front.say_note(actions.ARMED_UNSAVED)
+        state.armed_unsaved = not saved
+
+    def show_armed(self, armed: dict[str, datetime]) -> None:
+        """One that watches: the sessions to continue at their reset, as the one that acts saved them."""
+        if armed == self.state.armed or self.state.acts:
+            return
+        self.state.armed = armed
+        self.front.armed_changed()
+
+    def due(self) -> None:
+        """Continue the sessions whose limit has lifted (the one that acts, on its timer): a closed one in
+        a new tab, an open one with the prompt typed into its own tab, which is never closed. One gone on
+        by hand meanwhile is left alone."""
+        due = actions.due(self.state.armed, self.state.sessions, self.clock())
+        if not due.gone:
+            return
+        for sid in due.gone:
+            del self.state.armed[sid]
+        self.save_armed()
+        if due.lifted:
+            self.front.continue_these(due.lifted, True)
+
+    def arm(self, session: Session) -> str | None:
+        """One session to continue at its reset (the act API's continue_at_reset): why not, in a few words,
+        or None once it is."""
+        refused = actions.arm_refusal(session, self.state.acts)
+        if refused is not None:
+            return refused
+        self.state.armed.update(actions.arm([session], self.clock()))
+        self.save_armed()
+        return None
+
+    def choose(self, answer: str, ids: list[str], stopped: list[Session], when: str) -> bool:
+        """The c dialog's answer for the ticked (ids) of the stopped: now, handover, lift or off (the last
+        two only where this one acts). Whether their rows changed."""
+        state, front = self.state, self.front
+        refused = actions.answer_refusal(answer, state.acts)
+        if refused is not None:
+            front.say_note(refused)
+            return False
+        choice = actions.continue_choice(answer, ids, stopped, state.armed, when, self.clock())
+        if choice is None:
+            return False
+        state.armed = choice.armed
+        if choice.note is not None:
+            front.say_note(choice.note)
+        self.save_armed()
+        if choice.go_on:
+            front.continue_these(choice.go_on, False)
+        for session in choice.hand_over:
+            front.open_handover(session, "transcript")
+        return choice.rows

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from tabmancer import actions, actor, alerts, engine
+from tabmancer import accounts, actions, actor, alerts, engine
 from tabmancer.sessions import Exit, Session, Status
 
 NOW = datetime(2026, 11, 25, 12, 0)
@@ -22,14 +22,16 @@ NOW = datetime(2026, 11, 25, 12, 0)
 
 def s(sid, state="busy", exit=Exit.RUNNING, context=50_000, **kw) -> Session:
     return Session(session_id=sid, path=Path(f"C:/nowhere/{sid}.jsonl"), cwd=f"C:/work/{sid}", title=f"T {sid}",
-                   exit=exit, status=Status.RUNNING if exit is Exit.RUNNING else Status.DONE, live_state=state,
-                   last_active=NOW - timedelta(minutes=3), context=context, **kw)
+                   exit=exit, status=kw.pop("status", Status.RUNNING if exit is Exit.RUNNING else Status.DONE),
+                   live_state=state, last_active=NOW - timedelta(minutes=3), context=context, **kw)
 
 
 class Front:
     """Records what the engine has it say and do, in order."""
 
     default_cap = 200_000
+    account = None
+    signed_as = "me"
 
     def __init__(self, monitor: bool = False) -> None:
         self.calls: list[tuple] = []
@@ -37,6 +39,9 @@ class Front:
 
     def who(self, session):
         return session.project
+
+    def other_accounts_note(self, opens):
+        return "", ""
 
     def cap_of(self, session):
         return 0
@@ -187,7 +192,8 @@ def test_the_dashboards_state_is_the_engines():
 
     app = SessionPicker(days=14)
     assert engine.FORWARDED == ("acts", "sessions", "queued", "unasked", "notes", "told_crowded", "told_idle",
-                                "opening", "came_up", "full_poll_due", "full_polls")
+                                "opening", "came_up", "full_poll_due", "full_polls", "armed", "armed_unsaved",
+                                "told_limit")
     for name in engine.FORWARDED:
         value = object()
         setattr(app, name, value)
@@ -196,3 +202,112 @@ def test_the_dashboards_state_is_the_engines():
         setattr(app.engine.state, name, other)
         assert getattr(app, name) is other, name
     assert app.engine.front is app
+
+
+# --- usage limits and the sessions to continue at their reset (E2) -------------------------------------
+
+LIFTS = NOW + timedelta(hours=1)
+
+
+def lim(sid, resets=LIFTS) -> Session:
+    return s(sid, state="", exit=Exit.CLEAN, resets=resets, status=Status.LIMIT)
+
+
+@pytest.fixture
+def kept(monkeypatch):
+    """What the accounts file and config.json are asked to keep."""
+    saved = {"limited": [], "armed": [], "ok": True}
+    monkeypatch.setattr(accounts, "limited_on", dict)
+    monkeypatch.setattr(accounts, "keep_limited", lambda limited: saved["limited"].append(dict(limited)))
+    monkeypatch.setattr(actions, "save_armed", lambda armed: saved["armed"].append(dict(armed)) or saved["ok"])
+    return saved
+
+
+def test_bit_says_once_which_a_limit_stopped_by_the_clock_given(kept):
+    for at, words in ((NOW, "l1: limit until 13:00. c continues then"),
+                      (LIFTS + timedelta(minutes=5), "l1: the limit has lifted. c continues now")):
+        front = Front()
+        eng = engine.Engine(front, clock=lambda at=at: at, state=engine.EngineState(acts=True, sessions={
+            "l1": lim("l1"), "w": s("w")}))
+        eng.limits()
+        eng.limits()
+        assert front.names() == ["limits_at", "show_bit", "limits_at"] and front.calls[1][1].words == words
+        assert front.calls[0][1] == {"l1"} and eng.state.told_limit == {"l1"}
+        assert kept["limited"][-1] == {"l1": "me"}  # stopped on the account signed in now
+
+
+def test_one_gone_on_meanwhile_is_forgotten_by_the_one_that_acts(kept):
+    for acts in (True, False):
+        armed = {"l1": LIFTS, "gone": LIFTS}
+        eng = made(Front(), acts=acts, sessions={"l1": lim("l1"), "gone": s("gone")}, armed=dict(armed),
+                   told_limit={"l1", "gone"})
+        eng.limits()
+        assert eng.state.told_limit == {"l1"}
+        assert eng.state.armed == ({"l1": LIFTS} if acts else armed)
+    assert kept["armed"] == [{"l1": LIFTS}] and len(kept["limited"]) == 1  # only the one that acts saves
+
+
+def test_a_save_that_fails_is_said_once(kept):
+    front = Front()
+    eng = made(front, acts=True)
+    kept["ok"] = False
+    eng.save_armed()
+    eng.save_armed()
+    assert front.names() == ["say_note"] and front.calls[0][1] is actions.ARMED_UNSAVED and eng.state.armed_unsaved
+    kept["ok"] = True
+    eng.save_armed()
+    assert not eng.state.armed_unsaved
+    watching = made(Front())
+    watching.save_armed()
+    assert len(kept["armed"]) == 3
+
+
+def test_the_saved_armed_shown_only_where_it_watches():
+    front = Front()
+    eng = made(front, acts=True)
+    eng.show_armed({"l1": LIFTS})
+    assert eng.state.armed == {} and front.calls == []
+    eng.state.acts = False
+    eng.show_armed({"l1": LIFTS})
+    eng.show_armed({"l1": LIFTS})
+    assert eng.state.armed == {"l1": LIFTS} and front.names() == ["armed_changed"]
+
+
+def test_due_once_the_limit_lifted_by_the_clock(kept):
+    clock = [NOW]
+    front = Front()
+    eng = engine.Engine(front, clock=lambda: clock[0], state=engine.EngineState(
+        acts=True, sessions={"l1": lim("l1"), "w": s("w")}, armed={"l1": LIFTS, "w": LIFTS}))
+    eng.due()
+    assert front.calls == [] and kept["armed"] == []
+    clock[0] = LIFTS + actions.LIMIT_MARGIN
+    eng.due()
+    assert front.calls == [("continue_these", [eng.state.sessions["l1"]], True)]  # w went on by hand: left alone
+    assert eng.state.armed == {} and kept["armed"] == [{}]
+
+
+def test_one_set_to_continue_at_its_reset(kept):
+    watching = made(Front())
+    assert watching.arm(lim("l1")) == actions.ARM_ELSEWHERE and watching.state.armed == {}
+    eng = made(Front(), acts=True)
+    assert eng.arm(s("w")) == "not at a limit"
+    assert eng.arm(lim("l1")) is None and eng.arm(lim("l2", resets=None)) == "not at a limit"
+    assert eng.state.armed == {"l1": LIFTS} and kept["armed"] == [{"l1": LIFTS}]
+
+
+def test_the_c_dialogs_answers(kept):
+    stopped = [lim("l1"), lim("l2", NOW + timedelta(hours=2))]
+    front = Front()
+    watching = made(front)
+    assert not watching.choose("lift", ["l1"], stopped, "at 13:00")
+    assert front.calls == [("say_note", actions.ACTS_ELSEWHERE)]
+    front = Front()
+    eng = made(front, acts=True, armed={"l1": LIFTS})
+    assert not eng.choose("handover", ["l1"], stopped, "at 13:00")
+    assert not eng.choose("now", ["l2"], stopped, "at 13:00")
+    assert eng.choose("lift", ["l1", "l2"], stopped, "at 13:00")
+    assert not eng.choose("later", ["l1"], stopped, "at 13:00")
+    assert front.names() == ["open_handover", "continue_these", "say_note"]
+    assert front.calls[0][1:] == (stopped[0], "transcript") and front.calls[1][1:] == ([stopped[1]], False)
+    assert front.calls[2][1].words == "2 sessions continue at 13:00, when the limit lifts. Leave the dashboard open."
+    assert eng.state.armed == {"l1": LIFTS, "l2": NOW + timedelta(hours=2)} and len(kept["armed"]) == 3

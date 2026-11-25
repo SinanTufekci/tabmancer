@@ -75,12 +75,12 @@ def test_crowded_once_one_or_many():
     assert alerts.crowded_event([s("a", context=1000)], lambda _: cap, cap, set()) is None
 
 
-def test_events_crowded_first_then_the_poll_order_but_skipped():
+def test_events_in_the_poll_order_but_skipped():
     before = {"a": s("a"), "b": s("b")}
     updates = {"b": s("b", "idle"), "a": s("a", "permission", context=900_000)}
-    said = alerts.events(before, updates, set(), lambda _: 300_000, 300_000, who_of=lambda x: "who")
-    assert [(e.kind, e.session) for e in said] == [(alerts.CROWDED, "a"), (alerts.DONE, "b"), (alerts.NEEDS_YOU, "a")]
-    skipped = alerts.events(before, updates, {"a"}, lambda _: 300_000, 300_000, skip={"b"})
+    said = alerts.events(before, updates, who_of=lambda x: "who")
+    assert [(e.kind, e.session) for e in said] == [(alerts.DONE, "b"), (alerts.NEEDS_YOU, "a")]  # crowded: not here
+    skipped = alerts.events(before, updates, skip={"b"})
     assert [(e.kind, e.session) for e in skipped] == [(alerts.NEEDS_YOU, "a")]
 
 

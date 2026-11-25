@@ -578,9 +578,9 @@ def plan_words(limits: list, others: list[str]) -> tuple[str, bool]:
     return plan, session_limit is not None and session_limit.percent < 95
 
 
-def arm(these: list[Session]) -> dict[str, datetime]:
+def arm(these: list[Session], now: datetime | None = None) -> dict[str, datetime]:
     """Each continues by itself when its limit lifts: at its reset, or now when it has none."""
-    return {s.session_id: s.resets or datetime.now() for s in these}
+    return {s.session_id: s.resets or now or datetime.now() for s in these}
 
 
 def arm_refusal(session: Session, acts: bool) -> str | None:
@@ -620,7 +620,7 @@ class Choice:
 
 
 def continue_choice(answer: str, ids: list[str], stopped: list[Session], armed: dict[str, datetime],
-                    when: str) -> Choice | None:
+                    when: str, now: datetime | None = None) -> Choice | None:
     """The c dialog's answer: now, handover (from the transcript: the old context is not sent again on
     the new account), lift (by themselves when the limit lifts) or off. None for anything else. Lift and
     off are for the dashboard that acts alone (the front end checks)."""
@@ -631,7 +631,7 @@ def continue_choice(answer: str, ids: list[str], stopped: list[Session], armed: 
     if answer == "lift":
         words = (f"{len(these)} {'session continues' if len(these) == 1 else 'sessions continue'} {when}, when the "
                  "limit lifts. Leave the dashboard open.")
-        return Choice(arm(these), [], [], Note(words, seconds=8), rows=True)
+        return Choice(arm(these, now), [], [], Note(words, seconds=8), rows=True)
     if answer == "off":
         return Choice({}, [], [], ARMED_OFF, rows=True)
     return None
@@ -728,12 +728,15 @@ class Say:
     seconds: float = 10
 
 
-def limit_say(stopped: list[Session], others_for: Callable[[datetime], str]) -> Say:
+def limit_say(stopped: list[Session], others_for: Callable[[datetime], str], now: datetime | None = None) -> Say:
     """Once per session, what Bit says of the ones a usage limit stopped: until when, and that c
     continues them (or what the other accounts offer: others_for(when it lifts))."""
     names = ", ".join(sorted({s.project for s in stopped})[:3])
-    soon = min((viewmodel.free_at(s) for s in stopped if viewmodel.free_at(s)), default=None)
-    if soon and soon > datetime.now():
+
+    def free(session: Session) -> datetime | None:  # viewmodel.free_at, by this clock
+        return (now or datetime.now()) if session.signed_in_again else viewmodel.free_at(session)
+    soon = min((free(s) for s in stopped if free(s)), default=None)
+    if soon and soon > (now or datetime.now()):
         others = others_for(soon)
         return Say(f"{names}: limit until {viewmodel.lifts(soon)}. {others or 'c continues then'}",
                    seconds=12 if others else 10)
