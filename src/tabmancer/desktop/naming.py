@@ -1,7 +1,8 @@
 """r in the window: a name asked for as the terminal dashboard's NamePrompt asks it (NameDialog: a heading,
 one line to type it in with the old name there and picked, so typing replaces it, and the keys at its foot),
 and a closed session renamed off the window's thread (Renamer: rename.rename runs /rename in it once). What
-r says is rename.py's, the terminal dashboard's words."""
+r says is rename.py's, the terminal dashboard's words. p asks for a prompt the same way (PromptDialog), in
+prompting.py's words."""
 
 from __future__ import annotations
 
@@ -10,10 +11,10 @@ from collections.abc import Iterable
 from dataclasses import replace
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QShowEvent
+from PySide6.QtGui import QKeySequence, QShortcut, QShowEvent
 from PySide6.QtWidgets import QDialog, QLineEdit, QVBoxLayout, QWidget
 
-from .. import rename
+from .. import prompting, rename
 from ..sessions import Session, read_session
 from . import look
 from .formparts import keys_html
@@ -67,6 +68,31 @@ class NameDialog(QDialog):
         self.accept()
         if name:
             self.named.emit(name)
+
+
+class PromptDialog(NameDialog):
+    """p: what the session should do next, as the terminal dashboard's PromptDialog asks it. Enter sends it
+    to a new tab, Ctrl+B to the background (sent, once, with where: prompting.TAB or BACKGROUND); Enter on
+    nothing stays, Esc sends nothing."""
+
+    sent = Signal(str, str)
+
+    def __init__(self, parent: QWidget, session: Session, accent: str) -> None:
+        super().__init__(parent, prompting.heading(session), "", prompting.placeholder(session),
+                         prompting.keys(session), accent)
+        self.background = QShortcut(QKeySequence("Ctrl+B"), self)
+        self.background.activated.connect(self.to_background)
+
+    def answer(self, how: str = prompting.TAB) -> None:
+        prompt = self.line.text().strip()
+        if self.answered or not prompt:
+            return
+        self.answered = True
+        self.accept()
+        self.sent.emit(how, prompt)
+
+    def to_background(self) -> None:
+        self.answer(prompting.BACKGROUND)
 
 
 class Renamer(QObject):

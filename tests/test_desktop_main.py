@@ -721,7 +721,7 @@ def test_the_drawer_shows_a_teams_card_and_its_buttons_wait_for_the_window(qapp,
     for b in buttons:  # the window's own keys work; the rest wait till it does them
         here = b.property("key") in main.HERE
         assert b.isEnabled() is here and b.toolTip() == ("" if here else main.ELSEWHERE)
-    assert {b.property("key") for b in buttons if b.isEnabled()} == {"Enter", "h", "f", "x"}
+    assert {b.property("key") for b in buttons if b.isEnabled()} == {"Enter", "p", "h", "f", "x"}
     pressed = []
     side.act.connect(pressed.append)
     side.set(shown.snap, closed.session_id, None, {key: None for key, _, _ in drawer.BUTTONS})  # all done here
@@ -1271,7 +1271,8 @@ def test_a_right_click_on_a_card_or_a_row_picks_it_and_offers_the_drawers_button
     right_click(table.viewport(), row_spot(open_one))
     items = menu_items(shown)
     assert table.pick == open_one and items[0][0] == actions.clip(snap.sessions[open_one].title, main.MENU_TITLE)
-    assert any(not enabled and tip == main.ELSEWHERE for _, enabled, tip in items[1:])  # done in the terminal
+    assert all(enabled and tip == "" for _, enabled, tip in items[1:])  # p too: its tab comes to the front
+    assert any(words.endswith("\tp") for words, _, _ in items[1:])
     first = shown.popup
     menu_key(table)  # the menu key: the picked row's
     assert shown.popup is not first and menu_items(shown)[0] == items[0] and not first.isVisible()

@@ -1,7 +1,7 @@
 """The window's keys that reach past it: Enter opens the ticked sessions, or the picked one, each in a
 new tab (one running in the background is attached to), and on an open one brings its tab to the front,
-as j does for the next open session waiting for you; m changes how the picked one opens; x twice on a
-team with members open closes their tabs.
+as j does for the next open session waiting for you; m changes how the picked one opens; p opens a closed
+one with a prompt (prompting.py); x twice on a team with members open closes their tabs.
 
 The terminal dashboard's own steps (actions.py), each on a thread of its own: finding a tab, or today's
 claude update before Claude Code sessions open (claudeupdate), takes a while, and the window never waits
@@ -22,7 +22,7 @@ from functools import partial
 
 from PySide6.QtCore import QObject, Signal
 
-from .. import actions, claudeupdate, launch, openings
+from .. import actions, claudeupdate, launch, openings, prompting
 from ..launch import Launch, Mode, default_mode
 from ..sessions import Session, Status
 from ..store import DashSnapshot, live_entries
@@ -36,6 +36,11 @@ NO_TERMINAL = ("No terminal here opens tabs, so nothing opened: the commands are
 def open_tabs(launches: list[Launch]) -> list[str]:
     """New tabs, by launch.open_tabs as it is when called (the demo stands in for it)."""
     return launch.open_tabs(launches)
+
+
+def run_in_background(one: Launch) -> str:
+    """claude --bg, by launch.run_in_background as it is when called (the demo stands in for it)."""
+    return launch.run_in_background(one)
 
 
 def live_ids(background: dict[str, dict]) -> set[str]:
@@ -68,6 +73,7 @@ class Opener(QObject):
     said = Signal(str, float, str)
     opened = Signal(object)
     closed = Signal()
+    prompted = Signal(object)  # what a p came to (prompting.Sent)
 
     def __init__(self, parent: QObject | None = None, clock: Callable[[], float] = time.monotonic,
                  update: bool = True) -> None:
@@ -124,6 +130,23 @@ class Opener(QObject):
         self.openings.seen(sessions)
         words = self.openings.due(sessions)
         return actions.Note(words, "warning", 10) if words else None
+
+    # --- p ----------------------------------------------------------------------------------------
+
+    def write(self, session: Session, how: str, prompt: str, background: dict[str, dict]) -> None:
+        """p: a closed session opened with the prompt (prompting.send), in a new tab or in the background, on
+        a thread of its own; today's claude update first, when it is due and the session is Claude Code's."""
+        self.start(self.write_now, session, how, prompt, dict(background))
+
+    def write_now(self, session: Session, how: str, prompt: str, background: dict[str, dict]) -> None:
+        if self.update and session.cli == "claude":
+            claudeupdate.before_opening(self.tell)
+        sent = prompting.send(session, how, prompt, partial(live_ids, background), open_tabs, run_in_background,
+                              self.say)
+        try:
+            self.prompted.emit(sent)
+        except RuntimeError:
+            pass  # the window has gone meanwhile
 
     # --- an open session's tab, and j -------------------------------------------------------------
 

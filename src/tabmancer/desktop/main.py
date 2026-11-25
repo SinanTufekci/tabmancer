@@ -16,7 +16,8 @@ an account; what happens by itself (a limit lifting) is the acting dashboard's. 
 does as the terminal's keys do. Enter opens the ticked sessions, or the picked one, in new tabs, and
 brings an open one's tab to the front (a team's card: its Team panel tab); j goes to the next open
 session waiting for you, and m changes how the picked one opens (opening.py, each on a thread of its
-own). M opens the picked team's monitor (a member's: its team's) in a window of its own (monitor.py), on
+own); p opens a closed one with a prompt, in a new tab or in the background, and r renames one (naming.py,
+in prompting.py's and rename.py's words). M opens the picked team's monitor (a member's: its team's) in a window of its own (monitor.py), on
 another screen when there is one; open already, here or from the terminal, it comes to the front. Space
 and a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the rail, the project; on a
 team with members open, x twice closes their tabs, as on /exit), X shows the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and
@@ -77,6 +78,7 @@ from .. import (
     engine,
     handoverwords,
     marks,
+    prompting,
     rename,
     search,
     teams,
@@ -93,7 +95,7 @@ from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
 from .front import WindowFront
 from .monitor import MonitorWindow, sequences
-from .naming import NameDialog, Renamer
+from .naming import NameDialog, PromptDialog, Renamer
 from .opening import Opener
 from .rail import Rail
 from .table import Table, drawer_key
@@ -107,7 +109,7 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r"}
+        "j", "M", "h", "r", "p"}
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
@@ -199,6 +201,8 @@ class MainWindow(QMainWindow):
         self.opener = Opener(self, update=not demo)  # Enter, j and m: what they keep, and their threads
         self.opener.said.connect(self.say_note)
         self.opener.opened.connect(self.took_open)
+        self.opener.prompted.connect(self.prompt_sent)
+        self.writing_to: Session | None = None  # p: the session its dialog writes to
         self.front = WindowFront(self, update=not demo)  # what each reading turns up, and h: the terminal's one copy decides
         # Never acts (state.acts stays False). What opened from here is one copy: Enter's and the engine's (h's fresh one).
         self.engine = engine.Engine(self.front, datetime.now, engine.EngineState(openings=self.opener.openings))
@@ -424,7 +428,7 @@ class MainWindow(QMainWindow):
                  "Space": self.toggle, "a": self.toggle_all, "e": self.expand, "E": self.fold_teams, "x": self.hide,
                  "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
                  "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key,
-                 "h": self.handover_key, "r": self.rename_key}
+                 "h": self.handover_key, "r": self.rename_key, "p": self.prompt_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -1239,6 +1243,49 @@ class MainWindow(QMainWindow):
 
     def rename_failed(self, note: actions.Note) -> None:
         self.say_note(note.words, float(note.seconds or 4), note.severity)
+
+    def prompt_key(self) -> None:
+        """p: a prompt for the picked session, as the terminal dashboard's p asks for it (prompting.py): an open
+        one's tab comes to the front instead (nothing types into it from outside), one in the background is
+        attached to, not prompted; a closed one opens with it, in a new tab (Enter) or the background (Ctrl+B)."""
+        snap = self.snap
+        session = snap.sessions.get(self.picked_now()) if snap is not None else None
+        if session is None:
+            self.say("p writes to a session: pick one.")
+            return
+        if session.status is Status.RUNNING:
+            self.opener.go_to(session)
+            return
+        refused = prompting.refusal(session)
+        if refused:
+            self.say_note(refused, 6, "warning")
+            return
+        self.writing_to = session
+        asked = PromptDialog(self, session, self.accent)
+        asked.sent.connect(self.prompt_to)
+        asked.open()
+
+    def prompt_to(self, how: str, prompt: str) -> None:
+        """The prompt given: sent on a thread (Opener.write), the session as the list has it now (it may have
+        opened while the dialog stood: then nothing opens, said)."""
+        session, self.writing_to = self.writing_to, None
+        snap = self.snap
+        if session is None or snap is None:
+            return
+        self.opener.write(snap.sessions.get(session.session_id, session), how, prompt, snap.background)
+
+    def prompt_sent(self, sent: prompting.Sent) -> None:
+        """What a p came to (prompting.Sent): said (the demo's tell says what would have opened), with no
+        terminal that opens tabs the command on the clipboard; read again, soon where a tab opened or a
+        background session started."""
+        if sent.leftover:
+            QApplication.clipboard().setText("\n".join(sent.leftover))
+        if not (self.demo and sent.outcome == "opened"):
+            self.say_note(sent.note.words, float(sent.note.seconds or 4), sent.note.severity)
+        if sent.outcome == "elsewhere":
+            self.poll()
+        elif sent.outcome in ("opened", "started"):
+            self.after_open.start(AFTER_OPEN_MS)
 
     def next_waiting(self) -> None:
         """j: the next open session that needs you, else the next one waiting for you: picked in the list
