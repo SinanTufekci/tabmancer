@@ -28,7 +28,7 @@ def in_demo(tmp_path, monkeypatch):
         monkeypatch.setenv(name, os.environ.get(name, ""))
     live = demo.prepare(tmp_path)
     tui = demo.picker()
-    for module, name, value in demo.stand_ins(tmp_path, live, tui.tell):
+    for module, name, value in demo.stand_ins(tmp_path, live, tui.told):
         monkeypatch.setattr(module, name, value)
     monkeypatch.setattr(terminal, "STAR", "✶" * len(terminal.STAR))  # a star that stands still
     return tui

@@ -150,7 +150,7 @@ def in_demo(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", "restored after the test")  # prepare() sets it too
     live = demo.prepare(tmp_path)
     app = demo.picker()
-    for module, name, value in demo.stand_ins(tmp_path, live, app.tell):
+    for module, name, value in demo.stand_ins(tmp_path, live, app.told):
         monkeypatch.setattr(module, name, value)
     return app
 

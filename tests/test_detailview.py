@@ -146,7 +146,7 @@ async def test_a_teams_preview_says_as_many_open_as_the_list(tmp_path, monkeypat
         monkeypatch.setenv(name, os.environ.get(name, ""))
     live = demo.prepare(tmp_path)
     app = demo.picker()
-    for module, name, value in demo.stand_ins(tmp_path, live, app.tell):
+    for module, name, value in demo.stand_ins(tmp_path, live, app.told):
         monkeypatch.setattr(module, name, value)
     async with app.run_test(size=(200, 50)) as pilot:
         for _ in range(200):

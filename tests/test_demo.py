@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from conftest import box_has_focus
 
-from tabmancer import actions, app, cli, demo, focus, launch, teamview
+from tabmancer import actions, alerts, app, cli, demo, focus, launch, teamview
 from tabmancer.app import SessionPicker
 from tabmancer.launch import Launch, Mode
 
@@ -16,7 +16,7 @@ def in_demo(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", "restored after the test")  # prepare() sets it too
     live = demo.prepare(tmp_path)
     app = demo.picker()
-    for module, name, value in demo.stand_ins(tmp_path, live, app.tell):
+    for module, name, value in demo.stand_ins(tmp_path, live, app.told):
         monkeypatch.setattr(module, name, value)
     return app
 
@@ -138,7 +138,7 @@ def test_tabmancer_demo_runs_in_a_folder_of_its_own_and_cleans_it_up(tmp_path, m
     seen = {}
 
     class Dashboard:
-        def tell(self, text):
+        def told(self, text):
             pass
 
         def run(self):
@@ -153,6 +153,19 @@ def test_tabmancer_demo_runs_in_a_folder_of_its_own_and_cleans_it_up(tmp_path, m
     cli.main(["--demo"])
     assert seen["sessions"] >= len(demo.SESSIONS) and seen["stand-in"]
     assert seen["home"].name.startswith("tabmancer-demo-") and not seen["home"].exists()
+
+
+async def test_an_event_in_the_demo_is_said_as_the_dashboard_says_it(in_demo):
+    """The demo's own words (what would have opened) are not the dashboard's tell(event): an event the
+    engine tells reaches its note, as outside the demo, not a "Demo" note of the Event itself."""
+    app = in_demo
+    async with app.run_test(size=(150, 40)) as pilot:
+        await pilot.pause()
+        app.engine.tell(alerts.newer_event("9.9", "uv tool upgrade tabmancer"))
+        await pilot.pause()
+        said = told(app)
+        assert any(str(message).startswith("tabmancer 9.9 is out") for message in said), said
+        assert not any("Event(" in str(message) for message in said), said
 
 
 def test_demo_with_a_command_says_to_leave_it_out(capsys):

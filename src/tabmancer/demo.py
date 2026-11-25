@@ -444,7 +444,8 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
 
 
 def picker(days: float = 14):
-    """The dashboard, saying all along that it is the demo; its tell() is for stand_ins()."""
+    """The dashboard, saying all along that it is the demo; its told() is for stand_ins(). Not tell(),
+    which is the dashboard's own: the engine tells it an alerts.Event, said as outside the demo."""
     from . import app as app_module
     from .app import SessionPicker
     from .widgets import TopBar
@@ -458,10 +459,10 @@ def picker(days: float = 14):
             app_module.open_tabs(launches)  # the stand-in, which says what would have opened
 
         def notify(self, message, *args, **kwargs) -> None:
-            if not str(message).startswith("Opened "):  # nothing did: tell() said what would have
+            if not str(message).startswith("Opened "):  # nothing did: told() said what would have
                 super().notify(message, *args, **kwargs)
 
-        def tell(self, text: str) -> None:
+        def told(self, text: str) -> None:
             try:
                 self.call_from_thread(self.notify, text, title="Demo", timeout=10)
             except RuntimeError:  # already on the app's own thread
@@ -479,7 +480,7 @@ def run(days: float = 14) -> None:
     try:
         live = prepare(home)
         demo = picker(days)
-        for module, name, value in stand_ins(home, live, demo.tell):
+        for module, name, value in stand_ins(home, live, demo.told):
             setattr(module, name, value)
         demo.run()
     finally:
