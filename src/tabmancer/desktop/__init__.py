@@ -7,6 +7,9 @@ Its first part is the team monitor, `tabmancer desktop --monitor [team]`. It onl
 the team through the one-team store (store.TeamStore) on a thread of its own, never claims the
 actor lock (the dashboard that acts goes on acting), and starts, sends and closes nothing. The
 terminal monitor (`tabmancer team watch`, M in the dashboard) stays as it is.
+
+The dashboard's window, `tabmancer desktop` (desktop.main), is under way: its top bar, menus and
+key bar, and panels to fill. It watches the way the monitor does, through store.DashboardStore.
 """
 
 from __future__ import annotations

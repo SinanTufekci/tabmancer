@@ -13,23 +13,15 @@ for the dashboard) is named in the menus and done in the terminal monitor for no
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import os
-import shutil
-import sys
-import tempfile
 import threading
 from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
+from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
-    QDialog,
     QDockWidget,
     QGridLayout,
     QHBoxLayout,
@@ -43,12 +35,12 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__, agy, bitart, focus, teams, teamview
-from ..config import config_dir, merge_json, read_json
 from ..keys import MONITOR_KEYS
 from ..sessions import Exit, Status
 from ..store import Snapshot, TeamStore
 from ..tokens import human
-from . import look
+from . import frame, look
+from .frame import DEMO_ENV, LAYOUT_FILE, LAYOUT_VERSION, KeysDialog, made_up_world  # noqa: F401  (the first two: named here for the tests)
 from .widgets import (
     HourChart,
     KeyBar,
@@ -65,11 +57,7 @@ from .widgets import (
 
 POLL_MS = 2000  # as often as the terminal monitor reads its team
 SAID_MS = 7000  # how long Bit says what just happened before it says how the team stands again
-KNOCK_MS = 500  # how long a second monitor waits for the first to answer
 CARD_WIDTH = 340  # a card's least width: as many columns as fit
-LAYOUT_FILE = "desktop.json"
-LAYOUT_VERSION = 1
-DEMO_ENV = ("CLAUDE_CONFIG_DIR", "TABMANCER_CONFIG_DIR", "CODEX_HOME")  # what demo.prepare points elsewhere
 # The monitor's keys that work here (MONITOR_KEYS names them all); the rest are the terminal monitor's.
 HERE = {"← →", "Enter", "j", "Esc", "T", "?", "q"}
 MENUS = {"Members": "&Members", "The team": "&Team", "Windows": "&Windows"}
@@ -93,7 +81,8 @@ def short(words: str) -> str:
 def sequences(key: str) -> list[QKeySequence]:
     """The shortcuts of a key as MONITOR_KEYS writes it: 'j', 'T' (Shift+T), 'Enter', 'Esc', '?'."""
     # '?' as typed: with Shift on most layouts, which some platforms' key maps keep in the key.
-    named = {"Enter": ["Return", "Enter"], "Esc": ["Escape"], "?": ["?", "Shift+?"], "← →": []}
+    named = {"Enter": ["Return", "Enter"], "Esc": ["Escape"], "?": ["?", "Shift+?"], "← →": [], "Space": ["Space"],
+             "Tab": ["Tab"]}
     if key in named:
         return [QKeySequence(k) for k in named[key]]
     if len(key) == 1 and key.isalpha() and key.isupper():
@@ -178,7 +167,7 @@ class MonitorWindow(QMainWindow):
         self.resize(1500, 950)
         self.build()
         self.default_state = self.saveState(LAYOUT_VERSION)
-        self.restore_layout()
+        frame.restore_layout(self, "monitor")
         self.name_window()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
@@ -606,7 +595,7 @@ class MonitorWindow(QMainWindow):
         self.poll()
 
     def show_keys(self) -> None:
-        KeysDialog(self, self.team).show()
+        KeysDialog(self, "Keys · tabmancer monitor", MONITOR_KEYS, HERE, elsewhere(self.team or "<team>")).show()
 
     # --- one window a team ------------------------------------------------------------------------
 
@@ -615,10 +604,7 @@ class MonitorWindow(QMainWindow):
         self.door.close()
         if not self.team:
             return
-        name = door(self.team)
-        if not self.door.listen(name) and self.door.serverError() == QAbstractSocket.SocketError.AddressInUseError:
-            QLocalServer.removeServer(name)  # left by a monitor that ended without closing (Unix); knock found none
-            self.door.listen(name)
+        frame.listen(self.door, door(self.team))
 
     def answer_door(self) -> None:
         while (caller := self.door.nextPendingConnection()) is not None:
@@ -640,24 +626,6 @@ class MonitorWindow(QMainWindow):
         if self.snap is not None:
             self.show_cards(self.snap.view)
 
-    def restore_layout(self) -> None:
-        saved = read_json(LAYOUT_FILE)
-        kept = saved.get("monitor") if isinstance(saved, dict) else None
-        if not isinstance(kept, dict):
-            return
-        try:
-            if kept.get("geometry"):
-                self.restoreGeometry(QByteArray(base64.b64decode(kept["geometry"])))
-            if kept.get("state"):
-                self.restoreState(QByteArray(base64.b64decode(kept["state"])), LAYOUT_VERSION)
-        except (TypeError, ValueError):
-            pass  # a layout written by hand or cut short: the panels as they start
-
-    def save_layout(self) -> None:
-        merge_json(LAYOUT_FILE, monitor={
-            "geometry": base64.b64encode(bytes(self.saveGeometry().data())).decode("ascii"),
-            "state": base64.b64encode(bytes(self.saveState(LAYOUT_VERSION).data())).decode("ascii")})
-
     def reset_layout(self) -> None:
         self.restoreState(self.default_state, LAYOUT_VERSION)
         for dock in self.docks.values():
@@ -668,31 +636,19 @@ class MonitorWindow(QMainWindow):
         self.door.close()
         self.timer.stop()
         self.said_timer.stop()
-        self.save_layout()
+        frame.save_layout(self, "monitor")
         super().closeEvent(event)
 
 
 def door(team: str) -> str:
     """The name a team's open monitor listens on: one per team and tabmancer folder (the demo's is
     a folder of its own), so the same team's monitor opened again comes forward instead."""
-    key = f"{config_dir()}\0{team}".encode()
-    return f"tabmancer-monitor-{hashlib.sha256(key).hexdigest()[:20]}"
+    return frame.door("monitor", team)
 
 
 def knock(team: str) -> bool:
     """Whether a window watches this team already; if one does, it comes to the front."""
-    if not team:
-        return False
-    if sys.platform == "win32":  # this process may take the front (started from what you typed in): let that window
-        import ctypes
-
-        ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
-    caller = QLocalSocket()
-    caller.connectToServer(door(team))
-    if not caller.waitForConnected(KNOCK_MS):
-        return False
-    caller.disconnectFromServer()
-    return True
+    return bool(team) and frame.knock(door(team))
 
 
 def agy_bar() -> dict:
@@ -711,69 +667,27 @@ def clear(layout) -> None:
             widget.deleteLater()
 
 
-class KeysDialog(QDialog):
-    """?: every key of the monitor, what it does, and where."""
-
-    def __init__(self, parent: QWidget, team: str) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Keys · tabmancer monitor")
-        self.resize(760, 560)
-        box = QVBoxLayout(self)
-        text = QTextBrowser()
-        text.setFont(look.font(9.5))
-        rows = []
-        for group, keys in MONITOR_KEYS:
-            rows.append(look.span(group.upper(), f"bold {look.MUTED}"))
-            for key, _action, words in keys:
-                where = "" if key in HERE else look.span(f"   ({elsewhere(team or '<team>')})", look.DIM)
-                rows.append(look.span(f"{key:<6}", f"bold {look.TEXT if key in HERE else look.DIM}")
-                            + look.span(words, look.TEXT if key in HERE else look.MUTED) + where)
-            rows.append("")
-        text.setHtml(f'<pre style="font-family:{look.mono_family()}">' + "<br>".join(rows) + "</pre>")
-        box.addWidget(text)
-        self.setStyleSheet(f"QDialog {{ background:{look.SURFACE}; }}")
-
-
 def run(team: str, demo: bool = False) -> int:
     """The window, till it is closed. With demo, over the made-up sessions and team of `tabmancer
     --demo`, in a folder of its own that goes when it closes: nothing real is read, and what the
     demo put in place of the world is put back after it."""
     look.fonts_for_offscreen()
     app = QApplication.instance() or QApplication(["tabmancer"])
-    home, kept, environ = None, [], {}
-    if demo:
-        from .. import demo as made_up
-
-        environ = {name: os.environ.get(name) for name in DEMO_ENV}
-        home = Path(tempfile.mkdtemp(prefix="tabmancer-demo-"))
-        live = made_up.prepare(home)
-        told: list[str] = []
-        for module, name, value in made_up.stand_ins(home, live, told.append):
-            kept.append((module, name, getattr(module, name)))
-            setattr(module, name, value)
-        team = team or "shop"  # the demo's team
-    window = None
-    try:
-        if knock(team):  # watched already (M again, or the command twice): that window comes forward
-            return 0
-        window = MonitorWindow(team)
-        window.show()
-        if not team:
-            QTimer.singleShot(0, window.choose_team)
-        code = app.exec()
-        if window.isVisible():  # the app was told to quit, the window not closed: its layout is kept too
-            window.close()
-        return code
-    finally:
-        if window is not None:
-            window.timer.stop()
-            window.settle()
-        for module, name, value in reversed(kept):
-            setattr(module, name, value)
-        for name, value in environ.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-        if home is not None:
-            shutil.rmtree(home, ignore_errors=True)
+    with made_up_world(demo):
+        team = team or ("shop" if demo else "")  # the demo's team
+        window = None
+        try:
+            if knock(team):  # watched already (M again, or the command twice): that window comes forward
+                return 0
+            window = MonitorWindow(team)
+            window.show()
+            if not team:
+                QTimer.singleShot(0, window.choose_team)
+            code = app.exec()
+            if window.isVisible():  # the app was told to quit, the window not closed: its layout is kept too
+                window.close()
+            return code
+        finally:
+            if window is not None:
+                window.timer.stop()
+                window.settle()

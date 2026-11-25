@@ -16,10 +16,11 @@ import posixpath
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 
-from . import agy, context, picks, teambus, teams
+from . import accounts, agy, context, picks, teambus, teams
 from .sessions import INTERRUPTED, Exit, Session, Status, folder_key
 from .teams import TeamState, counts
 from .tokens import duration
+from .usage import until
 
 TONES = ("your-turn!", "your-turn", "working", "open", "aside", "to-continue!", "to-continue", "done", "plain")
 
@@ -580,6 +581,62 @@ def live_words(sessions: list[Session], every: float) -> str:
     waiting = sum(state_of(s)[2] < 2 for s in open_now)
     return (f"Live · {len(open_now)} open · {waiting} waiting for you · "
             f"refreshes every {every:g}s · l returns to the list")
+
+
+# The top bar's parts are (words, tone): "" plain, "muted", "text", "empty" (a bar's unfilled
+# cells), and "ok" (green), "low" (amber), "out" (red), each also "bold ...".
+BAR_GAP = ("   ", "")
+
+
+def usage_parts(limits: list, agy_parts: list[tuple[str, str]] | tuple = (), agy_first: bool = False,
+                now: datetime | None = None) -> list[tuple[str, str]]:
+    """The plan limits (usage.Limit) as small bars of 8: green, then amber from 60 %, red from 85 %,
+    each with the time it lifts. Per-model weekly limits only once they are half full. agy_parts:
+    where agy's chain stands (agy.bar_view), 'agy Neon 54% left · Hydrogen 31% left', after the
+    plan limits, or before them with agy the main CLI (agy_first)."""
+    plan: list[tuple[str, str]] = []
+    for limit in limits:
+        if limit.label not in ("session", "week") and not limit.label.startswith("codex ") and limit.percent < 50:
+            continue  # per-model weekly limits only matter once they fill up
+        tone = "ok" if limit.percent < 60 else "low" if limit.percent < 85 else "out"
+        filled = round(limit.percent / 100 * 8)
+        if plan:
+            plan.append(BAR_GAP)
+        plan += [(f"{limit.label} ", "muted"), ("▰" * filled, tone), ("▱" * (8 - filled), "empty"),
+                 (f" {limit.percent}%", f"bold {tone}")]
+        left = until(limit.resets, now)
+        if left:
+            # No ↻: some fonts draw it two cells wide, right over the time.
+            plan.append((f" · {left}", "muted"))
+    chain: list[tuple[str, str]] = []
+    for i, (words, tone) in enumerate(agy_parts):
+        chain += [(" · " if i else "agy ", "muted"), (words, {"ok": "ok", "low": "low", "out": "bold out"}.get(tone, "muted"))]
+    if plan and chain:
+        return [*chain, BAR_GAP, *plan] if agy_first else [*plan, BAR_GAP, *chain]
+    return plan or chain
+
+
+def account_parts(found: list, shared: set[str], room: int) -> tuple[list[tuple[str, str]], bool]:
+    """Who the CLIs are signed in as (accounts.Account), in at most room cells: Codex's first, then
+    Claude Code's, beside the plan limits it is about. Short of room, Codex's goes first, then Claude
+    Code's plan, then its email is cut in the middle (accounts.words). shared: emails seen in more
+    than one organisation, shown with it. Also says whether Claude Code's account is in."""
+    parts: list[tuple[str, str]] = []
+    width, claude_shown = 0, False
+    for account in sorted(found, key=lambda a: a.cli != "codex"):  # Codex's first, Claude's last
+        label = "codex " if account.cli == "codex" else ""
+        gap = 3 if width else 0
+        org = account.cli == "claude" and account.email in shared
+        shown = accounts.words(account, room - gap - len(label) - width, org=org)
+        if not shown:
+            continue  # Codex's gone: Claude Code's, which matters more, may still fit
+        email, _, plan = shown.partition(" · ")
+        parts += [(" " * gap, ""), (label, "muted"), (email, "text")]
+        if plan:
+            parts.append((f" · {plan}", "muted"))
+        width += gap + len(shown) + len(label)
+        claude_shown = claude_shown or account.cli == "claude"
+    return parts, claude_shown
 
 
 def to_json(view: View) -> dict:

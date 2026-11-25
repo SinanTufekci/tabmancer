@@ -367,9 +367,10 @@ class LimitRing(QWidget):
 
 
 class KeyBar(QWidget):
-    """The keys, always shown under the window: 'Enter its tab  j needs you ...'."""
+    """The keys, always shown under the window: 'Enter its tab  j needs you ...'. The dim ones are
+    done elsewhere for now (the terminal dashboard), and drawn greyed."""
 
-    def __init__(self, pairs: list[tuple[str, str]], note: str = "") -> None:
+    def __init__(self, pairs: list[tuple[str, str]], note: str = "", dim: set[str] | frozenset = frozenset()) -> None:
         super().__init__()
         row = QHBoxLayout(self)
         row.setContentsMargins(8, 3, 8, 3)
@@ -380,9 +381,10 @@ class KeyBar(QWidget):
             pair.setSpacing(5)
             cap = QLabel(key)
             cap.setFont(look.font(9, True))
-            cap.setStyleSheet(f"color:{look.TEXT}; background:{look.FAINT}; border-radius:4px; padding:1px 6px;")
+            cap.setStyleSheet(f"color:{look.DIM if key in dim else look.TEXT}; background:{look.FAINT}; "
+                              "border-radius:4px; padding:1px 6px;")
             pair.addWidget(cap)
-            pair.addWidget(text_label(words, look.MUTED, 9))
+            pair.addWidget(text_label(words, look.DIM if key in dim else look.MUTED, 9))
             row.addLayout(pair)
             self.keys.append(key)
         row.addStretch()

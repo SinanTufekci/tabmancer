@@ -18,13 +18,13 @@ from textual.reactive import reactive
 from textual.widgets import Footer, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from . import accounts
+from . import viewmodel as VM
 from .accounts import Account
 from .bitart import Colour
 from .sessions import INTERRUPTED, Exit, Session, Status, _shorten, folder_key  # noqa: F401  (re-exported)
 from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, mix
 from .tokenchart import PixelPicture, draw_hours
-from .usage import Limit, until
+from .usage import Limit
 
 ALL_PROJECTS = "*"
 # A 3x5 pixel font drawn with half blocks: three rows high and bolder than Digits' thin lines.
@@ -236,6 +236,19 @@ def tally(lines: list[tuple[str, str]], room: int = 3) -> Text:
     return Text("\n").join(Text(words, style=style, no_wrap=True, overflow="ellipsis") for words, style in lines)
 
 
+# The top bar's tones (viewmodel.usage_parts, account_parts) as Rich styles.
+BAR_STYLES = {"muted": MUTED, "text": TEXT, "empty": "#2a2a2a", "ok": GREEN, "low": AMBER, "out": RED}
+
+
+def bar_text(parts: list[tuple[str, str]]) -> Text:
+    text = Text()
+    for words, tone in parts:
+        bold, _, colour = tone.rpartition(" ")
+        style = BAR_STYLES.get(colour, "")
+        text.append(words, style=f"bold {style}" if bold and style else style)
+    return text
+
+
 BAR_PADDING = {"pills": 2, "usage": 2}  # the top bar's parts' own padding, as in its CSS
 
 
@@ -281,35 +294,8 @@ class TopBar(Horizontal):
 
     def show_usage(self, limits: list[Limit], agy_parts: list[tuple[str, str]] | tuple = (),
                    agy_first: bool = False) -> None:
-        """Plan limits as small bars: green, then amber from 60 %, red from 85 %. agy_parts: where agy's
-        chain stands (agy.bar_view), 'agy Neon 54% left · Hydrogen 31% left', after the plan limits, or
-        before them with agy the main CLI (agy_first)."""
-        text = Text()
-        for limit in limits:
-            if limit.label not in ("session", "week") and not limit.label.startswith("codex ")                     and limit.percent < 50:
-                continue  # per-model weekly limits only matter once they fill up
-            colour = GREEN if limit.percent < 60 else AMBER if limit.percent < 85 else RED
-            filled = round(limit.percent / 100 * 8)
-            if text:
-                text.append("   ")
-            text.append(f"{limit.label} ", style=MUTED)
-            text.append("▰" * filled, style=colour)
-            text.append("▱" * (8 - filled), style="#2a2a2a")
-            text.append(f" {limit.percent}%", style=f"bold {colour}")
-            left = until(limit.resets)
-            if left:
-                # No ↻: some fonts draw it two cells wide, right over the time.
-                text.append(f" · {left}", style=MUTED)
-        if agy_parts:
-            chain = Text()
-            for i, (words, tone) in enumerate(agy_parts):
-                chain.append(" · " if i else "agy ", style=MUTED)
-                chain.append(words, style={"ok": GREEN, "low": AMBER, "out": f"bold {RED}"}.get(tone, MUTED))
-            if text:
-                text = chain + Text("   ") + text if agy_first else text + Text("   ") + chain
-            else:
-                text = chain
-        self.put("usage", text)
+        """Plan limits as small bars, and where agy's chain stands: viewmodel.usage_parts."""
+        self.put("usage", bar_text(VM.usage_parts(limits, agy_parts, agy_first)))
 
     def put(self, part: str, content) -> None:
         """Update one part of the bar. A poll can still land while the app shuts down and the bar
@@ -360,22 +346,8 @@ class TopBar(Horizontal):
         self.put("account", text)
 
     def _accounts_in(self, room: int) -> tuple[Text, bool]:
-        text, claude_shown = Text(), False
-        for account in sorted(self.accounts, key=lambda a: a.cli != "codex"):  # Codex's first, Claude's last
-            label = "codex " if account.cli == "codex" else ""
-            gap = 3 if text else 0
-            org = account.cli == "claude" and account.email in self.shared
-            shown = accounts.words(account, room - gap - len(label) - text.cell_len, org=org)
-            if not shown:
-                continue  # Codex's gone: Claude Code's, which matters more, may still fit
-            email, _, plan = shown.partition(" · ")
-            text.append(" " * gap)
-            text.append(label, style=MUTED)
-            text.append(email, style=TEXT)
-            if plan:
-                text.append(f" · {plan}", style=MUTED)
-            claude_shown = claude_shown or account.cli == "claude"
-        return text, claude_shown
+        parts, claude_shown = VM.account_parts(self.accounts, self.shared, room)
+        return bar_text(parts), claude_shown
 
     def on_mount(self) -> None:
         self.started = time.monotonic()

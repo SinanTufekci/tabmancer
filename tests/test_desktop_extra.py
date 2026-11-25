@@ -32,6 +32,7 @@ def test_only_the_desktop_package_imports_qt():
     assert len(outside) > 30  # the whole package was read
     assert {name: found for name, found in outside.items() if found} == {}
     assert qt_imports(SOURCE / "desktop" / "monitor.py")  # and the scan finds Qt where it is
+    assert qt_imports(SOURCE / "desktop" / "main.py")
 
 
 def test_the_package_and_its_cli_load_no_qt():
@@ -119,12 +120,22 @@ def test_desktop_without_qt_says_how_to_add_it(monkeypatch, capsys):
     assert "team watch" in said  # the terminal monitor is there either way
 
 
-def test_desktop_names_the_monitor_until_there_is_more(monkeypatch, capsys):
+def test_desktop_opens_the_dashboards_window(monkeypatch, capsys):
     monkeypatch.setattr(desktop, "available", lambda: True)
+    opened = []
+    window = types.ModuleType("tabmancer.desktop.main")
+    window.run = lambda demo=False: opened.append(demo) or 0
+    monkeypatch.setitem(sys.modules, "tabmancer.desktop.main", window)
+    for argv in (["desktop"], ["desktop", "--demo"]):
+        with pytest.raises(SystemExit) as out:
+            cli.main(argv)
+        assert out.value.code == 0
+    assert opened == [False, True]
     with pytest.raises(SystemExit) as out:
-        cli.main(["desktop"])
+        cli.main(["desktop", "shop"])  # a team, without --monitor
     assert out.value.code == 2
-    assert "desktop --monitor" in capsys.readouterr().err
+    assert "desktop --monitor shop" in capsys.readouterr().err
+    assert opened == [False, True]
 
 
 def test_desktop_monitor_of_no_team_says_so_before_any_window(monkeypatch, capsys):
@@ -224,7 +235,7 @@ def test_the_cli_says_what_m_opens(monkeypatch, capsys):
         assert config.read_json("config.json")["monitor"] == choice == teamwatch.monitor_choice()
     monkeypatch.setattr(desktop, "available", lambda: True)
     with pytest.raises(SystemExit):
-        cli.main(["desktop"])
+        cli.main(["desktop", "shop"])  # a team, without --monitor: what M opens is said with it
     assert "M in the dashboard opens the terminal monitor" in capsys.readouterr().err
 
 

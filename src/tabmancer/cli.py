@@ -151,12 +151,13 @@ def main(argv: list[str] | None = None) -> None:
     wrapping.add_argument("--gif", action="store_true", help="a GIF, its numbers counting up, not a still PNG")
     wrapping.add_argument("--names", action="store_true", help="the top project's name on the tools slide")
     windowing = sub.add_parser("desktop", help="tabmancer in a desktop window (the desktop extra: "
-                                               'pip install "tabmancer[desktop]"); so far the team monitor')
+                                               'pip install "tabmancer[desktop]"): the dashboard, which '
+                                               "only watches for now, or a team's monitor")
     windowing.add_argument("--monitor", action="store_true",
                            help="a team's monitor, read-only: what tabmancer team watch shows, with room")
     windowing.add_argument("team", nargs="?", default="", help="the team (default: the one team with members open)")
     windowing.add_argument("--demo", dest="made_up", action="store_true",
-                           help="over the made-up team of tabmancer --demo: nothing of yours is read")
+                           help="over the made-up sessions and team of tabmancer --demo: nothing of yours is read")
     windowing.add_argument("--m-opens", dest="m_opens", choices=("terminal", "desktop"),
                            help="what M in the dashboard opens: the terminal monitor (the default) or this window")
     # What the login shortcut runs when there is no windowless gui launcher.
@@ -502,17 +503,21 @@ def m_opens(choice: str) -> int:
 
 
 def desktop_window(monitor: bool, name: str, demo: bool = False) -> int:
-    """`tabmancer desktop --monitor [team]`: the team's monitor in a Qt window, from the desktop extra.
-    Without Qt it says how to add it; the terminal monitor (team watch) is there either way."""
+    """`tabmancer desktop`: the dashboard in a Qt window, from the desktop extra; with --monitor [team],
+    a team's monitor. Without Qt it says how to add it; the terminal dashboard and monitor (team
+    watch) are there either way."""
     from . import desktop
 
     if not desktop.available():
         print(f"The desktop window needs Qt, from the desktop extra: {desktop.INSTALL}", file=sys.stderr)
-        print(f"The terminal monitor needs nothing more: {PROG} team watch [team]", file=sys.stderr)
+        print(f"The terminal ones need nothing more: {PROG}, and {PROG} team watch [team]", file=sys.stderr)
         return 1
-    if not monitor:
-        print(f"Only the team monitor is in the desktop window so far: {PROG} desktop --monitor [team]",
-              file=sys.stderr)
+    if not monitor and not name:
+        from .desktop.main import run as run_dashboard
+
+        return run_dashboard(demo=demo)
+    if not monitor:  # a team named, not --monitor
+        print(f"A team's monitor: {PROG} desktop --monitor {name}", file=sys.stderr)
         from .teamwatch import monitor_choice
 
         where = "this window" if monitor_choice() == "desktop" else "the terminal monitor"

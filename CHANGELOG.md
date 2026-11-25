@@ -40,6 +40,11 @@
   every key in the menus. Read-only for now. Without the extra, tabmancer runs as ever.
   `tabmancer desktop --m-opens desktop` makes `M` in the dashboard open it instead of the
   terminal monitor; a team's window opens once, and `M` again brings it to the front.
+- **The dashboard in a desktop window, begun.** `tabmancer desktop` opens it (`--demo` over the
+  made-up sessions): the top bar as the terminal dashboard's (the sessions, who each CLI is signed
+  in as, the plan limits and agy's chain, a live dot, the clock), menus with every key of the
+  dashboard, the key bar, and panels you can move, float and close, kept as you left them. It only
+  watches for now: the panels fill in, and the keys not done there yet are greyed and say so.
 - **One dashboard acts.** With several open, only one reads limits, sends desktop notes, updates
   Claude Code and runs queued handovers; the others watch and take over when it closes.
 - **An account is an account in an organisation.** The same email in your personal plan and in a

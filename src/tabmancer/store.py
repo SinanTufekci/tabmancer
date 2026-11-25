@@ -416,6 +416,7 @@ class DashSnapshot:
     shared_emails: set[str] = field(default_factory=set)  # emails seen in more than one organisation (accounts.words' org)
     agy_bar: dict = field(default_factory=dict)  # agy.bar_view(): the chain in the top bar; {} while agy is not in use
     acting: dict | None = None  # the lock of the dashboard that acts, while it runs (actor.json); None: none does
+    limits: list[usage.Limit] = field(default_factory=list)  # as read (the view has them as data): the top bar's
 
 
 class DashboardStore(Polled):
@@ -525,4 +526,5 @@ class DashboardStore(Polled):
         view = VM.build(self.sessions, hidden=hidden, pinned=pinned, git=self.git, team_states=self.team_states,
                         tokens=self.tokens, limits=self.limits, armed=self.armed, queued=actions.read_queued())
         return DashSnapshot(view.at, view, dict(self.sessions), dict(self.team_states), hidden, pinned, self.report,
-                            list(self.accounts), set(self.shared_emails), dict(self.agy_bar), self.acting)
+                            list(self.accounts), set(self.shared_emails), dict(self.agy_bar), self.acting,
+                            list(self.limits))
