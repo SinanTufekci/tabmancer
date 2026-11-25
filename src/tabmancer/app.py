@@ -995,9 +995,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             key, _, title = CARDS[self.card_filter]
             out.append(f" only {title} · {key} or Esc shows all ", style=pill)
         if self.selected:
-            shutdown = " · open at the last shutdown" if self.preselected and self.selected <= self.preselected else ""
             out.append(" " if out else "")
-            out.append(f" {len(self.selected)} ticked{shutdown} · ⏎ opens ", style=pill)
+            out.append(f" {VM.ticked_words(self.selected, self.preselected)} · ⏎ opens ", style=pill)
         return out
 
     @property
@@ -1079,7 +1078,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if UNREADABLE:
             self.notify(f"{sum(UNREADABLE.values())} transcripts could not be read and are left out of the list: "
                         "tabmancer doctor says more.", severity="warning", timeout=15)
-        preselected = {sid for sid in preselected if sid in self.sessions and not self.marks.is_hidden(self.sessions[sid])}
+        preselected = VM.preselect(self.sessions, preselected, self.marks.is_hidden)
         self.selected = set(preselected)
         self.preselected = set(preselected)
         if self.start_live:
@@ -1101,7 +1100,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if self.watch is not None:
             pass  # a monitor: Bit stays quiet on the list nobody sees there
         elif self.preselected:
-            self.mascot.say(f"Hi! {len(self.preselected)} were open when you shut down.", seconds=6)
+            self.mascot.say(VM.shutdown_hello(len(self.preselected)), seconds=6)
         elif not sessions:
             self.mascot.say("Hi! No sessions here yet: n starts some.", seconds=6)
         else:
@@ -2964,11 +2963,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def untick_open(self, updates: dict[str, Session]) -> None:
         """A session that turns out to be open was not left open at shutdown: untick it if it was
-        ticked automatically. Terminal sessions that are open can never be ticked."""
-        now_open = {sid for sid, s in updates.items() if s.exit is Exit.RUNNING}
-        self.selected -= (now_open & self.preselected) | {
-            sid for sid, s in updates.items() if s.status is Status.RUNNING}
-        self.preselected -= now_open
+        ticked automatically. Terminal sessions that are open can never be ticked (VM.untick_open)."""
+        self.selected, self.preselected = VM.untick_open(self.selected, self.preselected, updates.values())
 
     def rows_changed(self, ids: set[str]) -> None:
         self.sync_rows(ids)
