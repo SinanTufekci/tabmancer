@@ -4,10 +4,12 @@ shows, with no UI behind them."""
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from tabmancer import sessionwords, teams, teamwords
+from tabmancer import demo, sessionwords, teams, teamwords
+from tabmancer.app import TEAM_ROW
 from tabmancer.launch import Launch, Mode
 from tabmancer.palette import AMBER, MUTED, TEXT
 from tabmancer.sessions import Exit, Session, Status
@@ -70,10 +72,10 @@ def test_a_members_messages_and_the_filters_words_come_in():
 def test_a_teams_first_lines():
     team = teams.new_team("shop", "C:/work/shop", "Add  a\ncheckout", teams.parse_members("api: endpoints"))
     state = teams.TeamState(team, {}, [])
-    at_work = teamwords.team_detail(state, 0, ACCENT, True)
-    assert at_work.head == teamwords.head(state, 0, ACCENT)
+    at_work = teamwords.team_detail(state, 0, ACCENT, 1)
+    assert at_work.head == teamwords.head(state, 0, ACCENT, open_now=1)
     assert at_work.goal == [("Goal  ", MUTED), ("Add a checkout", TEXT)] and at_work.closed == []
-    closed = teamwords.team_detail(state, 0, ACCENT, False)
+    closed = teamwords.team_detail(state, 0, ACCENT, 0)
     assert closed.closed == [(f"Closed. Enter starts it: each member resumed as itself, {team.lead.name} last.",
                               AMBER)]
 
@@ -127,3 +129,39 @@ def test_how_it_opens_is_asked_once_per_preview():
     sessionwords.detail(s(), sessionwords.DetailInputs(launch=launch, mode=Mode.RESUME))
     assert asked == [1]  # Enter, the check behind it and Opens as: one launch (a member's writes its files)
 
+
+def test_a_teams_head_counts_whats_open_as_it_is_told():
+    team = teams.new_team("shop", "C:/work/shop", "Goal", teams.parse_members("api: endpoints\nui: pages"))
+    gone = s("m1", exit=Exit.KILLED, status=Status.DONE)
+    state = teams.TeamState(team, {"api": gone}, [])
+    assert "0 of 3 open" in "".join(words for words, _ in teamwords.head(state, 0, ACCENT))  # its own copies
+    told = teamwords.team_detail(state, 0, ACCENT, 2)
+    assert "2 of 3 open" in "".join(words for words, _ in told.head) and told.closed == []
+
+
+async def test_a_teams_preview_says_as_many_open_as_the_list(tmp_path, monkeypatch):
+    """On the demo the team reader's copies of the members are closed while the list has them open:
+    the preview said '0 of 4 open' under a team row of open members."""
+    for name in ("CLAUDE_CONFIG_DIR", "TABMANCER_CONFIG_DIR", "CODEX_HOME"):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+    live = demo.prepare(tmp_path)
+    app = demo.picker()
+    for module, name, value in demo.stand_ins(tmp_path, live, app.tell):
+        monkeypatch.setattr(module, name, value)
+    async with app.run_test(size=(200, 50)) as pilot:
+        for _ in range(200):
+            await pilot.pause(0.05)
+            if app.team_states and all(f"{TEAM_ROW}{n}" in app.table.rows for n in app.team_states):
+                break
+        assert app.team_states
+        for split in (False, True):
+            if app.split != split:
+                app.action_toggle_split()
+                await pilot.pause(0.1)
+            for name in sorted(app.team_states):
+                listed = app.team_members(name)
+                app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}{name}"))
+                app.update_detail()
+                running = sum(session.exit is Exit.RUNNING for _, session in listed)
+                shown = app.detail.content.plain
+                assert f"{running} of {len(app.team_states[name].team.members)} open" in shown, (split, name)

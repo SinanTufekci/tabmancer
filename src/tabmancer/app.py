@@ -1580,6 +1580,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def team_open(self, name: str) -> bool:
         return any(s.exit is Exit.RUNNING for _, s in self.team_members(name))
 
+    def members_open(self, name: str) -> int:
+        """How many of a team's members are open, as the list has them (its row and its preview)."""
+        return sum(s.exit is Exit.RUNNING for _, s in self.team_members(name))
+
     def team_cells(self, key: str) -> tuple[Text, ...]:
         """A team's row. Folded (as it starts): its members as chips, each with a sign of what it is
         doing. Unfolded, its members are listed under it, and the row says how many are open and how
@@ -2397,7 +2401,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.inspector.set_class(not wide, "team-only")
         width = max(30, (self.detail.content_size.width if wide else self.inspector.content_size.width - 1) or 70)
         words = teamwords.team_detail(state, state.tokens(self.session_tokens), self.accent(),
-                                      self.team_open(state.team.name))
+                                      self.members_open(state.team.name))
         hint = self.team_keys(state)
         goal = cell(words.goal)
         goal.truncate(width, overflow="ellipsis")
@@ -2428,7 +2432,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         top = area.y or 2
         bottom = area.bottom if area.height else self.size.height - 3  # before the first layout, a guess
         words = teamwords.team_detail(state, state.tokens(self.session_tokens), self.accent(),
-                                      self.team_open(state.team.name))
+                                      self.members_open(state.team.name))
         goal = cell(words.goal)
         goal.truncate(width, overflow="ellipsis")
         lines = [*wrap_at(cell(words.head), width), goal]

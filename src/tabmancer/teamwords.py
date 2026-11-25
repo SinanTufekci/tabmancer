@@ -86,11 +86,15 @@ def one_line(text: str) -> str:
     return " ".join(text.split())
 
 
-def head(state: teams.TeamState, tokens: int, accent: str) -> list[Part]:
-    """'TEAM tabmancer · 3 of 3 open · 12 messages · 14.9M tokens': a team's preview, first line."""
+def head(state: teams.TeamState, tokens: int, accent: str, *, open_now: int | None = None) -> list[Part]:
+    """'TEAM tabmancer · 3 of 3 open · 12 messages · 14.9M tokens': a team's preview, first line.
+    open_now: how many members are open as the front's list has them (else the reader's own copies,
+    which can lag the list's)."""
     team = state.team
     said = len(state.between_members())
-    what = f"  ·  {state.open_count()} of {len(team.members)} open  ·  {said} message{'s' if said != 1 else ''}"
+    if open_now is None:
+        open_now = state.open_count()
+    what = f"  ·  {open_now} of {len(team.members)} open  ·  {said} message{'s' if said != 1 else ''}"
     return [("TEAM ", f"bold {MUTED}"), (team.name, f"bold {accent}"), (what, MUTED),
             (f"  ·  {human(tokens)} tokens" if tokens else "", MUTED)]
 
@@ -104,13 +108,14 @@ class TeamDetail(NamedTuple):
     closed: list[Part]
 
 
-def team_detail(state: teams.TeamState, tokens: int, accent: str, at_work: bool) -> TeamDetail:
-    """A team's preview, its first lines, as both fronts show them. at_work: any of it open."""
+def team_detail(state: teams.TeamState, tokens: int, accent: str, open_now: int) -> TeamDetail:
+    """A team's preview, its first lines, as both fronts show them. open_now: how many of its members
+    are open as the front's list has them, the same count its row goes by."""
     closed: list[Part] = []
-    if not at_work:
+    if not open_now:
         last = f", {state.team.lead.name} last" if state.team.lead is not None else ""
         closed = [(f"Closed. Enter starts it: each member resumed as itself{last}.", AMBER)]
-    return TeamDetail(head(state, tokens, accent), [("Goal  ", MUTED), (one_line(state.team.goal), TEXT)], closed)
+    return TeamDetail(head(state, tokens, accent, open_now=open_now), [("Goal  ", MUTED), (one_line(state.team.goal), TEXT)], closed)
 
 
 def gist(message: teams.Message, other: str = "") -> str:
