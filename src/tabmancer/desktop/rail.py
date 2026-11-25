@@ -5,8 +5,10 @@ week's tokens.
 The lines are the terminal dashboard's sidebar (viewmodel.project_rows): All projects first, then one
 per project in a stable alphabetical order, marked by its most urgent session (red waiting for you,
 green open, amber to continue), ± changes not committed and ↑ commits not pushed, and how many sessions
-it has in sight. The project the list is narrowed to is lit; a click on it again (or on All projects)
-shows every project.
+it has in sight (with X, the hidden ones too). The project the list is narrowed to is lit; a click on it
+again (or on All projects) shows every project. Tab puts the keys on the list, as on the terminal's
+sidebar: ↑ ↓ narrow to the project above or below, Enter or → go back to the sessions, and x hides the
+project (main.py).
 
 A team is split across the lanes, a card for each member's state; the rail holds it together: its
 name, how many members are open and how many need you, and the Team panel's picture drawn small
@@ -46,23 +48,26 @@ PAST_BAR = "#3a3a3a"  # the days before today; today's is the accent
 COUNTING = "TOKENS · COUNTING…"  # till the first count is in
 
 
-def project_rows(snap: DashSnapshot) -> list[VM.ProjectRow]:
-    """The rail's lines over the sessions in sight, as the terminal dashboard's sidebar has them."""
-    shown = VM.in_sight(snap.sessions.values(), lambda s: s.session_id in snap.hidden, False)
+def project_rows(snap: DashSnapshot, show_hidden: bool = False) -> list[VM.ProjectRow]:
+    """The rail's lines over the sessions in sight (show_hidden: the hidden ones too, as X lists them),
+    as the terminal dashboard's sidebar has them."""
+    shown = VM.in_sight(snap.sessions.values(), lambda s: s.session_id in snap.hidden, show_hidden)
     return VM.project_rows(shown, None, VM.project_signs(snap.view.projects))
 
 
 class ProjectList(QWidget):
-    """The projects' lines, one picked: a click picks another, or every project again."""
+    """The projects' lines, one picked: a click picks another, or every project again; with the keys
+    (Tab), ↑ ↓ Home End pick the line above or below, and Enter or → go back to the sessions (left)."""
 
     picked = Signal(str)  # a project's folder key, or VM.ALL_PROJECTS
+    left = Signal()
 
     def __init__(self, accent: str) -> None:
         super().__init__()
         self.accent = accent
         self.rows: list[VM.ProjectRow] = []
         self.pick = VM.ALL_PROJECTS
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)  # Tab comes here as the window's key, never by itself
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def set(self, rows: list[VM.ProjectRow], pick: str) -> None:
@@ -87,6 +92,28 @@ class ProjectList(QWidget):
             key = self.rows[index].key
             self.picked.emit(VM.ALL_PROJECTS if key == self.pick else key)
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        keys = [row.key for row in self.rows]
+        at = keys.index(self.pick) if self.pick in keys else 0
+        moves = {Qt.Key.Key_Down: at + 1, Qt.Key.Key_Up: at - 1, Qt.Key.Key_Home: 0, Qt.Key.Key_End: len(keys) - 1}
+        if key in moves and keys:
+            to = keys[max(0, min(moves[key], len(keys) - 1))]
+            if to != self.pick:
+                self.picked.emit(to)
+        elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Right):
+            self.left.emit()
+        else:
+            super().keyPressEvent(event)
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self.update()
+
+    def focusOutEvent(self, event) -> None:
+        super().focusOutEvent(event)
+        self.update()
 
     def event(self, event) -> bool:
         if event.type() == QEvent.Type.ToolTip:
@@ -119,6 +146,9 @@ class ProjectList(QWidget):
             if row.key == self.pick:
                 p.fillRect(box, QColor(look.PANEL))
                 p.fillRect(QRectF(0, top + 3, 2, ROW - 6), QColor(self.accent))
+                if self.hasFocus():  # the keys are here: the line they move, outlined
+                    p.setPen(QColor(self.accent))
+                    p.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5))
             right = box.right() - 6
             p.setFont(plain)
             p.setPen(QColor(look.MUTED))
@@ -340,8 +370,8 @@ class Rail(QScrollArea):
         column.addStretch(1)
         self.setWidget(inside)
 
-    def set(self, snap: DashSnapshot, project: str) -> None:
-        self.projects.set(project_rows(snap), project)
+    def set(self, snap: DashSnapshot, project: str, show_hidden: bool = False) -> None:
+        self.projects.set(project_rows(snap, show_hidden), project)
         self.teams.set(snap)
         self.teams_heading.setVisible(bool(self.teams.cards))
         self.teams.setVisible(bool(self.teams.cards))

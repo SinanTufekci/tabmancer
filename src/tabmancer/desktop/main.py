@@ -10,11 +10,15 @@ the top bar: the Board (board.py), as cards in lanes by what they want from you;
 Live view, the open sessions by what each does (l, as in the terminal, and l again goes back). The
 pick is one across them: the row or card picked stays picked when the view changes.
 
-It only watches, as a second dashboard does: the dashboard's store (store.DashboardStore) is read
-on a thread of its own every two seconds, and nothing here claims the actor lock, records a plan
-limit or an account, opens, starts or closes a session. The panels fill in slice by slice; till
-then a key not done here is greyed in its menu and in the key bar, and done in the terminal
-dashboard (tabmancer). The Team panel (teampanel), a tab beside the list, shows each team's
+It watches, as a second dashboard does: the dashboard's store (store.DashboardStore) is read on a
+thread of its own every two seconds, and nothing here claims the actor lock, records a plan limit or
+an account, opens, starts or closes a session. Its keys tidy the list as the terminal's do: Space and
+a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the rail, the project), X shows
+the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and the sessions, Esc
+clears what the list is narrowed to. Pins and hides go to marks.json as every dashboard changes it
+(marks.change): what another one changed meanwhile stays, and each shows them at its next read; Bit
+says what a key did. The panels fill in slice by slice; till then a key not done here is greyed in its
+menu and in the key bar, and done in the terminal dashboard (tabmancer). The Team panel (teampanel), a tab beside the list, shows each team's
 picture over its conversation; T brings it to the front. Ctrl+K finds any command by a few of its
 words (commandbar): every key as the menus name it, and a team, a project or a session by name.
 
@@ -57,11 +61,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, bitart, clis, commands, search
+from .. import __version__, bitart, clis, commands, marks, search
 from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
-from ..sessions import Session
+from ..sessions import Session, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
 from . import commandbar, frame, look, teamgraph
 from .board import Board
@@ -79,7 +83,8 @@ INFO_LEAST = 20  # characters the info line keeps before the accounts give way
 LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
-HERE = {"?", "q", "T", "/", "1", "2", "3", "l"}
+HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc"}
+SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
 KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), ("c", "continue"), ("M", "monitor"),
@@ -161,6 +166,9 @@ class MainWindow(QMainWindow):
         self.project = VM.ALL_PROJECTS  # what the board is narrowed to: a project (the rail),
         self.card: str | None = None  # what a card counts (1 2 3),
         self.words = ""  # and words (/)
+        self.selected: set[str] = set()  # the sessions ticked (Space), by id
+        self.show_hidden = False  # X: the hidden ones listed too
+        self.remark: marks.Marks | None = None  # saved while a read was under way: its snapshot gets them too
         self.index: search.Index | None = None  # what was said in each session, read on a thread of its own
         self.finder: search.Finder | None = None
         self.indexing = False
@@ -182,6 +190,9 @@ class MainWindow(QMainWindow):
         self.ticker.timeout.connect(self.tick)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
+        self.said_timer = QTimer(self)
+        self.said_timer.setSingleShot(True)
+        self.said_timer.timeout.connect(self.show_bit)
         self.tick()
         self.board.setFocus()  # the arrows pick a card from the start
         if start:
@@ -211,6 +222,8 @@ class MainWindow(QMainWindow):
         self.board.card.connect(self.toggle_card)
         self.board.picked.connect(self.show_pick)
         self.table.picked.connect(self.show_pick)
+        self.table.ticking.connect(self.tick_key)
+        self.rail.projects.left.connect(self.back_to_board)
         self.drawer.act.connect(self.run_key)
         self.rail.projects.picked.connect(self.set_project)
         self.rail.teams.picked.connect(self.pick_team)
@@ -345,7 +358,9 @@ class MainWindow(QMainWindow):
         bar.setFont(look.font(9.5))
         self.actions_by_key: dict[str, QAction] = {}
         doing = {"?": self.show_keys, "q": self.close, "T": self.show_teams, "/": self.find_words,
-                 "1": self.only_open, "2": self.only_waiting, "3": self.only_continue, "l": self.toggle_live}
+                 "1": self.only_open, "2": self.only_waiting, "3": self.only_continue, "l": self.toggle_live,
+                 "Space": self.toggle, "a": self.toggle_all, "e": self.expand, "E": self.fold_teams, "x": self.hide,
+                 "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -425,9 +440,14 @@ class MainWindow(QMainWindow):
             self.info.setText(f"Could not read the sessions: {error}")
             self.info.setStyleSheet(f"color:{look.AMBER}; background:transparent;")
             return
+        if self.remark is not None:  # read before the window changed the marks: as they are now (the file
+            now = marks.Marks.read(tries=1)  # held or unreadable now: as this window saved them; no wait here)
+            snap, self.remark = snap.with_marks(now if now is not None else self.remark), None
         self.snap, self.agy_first = snap, first
+        self.selected &= {sid for sid, session in snap.sessions.items() if VM.tickable(session)}  # opened: unticked
         self.show_top()
-        self.show_bit()
+        if not self.said_timer.isActive():
+            self.show_bit()
         self.refilter()
         self.team_panel.set(snap)
         if len(self.words.strip()) >= search.SHORTEST:
@@ -441,8 +461,9 @@ class MainWindow(QMainWindow):
         snap = self.snap
         if snap is None:
             return []
-        return VM.visible(snap.sessions.values(), lambda s: s.session_id in snap.hidden, text=self.words,
-                          said_in=self.said_in, project=self.project, card=self.card, live=self.view == "live")
+        return VM.visible(snap.sessions.values(), lambda s: s.session_id in snap.hidden, show_hidden=self.show_hidden,
+                          text=self.words, said_in=self.said_in, project=self.project, card=self.card,
+                          live=self.view == "live")
 
     def said_in(self) -> set[str]:
         if self.finder is None or self.snap is None:
@@ -457,10 +478,10 @@ class MainWindow(QMainWindow):
         if snap is None:
             return
         if self.view == "board":
-            self.board.set(snap, self.shown(), self.card)
+            self.board.set(snap, self.shown(), self.card, self.selected)
         else:
-            self.table.set(snap, self.shown())
-        self.rail.set(snap, self.project)
+            self.table.set(snap, self.shown(), self.selected)
+        self.rail.set(snap, self.project, self.show_hidden)
         self.show_pick(self.picked_now())
         self.show_pills()
 
@@ -537,6 +558,8 @@ class MainWindow(QMainWindow):
             parts.append(f"only {title} · {key} shows all")
         if self.words.strip():
             parts.append(f"“{self.words.strip()}”")
+        if self.selected:
+            parts.append(f"{len(self.selected)} ticked")
         shown = "  ·  ".join(parts)
         if shown != self.pills.text():
             self.pills.setText(shown)
@@ -574,6 +597,30 @@ class MainWindow(QMainWindow):
 
     def back_to_board(self) -> None:
         self.shown_now().setFocus()
+
+    def back(self) -> None:
+        """Esc: the words cleared, else a card's narrowing, else the project's; with nothing to clear, the
+        window closes, as Esc quits the terminal dashboard."""
+        step = VM.back_step(bool(self.words) or self.filter_box.hasFocus(), self.card)
+        if step == "search":
+            self.filter_box.clear()
+            self.back_to_board()
+        elif step == "card" and self.card is not None:
+            self.toggle_card(self.card)
+        elif self.project != VM.ALL_PROJECTS:
+            self.set_project(VM.ALL_PROJECTS)
+        else:
+            self.close()
+
+    def switch_focus(self) -> None:
+        """Tab: the keys to the rail's projects (↑ ↓ narrow to one, x hides it), or back to the sessions."""
+        if self.rail.projects.hasFocus():
+            self.back_to_board()
+            return
+        dock = self.docks["Projects"]
+        dock.show()
+        dock.raise_()
+        self.rail.projects.setFocus()
 
     def clear_filters(self) -> None:
         self.project, self.card = VM.ALL_PROJECTS, None
@@ -620,7 +667,7 @@ class MainWindow(QMainWindow):
         snap = self.snap
         if snap is None:
             return
-        info, _line = VM.info_words(len(snap.sessions), len(snap.hidden), self.store.days)
+        info, _line = VM.info_words(len(snap.sessions), len(snap.hidden), self.store.days, show_hidden=self.show_hidden)
         self.info.setText(info)
         self.info.setStyleSheet(f"color:{look.MUTED}; background:transparent;")
         self.info.setToolTip(info)
@@ -657,6 +704,152 @@ class MainWindow(QMainWindow):
         else:
             words = "This window only watches; no dashboard acts now (tabmancer in a terminal does)."
         self.bit_line.setText(words)
+        self.bit_line.setStyleSheet(f"color:{look.MUTED}; background:transparent;")
+
+    def say(self, words: str, seconds: float = 4) -> None:
+        """Bit says what a key just did for a while (longer for longer words), then who acts again."""
+        self.bit_line.setText(words)
+        self.bit_line.setStyleSheet(f"color:{look.TEXT}; background:transparent;")
+        self.said_timer.start(max(SAID_MS, int(seconds * 1000)))
+
+    # --- the keys that tidy the list --------------------------------------------------------------
+
+    def picked_team(self) -> str | None:
+        """The team picked (its card, or its row in the Table), by name."""
+        key = self.picked_now()
+        return key[len(VM.TEAM_CARD):] if key.startswith(VM.TEAM_CARD) else None
+
+    def chosen(self) -> list[Session]:
+        """The ticked sessions, or else the one picked (none for a team's card)."""
+        snap = self.snap
+        if snap is None:
+            return []
+        if self.selected:
+            return [snap.sessions[sid] for sid in self.selected if sid in snap.sessions]
+        session = snap.sessions.get(self.picked_now())
+        return [session] if session is not None else []
+
+    def tick_ids(self, key: str) -> set[str]:
+        """What Space ticks on a card or row (its key in the drawer's words): the session, or a team's
+        members not open, all at once; none for one open in a terminal."""
+        snap = self.snap
+        if snap is None:
+            return set()
+        if key.startswith(VM.TEAM_CARD):
+            state = snap.team_states.get(key[len(VM.TEAM_CARD):])
+            return VM.members_closed(state, snap.sessions) if state is not None else set()
+        session = snap.sessions.get(key)
+        return {key} if session is not None and VM.tickable(session) else set()
+
+    def flip(self, ids: set[str]) -> None:
+        """These ticked, or unticked when they all were."""
+        self.selected = self.selected - ids if ids <= self.selected else self.selected | ids
+        if self.view == "board":
+            self.board.set_ticked(self.selected)
+        else:
+            self.table.set_ticked(self.selected)
+        self.show_pills()
+
+    def toggle(self) -> None:
+        """Space: the picked session ticked or unticked (a closed team's members as one), the pick on down."""
+        key = self.picked_now()
+        ids = self.tick_ids(key)
+        if not ids and not key.startswith(VM.TEAM_CARD):
+            return  # open in a terminal, or nothing picked
+        if ids:
+            self.flip(ids)
+        self.shown_now().step(1)
+
+    def tick_key(self, key: str) -> None:
+        """A click on a row's [ ]: as Space there, the pick staying."""
+        ids = self.tick_ids(key)
+        if ids:
+            self.flip(ids)
+
+    def toggle_all(self) -> None:
+        """a: every session shown ticked, or unticked when they all were; on a team, its new members."""
+        if self.picked_team() is not None:
+            self.say("Adding members is in the terminal dashboard for now: a on the team's row there.")
+            return
+        ids = {s.session_id for s in self.shown() if VM.tickable(s)}
+        if ids:
+            self.flip(ids)
+
+    def expand(self) -> None:
+        """e: a team's row in the Table unfolded or folded again; else the picked one in the Preview panel,
+        which says how it ended (the terminal shows that under its title)."""
+        team = self.picked_team()
+        if team is not None and self.view != "board":
+            self.table.fold(team)
+            return
+        dock = self.docks["Preview"]
+        dock.show()
+        dock.raise_()
+
+    def fold_teams(self) -> None:
+        """E: every team in the Table unfolded, or every one folded again."""
+        if self.view == "board":
+            self.say("The board shows each team as one card: E unfolds them in the Table.")
+        elif not self.table.fold_teams():
+            self.say("No team in the list to unfold.")
+
+    def toggle_hidden(self) -> None:
+        """X: the hidden sessions (and projects) listed too, or not."""
+        self.show_hidden = not self.show_hidden
+        self.show_top()
+        self.refilter()
+
+    def pin(self) -> None:
+        """f: the ticked sessions, or the picked one, pinned above the rest; again, unpinned."""
+        chosen = self.chosen()
+        if chosen:
+            self.remarked(marks.change(partial(marks.pin, chosen=chosen)))
+
+    def hide(self) -> None:
+        """x: the ticked sessions, or the picked one (a closed team's members), out of sight; one hidden
+        already (listed with X), back in sight. With the keys on the rail, its project."""
+        snap = self.snap
+        if snap is None:
+            return
+        if self.rail.projects.hasFocus():
+            self.hide_project()
+            return
+        team = self.picked_team() if not self.selected else None
+        state = snap.team_states.get(team) if team is not None else None
+        if state is not None and VM.members_open(state, snap.sessions):
+            self.say("Closing a team's tabs is in the terminal dashboard for now: x twice on its row there.")
+            return
+        chosen = ([snap.sessions.get(s.session_id, s) for s in state.sessions.values() if s is not None]
+                  if state is not None else self.chosen())
+        if chosen:
+            self.remarked(marks.change(partial(marks.hide, chosen=chosen)))
+
+    def hide_project(self) -> None:
+        """x on the rail: the project picked there out of sight (its open sessions still show), or back."""
+        snap, key = self.snap, self.project
+        if snap is None or key == VM.ALL_PROJECTS:
+            self.say("Pick a project on the rail to hide it, or a session in the list.")
+            return
+        sessions = [s for s in snap.sessions.values() if folder_key(s.cwd) == key]
+        done = marks.change(partial(marks.hide_project, key=key, sessions=sessions))
+        if done is not None and key in done[0].projects and not self.show_hidden:
+            self.project = VM.ALL_PROJECTS  # gone from the rail: every project again
+        self.remarked(done)
+
+    def remarked(self, done: tuple[marks.Marks, marks.Changed] | None) -> None:
+        """The marks as just saved, shown at once (and over a read under way); what was hidden, unticked.
+        None: marks.json is there but could not be read, so nothing changed, and Bit says so."""
+        if done is None:
+            self.say(marks.UNREAD, 8)
+            return
+        now, changed = done
+        self.selected -= changed.hid
+        self.remark = now if self.waiting else None
+        if self.snap is not None:
+            self.snap = self.snap.with_marks(now)
+            self.show_top()
+            self.refilter()
+        self.say(changed.words, changed.seconds)
 
     def tick(self) -> None:
         """The live dot breathes (a slow sine between dim and bright green), the clock goes on."""

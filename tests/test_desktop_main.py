@@ -6,6 +6,7 @@ import gc
 import importlib
 import os
 import re
+import threading
 import time
 import weakref
 from datetime import datetime, timedelta
@@ -31,6 +32,7 @@ from tabmancer import (
     cli,
     commands,
     demo,
+    marks,
     rowwords,
     sessions,
     store,
@@ -40,8 +42,9 @@ from tabmancer import (
 )
 from tabmancer import sessionwords as preview_words
 from tabmancer import viewmodel as VM
-from tabmancer.config import merge_json, read_json
+from tabmancer.config import config_dir, merge_json, read_json
 from tabmancer.desktop import commandbar, drawer, frame, look, main, rail, teamgraph, teampanel
+from tabmancer.desktop.table import COLUMN, PARTS
 from tabmancer.keys import KEYS
 from tabmancer.search import matches
 from tabmancer.teamwords import colours, team_detail
@@ -694,7 +697,10 @@ def test_the_drawer_shows_a_teams_card_and_its_buttons_wait_for_the_window(qapp,
     assert side.key == closed.session_id and not side.graph.isVisible() and side.facts_heading.isVisible()
     buttons = [side.grid.itemAt(n).widget() for n in range(side.grid.count())]
     assert [b.property("key") for b in buttons] == [key for key, _ in side.offered]
-    assert all(not b.isEnabled() and b.toolTip() == main.ELSEWHERE for b in buttons)  # till the window does them
+    for b in buttons:  # the window's own keys work; the rest wait till it does them
+        here = b.property("key") in main.HERE
+        assert b.isEnabled() is here and b.toolTip() == ("" if here else main.ELSEWHERE)
+    assert {b.property("key") for b in buttons if b.isEnabled()} == {"f", "x"}
     pressed = []
     side.act.connect(pressed.append)
     side.set(shown.snap, closed.session_id, None, {key: None for key, _, _ in drawer.BUTTONS})  # all done here
@@ -743,6 +749,199 @@ def test_a_broken_layout_file_is_left_alone(qapp, window):
     assert not any(dock.isHidden() for dock in shown.docks.values())
     shown.close()
     assert read_json(frame.LAYOUT_FILE)["monitor"] == {"state": "kept"}  # the monitor's is its own
+
+
+def press(shown, key: str) -> None:
+    """A key as the menus name it ('x', 'X', 'Space', 'Tab'), pressed in the window."""
+    QTest.keySequence(shown, main.sequences(key)[0])
+    QApplication.instance().processEvents()
+
+
+def titled(snap, title: str):
+    return next(s for s in snap.sessions.values() if s.title == title)
+
+
+def saved_marks() -> dict:
+    return read_json(marks.FILE) or {"hidden": [], "projects": [], "pinned": []}
+
+
+def test_space_ticks_f_pins_and_x_hides_as_marks_json_keeps_them(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    login = titled(shown.snap, "Fix the login redirect loop").session_id  # closed: Space ticks it
+    board = shown.board
+    assert board.reveal(login)
+    press(shown, "Space")
+    assert shown.selected == {login} and board.cards[login].tick == "✓" and "1 ticked" in shown.pills.text()
+    press(shown, "f")  # the ticked one, wherever the pick went
+    assert saved_marks()["pinned"] == [login] and login in shown.snap.pinned and board.cards[login].pinned
+    assert shown.bit_line.text() == "Pinned “Fix the login redirect loop” above the rest."
+    press(shown, "x")
+    assert saved_marks()["hidden"] == [login] and shown.selected == set()  # out of sight: unticked
+    assert login not in board.cards and shown.info.text().endswith("· 1 hidden (X shows them)")
+    assert shown.bit_line.text().startswith("Hid “Fix the login redirect loop”. Nothing is deleted")
+    read(qapp, shown)
+    assert shown.snap.hidden == {login} and "Hid “Fix" in shown.bit_line.text()  # a read keeps what Bit says
+    press(shown, "X")
+    assert board.cards[login].title == "hidden · Fix the login redirect loop"
+    assert shown.info.text().endswith("showing 1 hidden (x brings one back)")
+    assert board.reveal(login)
+    press(shown, "x")
+    assert saved_marks()["hidden"] == [] and shown.bit_line.text() == "Back in sight: “Fix the login redirect loop”."
+    shown.said_timer.timeout.emit()
+    assert "watches" in shown.bit_line.text()  # then who acts again
+    open_one = next(s for s in shown.snap.sessions.values()  # its own card, not a team's
+                    if s.exit is sessions.Exit.RUNNING and board.card_of(s.session_id) == s.session_id)
+    assert board.reveal(open_one.session_id) and board.pick == open_one.session_id
+    press(shown, "Space")
+    assert shown.selected == set()  # open in a terminal: nothing to tick
+    press(shown, "x")
+    assert shown.bit_line.text() == marks.OPEN_ALWAYS_SHOW and saved_marks()["hidden"] == []
+
+
+def test_a_mark_made_while_a_read_is_under_way_and_by_another_dashboard_stays(qapp, window, monkeypatch):
+    shown = window()
+    read(qapp, shown)
+    login = titled(shown.snap, "Fix the login redirect loop").session_id
+    docs = titled(shown.snap, "Rewrite the getting-started guide").session_id
+    marks.Marks(pinned={docs}).save()  # the terminal dashboard pinned one since the window read them
+    real, came, go = shown.store.poll, threading.Event(), threading.Event()
+
+    def slow():
+        snap = real()  # marks.json read now, before the window changes it
+        came.set()
+        go.wait(10)
+        return snap
+
+    monkeypatch.setattr(shown.store, "poll", slow)
+    shown.poll()
+    assert came.wait(10)
+    assert shown.board.reveal(login)
+    press(shown, "f")
+    assert saved_marks()["pinned"] == sorted([docs, login])  # the other's pin kept
+    go.set()
+    wait(qapp, lambda: not shown.waiting)
+    qapp.processEvents()
+    assert shown.snap.pinned == {docs, login}  # the read that was under way shows it too
+
+
+def test_f_and_x_leave_a_marks_json_they_cannot_read_as_it_is_and_say_so(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    login = titled(shown.snap, "Fix the login redirect loop").session_id
+    marks.Marks(pinned={"theirs"}).save()
+    path = config_dir() / marks.FILE
+    half = path.read_bytes()[:-9]  # cut off: what another tool was writing in place
+    path.write_bytes(half)
+    assert shown.board.reveal(login)
+    press(shown, "Space")
+    press(shown, "f")
+    assert shown.bit_line.text() == marks.UNREAD and path.read_bytes() == half  # not saved over: kept
+    assert login not in shown.snap.pinned and shown.selected == {login}
+    press(shown, "x")
+    assert shown.bit_line.text() == marks.UNREAD and login in shown.board.cards and path.read_bytes() == half
+    press(shown, "Tab")
+    projects = shown.rail.projects
+    for _ in range(next(n for n, row in enumerate(projects.rows) if n and row.mark not in ("open", "waiting"))):
+        QTest.keyClick(projects, Qt.Key.Key_Down)
+    picked = shown.project
+    press(shown, "x")  # a project, from the rail: nothing changed, so it stays picked
+    assert shown.bit_line.text() == marks.UNREAD and shown.project == picked and path.read_bytes() == half
+
+
+def test_tab_puts_the_keys_on_the_rail_where_x_hides_a_project(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    projects = shown.rail.projects
+    press(shown, "Tab")
+    assert projects.hasFocus()
+    press(shown, "x")
+    assert shown.bit_line.text().startswith("Pick a project on the rail") and saved_marks()["projects"] == []
+    at = next(n for n, row in enumerate(projects.rows) if n and row.mark not in ("open", "waiting"))
+    for _ in range(at):  # down to a project with none open (an open one keeps it on the rail)
+        QTest.keyClick(projects, Qt.Key.Key_Down)
+    picked = projects.rows[at]
+    assert shown.project == picked.key == projects.pick != VM.ALL_PROJECTS
+    narrowed = shown.shown()
+    assert narrowed and all(sessions.folder_key(s.cwd) == picked.key for s in narrowed)
+    press(shown, "x")
+    assert saved_marks()["projects"] == [picked.key] and shown.project == VM.ALL_PROJECTS
+    assert picked.key not in [row.key for row in projects.rows]
+    assert shown.bit_line.text().startswith(f"Hid the project {picked.name} (")
+    press(shown, "X")
+    assert picked.key in [row.key for row in projects.rows]  # the hidden ones listed: x brings it back
+    QTest.keyClick(projects, Qt.Key.Key_End)
+    QTest.keyClick(projects, Qt.Key.Key_Home)
+    assert shown.project == VM.ALL_PROJECTS
+    QTest.keyClick(projects, Qt.Key.Key_Return)
+    assert shown.board.hasFocus()
+    press(shown, "Tab")
+    press(shown, "Tab")
+    assert shown.board.hasFocus()
+
+
+def test_the_table_ticks_with_space_and_its_box_and_e_and_shift_e_unfold_teams(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    login = titled(shown.snap, "Fix the login redirect loop").session_id
+    data = titled(shown.snap, "Speed up the nightly CSV import").session_id
+    team = shown.snap.view.teams[0].name
+    press(shown, "E")
+    assert shown.bit_line.text().startswith("The board shows each team as one card")
+    shown.set_view("table")
+    table = shown.table
+
+    def box(key):
+        return "".join(words for words, _ in table.grid.item(table.keys.index(key), COLUMN["sel"]).data(PARTS))
+
+    assert table.show_key(login)
+    press(shown, "Space")
+    assert shown.selected == {login} and box(login) == "[x]" and table.pick != login
+    spot = table.visualRect(table.grid.index(table.keys.index(data), COLUMN["sel"])).center()
+    QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=spot)
+    assert shown.selected == {login, data} and box(data) == "[x]" and table.pick == data
+    press(shown, "a")  # every one shown, then none
+    tickable = {s.session_id for s in shown.shown() if VM.tickable(s)}
+    assert shown.selected == tickable and shown.pills.text().endswith(f"{len(tickable)} ticked")
+    press(shown, "a")
+    assert shown.selected == set()
+    state = shown.snap.team_states[team]
+    lead = state.sessions[state.team.lead.name].session_id
+    press(shown, "E")
+    assert table.unfolded == {team} and lead in table.keys
+    assert table.show_key(lead)
+    press(shown, "E")  # folded again: the pick on its team's row
+    assert table.unfolded == set() and table.pick == rowwords.TEAM_ROW + team
+    press(shown, "e")
+    assert table.unfolded == {team}
+    press(shown, "e")
+    assert table.unfolded == set()
+    press(shown, "a")
+    assert shown.bit_line.text().startswith("Adding members is in the terminal dashboard for now")
+    press(shown, "x")  # an open team: its tabs close in the terminal dashboard (x twice)
+    assert shown.bit_line.text().startswith("Closing a team's tabs") and saved_marks()["hidden"] == []
+    assert table.show_key(login)
+    press(shown, "e")
+    assert shown.docks["Preview"].isVisible()  # how it ended: the drawer says it
+
+
+def test_esc_clears_the_words_then_the_card_then_the_project_then_closes(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    key = shown.rail.projects.rows[1].key
+    shown.set_project(key)
+    shown.toggle_card("continue")
+    press(shown, "/")
+    QTest.keyClicks(shown.filter_box, "fix x a")  # typed: never the keys x and a
+    assert shown.words == "fix x a" and shown.selected == set() and saved_marks()["hidden"] == []
+    press(shown, "Esc")
+    assert (shown.words, shown.card, shown.project) == ("", "continue", key) and shown.board.hasFocus()
+    press(shown, "Esc")
+    assert (shown.card, shown.project) == (None, key)
+    press(shown, "Esc")
+    assert shown.project == VM.ALL_PROJECTS and shown.isVisible()
+    press(shown, "Esc")
+    assert not shown.isVisible()
 
 
 def test_it_never_acts(qapp, window, world, monkeypatch):

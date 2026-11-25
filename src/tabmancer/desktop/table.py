@@ -6,11 +6,13 @@ of light and the red pulse as the window's motion allows.
 
 The pick is shared with the Board's: it goes out (picked) in the drawer's words, a session's id or a
 team's card (viewmodel.TEAM_CARD + its name). A team's row unfolds its members under it (Enter, a click
-on its ▸, a double-click), as in the terminal; the cursor never rests on a heading."""
+on its ▸, a double-click; E every team), as in the terminal; the cursor never rests on a heading. A row
+ticked (Space, or a click on its [ ]) shows [x], as there."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Collection
 from dataclasses import replace
 from functools import partial
 
@@ -104,9 +106,11 @@ class Cells(QStyledItemDelegate):
 
 class Table(QTreeView):
     """The list: rowwords' rows over the sessions shown (the window's filters), picker's columns or
-    the live view's. picked: the row picked now, in the drawer's words ('' for none)."""
+    the live view's. picked: the row picked now, in the drawer's words ('' for none); ticking: a click on a
+    session's [ ], or a closed team's (its key in the drawer's words, for the window to tick)."""
 
     picked = Signal(str)
+    ticking = Signal(str)
 
     def __init__(self, accent: str) -> None:
         super().__init__()
@@ -115,6 +119,7 @@ class Table(QTreeView):
         self.shown: list[Session] = []
         self.live = False
         self.unfolded: set[str] = set()  # teams whose members are listed under them
+        self.ticked: frozenset[str] = frozenset()  # the sessions ticked (Space), by id
         self.listing: rowwords.Listing | None = None
         self.keys: list[str] = []
         self.sessions: list[Session | None] = []
@@ -153,11 +158,18 @@ class Table(QTreeView):
 
     # --- what it shows ----------------------------------------------------------------------------
 
-    def set(self, snap: DashSnapshot, shown: list[Session]) -> None:
+    def set(self, snap: DashSnapshot, shown: list[Session], ticked: Collection[str] | None = None) -> None:
         """The list as the store read it, over the sessions shown (VM.visible with the window's filters,
-        live when the live view is shown)."""
+        live when the live view is shown); ticked: the sessions ticked now (None: as they were)."""
         self.snap, self.shown = snap, shown
+        if ticked is not None:
+            self.ticked = frozenset(ticked)
         self.show_rows()
+
+    def set_ticked(self, ids: Collection[str]) -> None:
+        if frozenset(ids) != self.ticked:
+            self.ticked = frozenset(ids)
+            self.show_rows()
 
     def set_live(self, live: bool) -> None:
         if live != self.live:
@@ -179,7 +191,7 @@ class Table(QTreeView):
         grouped = VM.group(self.shown, snap.pinned, snap.team_states, teams_too=not self.live)
         return rowwords.Listing(
             grouped, snap.sessions, snap.team_states, self.accent, self.width_now, model_shown=self.model_shown,
-            live=self.live, unfolded=frozenset(self.unfolded), pinned=snap.pinned,
+            live=self.live, unfolded=frozenset(self.unfolded), selected=self.ticked, pinned=snap.pinned,
             is_hidden=partial(in_hidden, snap.hidden), armed=snap.armed, queued=snap.queued, tokens=snap.session_tokens,
             default_cap=picks.cap_tokens(picks.default_cap()), star=star)
 
@@ -302,6 +314,28 @@ class Table(QTreeView):
         self.unfolded ^= {name}
         self.show_rows()
 
+    def fold_teams(self) -> bool:
+        """E: every team in the list unfolded, or every one folded again when all of them were (one that
+        came in since makes the next press unfold); the pick on its team's row when it folded away. False
+        when the list has no team."""
+        names = {key[len(rowwords.TEAM_ROW):] for key in self.keys if key.startswith(rowwords.TEAM_ROW)}
+        if not names:
+            return False
+        pick = self.pick
+        self.unfolded = self.unfolded - names if names <= self.unfolded else self.unfolded | names
+        self.show_rows()
+        listing = self.listing
+        if pick is not None and pick not in self.keys and listing is not None and pick in listing.grouped.members:
+            self.show_key(VM.TEAM_CARD + listing.grouped.members[pick][0])
+        return True
+
+    def step(self, by: int) -> None:
+        """The pick a row down (by 1) or up (-1), past the headings, as the arrows move it."""
+        if self.keys:
+            place = self.off_heading(max(0, min(self.row + by, len(self.keys) - 1)), by)
+            if place is not None:
+                self.setCurrentIndex(self.grid.index(place, 0))
+
     def fold_at(self, index: QModelIndex) -> None:
         key = index.data(KEY) or ""
         if key.startswith(rowwords.TEAM_ROW):
@@ -311,7 +345,11 @@ class Table(QTreeView):
         index = self.indexAt(event.position().toPoint())
         super().mousePressEvent(event)
         if index.isValid() and index.column() == COLUMN["sel"] and event.button() == Qt.MouseButton.LeftButton:
-            self.fold_at(index)  # the ▸ of a team's row
+            box = "".join(words for words, _ in index.data(PARTS) or [])
+            if box.startswith("["):  # a box: a session's, or a closed team's
+                self.ticking.emit(drawer_key(index.data(KEY) or ""))
+            else:
+                self.fold_at(index)  # the ▸ of an open team's row
 
     def keyPressEvent(self, event) -> None:
         key = event.key()

@@ -6,12 +6,13 @@ ones by what they do). A team is one card, in the lane of its most urgent member
 as chips. The arrows and the mouse move the pick, one card, kept across reads as the list keeps its
 row (viewmodel.kept_row). It shows the sessions the window narrowed the list to (viewmodel.visible: a
 project, a card, words); a click on a lane's heading asks for only what its card counts (1 2 3), and
-that heading is lit while it is so. It only shows: what a card does (Enter and the rest) comes with the
-keys.
+that heading is lit while it is so. A card ticked with Space has a tick before its state (a team's,
+– while only some of its closed members are). It only shows: the window does what its keys do.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
@@ -76,6 +77,13 @@ class Card:
     crowded: bool = False
     pinned: bool = False
     chips: list[tuple[str, str]] = field(default_factory=list)  # a team's members: (words, colour)
+    tick: str = ""  # Space's: ✓ ticked, – some of a team's, '' none
+
+
+def tick_mark(ids: set[str], ticked: Collection[str]) -> str:
+    """A card's tick over the sessions Space ticks on it (none for an open one): ✓ all of them, – some."""
+    hit = ids & set(ticked)
+    return "" if not hit else "✓" if hit == ids else "–"
 
 
 def session_card(view: VM.SessionView, session: Session | None, accent: str) -> Card:
@@ -238,6 +246,13 @@ class Column(QWidget):
             p.drawText(QRectF(right - corner_w, y, corner_w + 1, fm_head.height()),
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, corner)
             room = right - left - corner_w - 8
+            head_x = left
+            if card.tick:
+                p.setFont(head)
+                p.setPen(QColor(self.accent))
+                tick_w = fm_head.horizontalAdvance(f"{card.tick} ")
+                p.drawText(QRectF(left, y, tick_w, fm_head.height()), Qt.AlignmentFlag.AlignVCenter, card.tick)
+                head_x, room = left + tick_w, room - tick_w
             if card.pinned:
                 p.setFont(head)
                 p.setPen(QColor(self.accent))
@@ -247,7 +262,7 @@ class Column(QWidget):
                 room -= star_w
             p.setFont(head)
             p.setPen(QColor(card.head_colour))
-            p.drawText(QRectF(left, y, room, fm_head.height()), Qt.AlignmentFlag.AlignVCenter,
+            p.drawText(QRectF(head_x, y, room, fm_head.height()), Qt.AlignmentFlag.AlignVCenter,
                        fm_head.elidedText(card.head, Qt.TextElideMode.ElideRight, room))
             y += fm_head.height() + 5
             p.setFont(title)
@@ -498,6 +513,7 @@ class Board(QWidget):
         self.pick: str | None = None
         self.row = 0  # where the pick is among keys(): kept_row puts it back near there
         self.opened: set[str] = set()  # lanes that fold, opened with a click
+        self.ticked: frozenset[str] = frozenset()  # the sessions ticked (Space), by id
         self.views: dict[str, LaneView] = {}
         row = QHBoxLayout(self)
         row.setContentsMargins(8, 8, 8, 8)
@@ -511,14 +527,23 @@ class Board(QWidget):
             row.addWidget(lane, 1)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-    def set(self, snap: DashSnapshot, shown: list[Session] | None = None, on: str | None = None) -> None:
+    def set(self, snap: DashSnapshot, shown: list[Session] | None = None, on: str | None = None,
+            ticked: Collection[str] | None = None) -> None:
         """The board as the store read it, over the sessions shown (VM.visible: the window's filters);
-        without them, every one in sight (the hidden ones are not). on: the card they are narrowed to."""
+        without them, every one in sight (the hidden ones are not). on: the card they are narrowed to;
+        ticked: the sessions ticked now (None: as they were)."""
         self.snap, self.on = snap, on
+        if ticked is not None:
+            self.ticked = frozenset(ticked)
         if shown is None:
             shown = VM.visible(snap.sessions.values(), lambda s: s.session_id in snap.hidden)
         self.lanes = VM.board(shown, snap.team_states, snap.pinned)
         self.show_lanes()
+
+    def set_ticked(self, ids: Collection[str]) -> None:
+        if frozenset(ids) != self.ticked:
+            self.ticked = frozenset(ids)
+            self.show_lanes()
 
     def show_lanes(self) -> None:
         snap = self.snap
@@ -533,12 +558,16 @@ class Board(QWidget):
             made = by_lane.setdefault(lane.key, [])
             for item in lane.items:
                 if item.startswith(VM.TEAM_CARD):
-                    team = teams.get(item[len(VM.TEAM_CARD):])
+                    name = item[len(VM.TEAM_CARD):]
+                    team, state = teams.get(name), snap.team_states.get(name)
                     card = team_card(team, views, lane.tone, self.accent) if team is not None else None
+                    ids = VM.members_closed(state, snap.sessions) if state is not None else set()
                 else:
-                    view = views.get(item)
-                    card = session_card(view, snap.sessions.get(item), self.accent) if view is not None else None
+                    view, session = views.get(item), snap.sessions.get(item)
+                    card = session_card(view, session, self.accent) if view is not None else None
+                    ids = {item} if session is not None and VM.tickable(session) else set()
                 if card is not None:
+                    card.tick = tick_mark(ids, self.ticked)
                     made.append(card)
                     self.cards[card.key] = card
         keys = self.keys()
@@ -577,6 +606,17 @@ class Board(QWidget):
             if key in lane.items:
                 self.views[lane.key].show_card(key)
         self.picked.emit(key)
+
+    def step(self, by: int) -> None:
+        """The pick on down its lane (by 1) or up it (-1), as the arrows move it; it stays at either end."""
+        shown = [lane for lane in self.lanes if not lane.folded and self.lane_keys(lane)]
+        if not shown:
+            return
+        column, row = self.where()
+        open_lanes = [lane for lane in self.lanes if not lane.folded]
+        keys = self.lane_keys(open_lanes[column] if column < len(open_lanes) else shown[0])
+        if keys:
+            self.move(keys[max(0, min(row + by, len(keys) - 1))])
 
     def card_of(self, key: str) -> str | None:
         """The card a session is on: its own, or its team's; or a team's card (TEAM_CARD + its name)."""
@@ -624,10 +664,8 @@ class Board(QWidget):
         lane = open_lanes[column] if column < len(open_lanes) else shown[0]
         keys = self.lane_keys(lane)
         key = event.key()
-        if key == Qt.Key.Key_Down and keys:
-            self.move(keys[min(row + 1, len(keys) - 1)])
-        elif key == Qt.Key.Key_Up and keys:
-            self.move(keys[max(row - 1, 0)])
+        if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+            self.step(1 if key == Qt.Key.Key_Down else -1)
         elif key == Qt.Key.Key_Home and keys:
             self.move(keys[0])
         elif key == Qt.Key.Key_End and keys:

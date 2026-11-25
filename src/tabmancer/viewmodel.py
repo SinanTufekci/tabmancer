@@ -457,6 +457,17 @@ def members_open(state: TeamState, sessions: dict[str, Session]) -> int:
     return sum(sessions.get(s.session_id, s).exit is Exit.RUNNING for s in state.sessions.values() if s is not None)
 
 
+def tickable(session: Session) -> bool:
+    """Whether Space ticks it: not while it is open in a terminal (one in the background is, to attach)."""
+    return session.status is not Status.RUNNING
+
+
+def members_closed(state: TeamState, sessions: dict[str, Session]) -> set[str]:
+    """A closed team's members Space ticks as one (tickable), by their sessions' ids, each as the list has it."""
+    now = (sessions.get(s.session_id, s) for s in state.sessions.values() if s is not None)
+    return {s.session_id for s in now if tickable(s)}
+
+
 def team_view(state: TeamState, tokens: dict, sessions: dict[str, Session], *,
               git_of=None, agy_usage: dict | None = None, bus: tuple[dict, dict] | None = None) -> TeamView:
     """A team as the view carries it. git_of: folder -> its git as MemberView.git has it, or None; agy_usage: the
