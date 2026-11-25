@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import posixpath
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 
@@ -170,6 +170,14 @@ def member_words(session: Session | None) -> tuple[str, str]:
         return STATUS[session.status]
     label, tone, _ = state_of(session)
     return f"{TEAM_GLYPHS.get(state_id(session), ('●', ''))[0]} {label}", tone
+
+
+def who(session: Session, members: Mapping[str, tuple[str, str]]) -> str:
+    """A session as a note names it: a team member as 'team: member' (members: session id -> (team,
+    member)), else its project."""
+    found = members.get(session.session_id)
+    return f"{found[0]}: {found[1]}" if found else session.project
+
 
 
 def team_key_pairs(started: bool, unfolded: bool) -> tuple[tuple[str, str], ...]:

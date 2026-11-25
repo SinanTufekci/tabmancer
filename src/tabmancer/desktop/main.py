@@ -68,7 +68,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, actions, bitart, clis, commands, marks, rowwords, search, teams
+from .. import __version__, actions, bitart, clis, commands, engine, marks, search, teams
 from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
@@ -78,6 +78,7 @@ from . import commandbar, frame, look, monitor, teamgraph
 from .board import Board
 from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
+from .front import WindowFront
 from .monitor import MonitorWindow, sequences
 from .opening import Opener
 from .rail import Rail
@@ -184,6 +185,8 @@ class MainWindow(QMainWindow):
         self.opener = Opener(self, update=not demo)  # Enter, j and m: what they keep, and their threads
         self.opener.said.connect(self.say_note)
         self.opener.opened.connect(self.took_open)
+        self.front = WindowFront(self)  # what each reading turns up, said and drawn: the terminal's one copy decides
+        self.engine = engine.Engine(self.front, datetime.now)  # never acts (state.acts stays False)
         self.view = "board"  # what the Sessions panel shows (VIEWS)
         self.before_live = "board"  # the view l goes back to
         self.project = VM.ALL_PROJECTS  # what the board is narrowed to: a project (the rail),
@@ -484,16 +487,13 @@ class MainWindow(QMainWindow):
         if self.remark is not None:  # read before the window changed the marks: as they are now (the file
             now = marks.Marks.read(tries=1)  # held or unreadable now: as this window saved them; no wait here)
             snap, self.remark = snap.with_marks(now if now is not None else self.remark), None
-        before, self.snap, self.agy_first = self.snap, snap, first
-        starting = before is None
-        if before is not None:  # a row whose state changed since the last reading: lit for a moment
-            self.table.light(rowwords.changed(before.sessions, snap.sessions.values()))
+        starting, self.snap, self.agy_first = self.snap is None, snap, first
         if starting:  # the ones open at the last shutdown come ticked, as in the terminal dashboard
             self.selected = VM.preselect(snap.sessions, snap.open_at_shutdown, lambda s: s.session_id in snap.hidden)
             self.preselected = set(self.selected)
         listed = snap.sessions.keys()
-        self.selected, self.preselected = VM.untick_open(self.selected & listed, self.preselected & listed,
-                                                         snap.sessions.values())  # opened: unticked
+        self.selected, self.preselected = self.selected & listed, self.preselected & listed
+        self.front.live(snap)  # what changed is said and lit, one open after all unticked (Engine.live)
         self.show_top()
         if starting and self.preselected:
             self.say(VM.shutdown_hello(len(self.preselected)), 6)

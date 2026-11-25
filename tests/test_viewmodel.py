@@ -155,3 +155,9 @@ def test_the_ones_open_at_the_last_shutdown_come_ticked_till_they_show_open():
     assert VM.untick_open(ticked | {"four"}, ticked, [background, two, terminal]) == ({"two"}, {"two"})
     by_hand = dataclasses.replace(two, exit=Exit.RUNNING)  # ticked by hand, open in the background: to attach
     assert VM.untick_open({"two", "four"}, set(), [by_hand]) == ({"two", "four"}, set())
+
+
+def test_a_note_names_a_member_by_its_team_and_any_other_session_by_its_project():
+    one = dataclasses.replace(session(), session_id="one")  # in C:/work/demo: its project is demo
+    assert VM.who(one, {"one": ("shop", "api")}) == "shop: api"
+    assert VM.who(one, {"other": ("shop", "ui")}) == one.project == "demo"
