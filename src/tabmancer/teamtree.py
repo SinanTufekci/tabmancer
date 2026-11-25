@@ -9,24 +9,18 @@ from datetime import date
 
 from rich.text import Text
 
-from . import teams, teamwords
+from . import rowwords, teams, teamwords
+from .rowwords import last_word  # noqa: F401  (named here too)
 from .teams import TeamState, counts
 from .teamwords import gist, one_line
-from .theme import MUTED, RED, TEXT, mix
+from .theme import MUTED, TEXT, mix
 from .viewmodel import FLIGHT_SECONDS, OTHER, lanes_of  # noqa: F401  (named here too)
 
 TRAIL = 6  # cells of fading wire behind a message in flight
-CHIP_GAP = "  "
 TIME = 7  # "15:04  " before the lanes of the sequence diagram
 LANES_SHARE = 0.45  # the lanes take at most this much of the width; what was said gets the rest
 LANE_MOST, LANE_LEAST = 14, 7  # a lane's width
 LANE_LINE = "#333333"
-SHORTEST = 4  # a name on a team's row is never cut shorter; past that, "+2" stands for the last ones
-
-
-def last_word(state: TeamState, member: str) -> teams.Message | None:
-    """The latest message to or from this member."""
-    return next((m for m in reversed(state.said) if member in (m.sender, m.receiver)), None)
 
 
 def word(message: teams.Message, member: str, colours: dict[str, str]) -> Text:
@@ -140,41 +134,8 @@ def tree(state: TeamState, width: int, looks: dict[str, tuple[str, str]], colour
 
 
 def chips(members: list[tuple[str, bool, str, str, str, int]], width: int, lead_style: str) -> Text:
-    """A team's members on its one row, each a sign of what it is doing and its name, as the status
-    column puts them: '● ★lead  ✶ api  ◦ ui' (stuck to the name after it, 'api✶  ui◦' read as
-    'api', then '✶ ui'). members: (name, lead, sign, sign's style, name's style, rank: 0 needs you,
-    1 waits for you, then the quieter ones). Long names are cut until the line fits; when even that
-    is not enough, the quietest are counted instead ('+2'), so the ones waiting for you stay named."""
-
-    def drawn(most: int, keep: int) -> Text:
-        kept = sorted(range(len(members)), key=lambda i: (not members[i][1], members[i][5], i))[:keep]
-        line = Text()
-        for index, (name, lead, sign, sign_style, name_style, _) in enumerate(members):
-            if index not in kept:
-                continue
-            if line:
-                line.append(CHIP_GAP)
-            if sign:
-                line.append(sign, style=sign_style)
-                line.append(" ")
-            if lead:
-                line.append("★", style=lead_style)
-            line.append(name if len(name) <= most else name[: most - 1] + "…", style=name_style)
-        if keep < len(members):  # red when one of those counted waits for you too
-            waiting = any(m[5] <= 1 for i, m in enumerate(members) if i not in kept)
-            line.append(f"{CHIP_GAP}+{len(members) - keep}", style=f"bold {RED}" if waiting else MUTED)
-        return line
-
-    longest = max((len(m[0]) for m in members), default=0)
-    for most in range(max(longest, SHORTEST), SHORTEST - 1, -1):
-        line = drawn(most, len(members))
-        if line.cell_len <= width:
-            return line
-    for keep in range(len(members) - 1, 0, -1):
-        line = drawn(SHORTEST, keep)
-        if line.cell_len <= width:
-            return line
-    return drawn(SHORTEST, 1)
+    """A team's members on its one row (rowwords.chips), as one Text."""
+    return Text.assemble(*rowwords.chips(members, width, lead_style))
 
 
 def sequence(team: teams.Team, said: list[teams.Message], colours: dict[str, str], width: int,
