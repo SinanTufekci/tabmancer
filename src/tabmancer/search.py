@@ -103,6 +103,31 @@ class Index:
         return lead + piece + tail, len(lead) + at - start, len(lead) + at - start + size
 
 
+class Finder:
+    """The filter's words in the conversations (Index.find), worked out once per filter and index:
+    the list asks many times a second. renew() once the index has read more."""
+
+    def __init__(self, index: Index) -> None:
+        self.index = index
+        self.version = 0  # goes up when the index has read more
+        self.found: tuple[str, int, set[str]] = ("", -1, set())  # filter, version, sessions
+
+    def said_in(self, text: str, session_ids) -> set[str]:
+        """The sessions in whose conversation the words were said."""
+        if self.found[:2] != (text, self.version):
+            self.found = (text, self.version, self.index.find(text, session_ids))
+        return self.found[2]
+
+    def renew(self) -> None:
+        self.found = ("", -1, set())
+        self.version += 1
+
+
+def matches(session: Session, needle: str) -> bool:
+    """The words (folded) in a session's folder, title, or first or last prompt."""
+    return needle in fold(f"{session.cwd} {session.title} {session.first_prompt} {session.last_prompt}")
+
+
 def fold(text: str) -> str:
     """Lower case of the same length. casefold() and lower() turn the Turkish İ into two
     characters (i and a combining dot), so "istanbul" missed "İstanbul" and every match after

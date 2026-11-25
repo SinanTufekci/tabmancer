@@ -223,8 +223,7 @@ SIDEBAR = 26 + 3    # the project sidebar with its margins; it steps aside when 
 MINI_BELOW = 40     # rows of terminal under which the cards take two lines each, not seven
 KEY_GROUPS = {action: group for group, rows in KEYS for _, action, _ in rows if action}  # the ? screen's
 # 1 2 3 or a click on a card: the list shows only what it counts. Its key, its card, its title.
-CARDS = {"open": ("1", "card-open", "OPEN NOW"), "waiting": ("2", "card-waiting", "NEED YOU"),
-         "continue": ("3", "card-continue", "TO CONTINUE")}
+CARDS = {card: (key, f"card-{card}", title) for card, (key, title) in VM.CARDS.items()}  # key, its card, title
 EXPAND_LINES = 4
 
 
@@ -740,9 +739,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.account: accounts.Account | None = None
         self.signed_as: str | None = None
         self.limited: set[str] = set()  # the sessions at a limit when the footer last heard of it
-        self.search = search.Index.load()  # what was said in each session, for the filter
-        self.search_version = 0  # goes up when the index has read more
-        self.found: tuple[str, int, set[str]] = ("", -1, set())  # filter, version, sessions
+        self.finder = search.Finder(search.Index.load())  # what was said in each session, for the filter
+        self.search = self.finder.index
         self.queued: dict[str, str] = {}  # h on a busy session: id -> how, handed over once it finishes
         # Messages for team members (a lead told of a goal, from T's Ctrl+R): id -> (its name, the
         # message), typed into its tab once it waits for you (deliver_notes).
@@ -1238,36 +1236,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.refresh_rows(was=was)
 
     def visible(self) -> list[Session]:
-        needle = search.fold(self.filter_text)
-        said = self.said_in() if needle else set()  # the words anywhere in the conversation
-        shown = [s for s in self.in_sight() if not needle or s.session_id in said or needle in
-                 search.fold(f"{s.cwd} {s.title} {s.first_prompt} {s.last_prompt}")]
-        if self.project_filter != ALL_PROJECTS:
-            shown = [s for s in shown if folder_key(s.cwd) == self.project_filter]
-        if self.card_filter:
-            shown = [s for s in shown if self.counted_by(s, self.card_filter)]
-        if self.live_mode:
-            shown = [s for s in shown if s.exit is Exit.RUNNING]
-            shown.sort(key=lambda s: (state_of(s)[2], s.project.casefold(), s.session_id))
-            return shown
-        # Open sessions first, in a fixed order; closed ones newest first (groups() puts the pinned
-        # ones apart). Neither moves while a session merely keeps working, so rows stay put under the mouse.
-        shown.sort(key=lambda s: (0, s.project.casefold(), s.session_id) if s.exit is Exit.RUNNING
-                   else (1, -s.last_active.timestamp(), s.session_id))
-        return shown
+        """The list's sessions, filtered and in order (VM.visible): groups() puts the pinned ones apart."""
+        return VM.visible(self.sessions.values(), self.marks.is_hidden, show_hidden=self.show_hidden,
+                          text=self.filter_text, said_in=self.said_in, project=self.project_filter,
+                          card=self.card_filter, live=self.live_mode)
 
-    @staticmethod
-    def counted_by(session: Session, card: str) -> bool:
-        """Whether a card counts this session, as update_dashboard counts them."""
-        if card == "open":
-            return session.exit is Exit.RUNNING
-        if card == "waiting":
-            return session.exit is Exit.RUNNING and state_of(session)[2] < 2
-        return session.exit is not Exit.RUNNING and session.status in INTERRUPTED
+    counted_by = staticmethod(VM.counted_by)  # whether a card counts this session, as update_dashboard counts them
 
     def action_card(self, card: str) -> None:
         """1 2 3, or a click on a card: only what that card counts; the same again shows everything."""
-        self.card_filter = None if self.card_filter == card else card
+        self.card_filter = VM.toggle_card(self.card_filter, card)
         for name, (_, card_id, _) in CARDS.items():
             self.cards[card_id].pick(name == self.card_filter)
         self.refresh_rows(keep_place=False)
@@ -1284,9 +1262,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def in_sight(self) -> list[Session]:
         """Every session but the hidden ones (X shows them too)."""
-        if self.show_hidden:
-            return list(self.sessions.values())
-        return [s for s in self.sessions.values() if not self.marks.is_hidden(s)]
+        return VM.in_sight(self.sessions.values(), self.marks.is_hidden, self.show_hidden)
 
     def mode(self, session: Session) -> Mode:
         return self.modes.get(session.session_id) or default_mode(session.status)
@@ -1660,13 +1636,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                      if key.startswith(TEAM_ROW) else self.heading_cells(key))
             table.add_row(*cells, key=key, height=height)
         table.scroll_to(y=scrolled, animate=False, immediate=True)
-        if current is not None and current in table.rows:
-            table.move_cursor(row=table.get_row_index(current))
-        elif keep_place and current is not None and table.row_count:
-            # Its row is gone (hidden, closed, folded into its team): the cursor stays where it was,
-            # on the row that took its place, not on the newest session, where the next x or Enter
-            # acted on a session never picked.
-            table.move_cursor(row=min(row, table.row_count - 1))
+        # On its row; gone (hidden, closed, folded into its team), on the row that took its place (VM.kept_row).
+        kept = VM.kept_row([key.value for key in table.rows], current, row, keep_place)
+        if kept is not None:
+            table.move_cursor(row=kept)
         self.off_heading(1)
         self.update_status()
 
@@ -3248,27 +3221,24 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.call_from_thread(self.search_ready)
 
     def search_ready(self) -> None:
-        self.found = ("", -1, set())
-        self.search_version += 1
+        self.finder.renew()
         if len(self.filter_text.strip()) >= search.SHORTEST:
             self.refresh_rows(keep_place=False)
 
     def said_in(self) -> set[str]:
         """The sessions in whose conversation the filter's words were said; worked out once
         per filter and index, since the list asks many times a second."""
-        needle = self.filter_text
-        if self.found[:2] != (needle, self.search_version):
-            self.found = (needle, self.search_version, self.search.find(needle, self.sessions.keys()))
-        return self.found[2]
+        return self.finder.said_in(self.filter_text, self.sessions.keys())
 
     def action_back(self) -> None:
         """Esc: the text filter cleared, else a card's, else quit."""
         box = self.filter_box
-        if box.has_class("visible"):
+        step = VM.back_step(box.has_class("visible"), self.card_filter)
+        if step == "search":
             box.value = ""
             box.remove_class("visible")
             self.table.focus()
-        elif self.card_filter:
+        elif step == "card":
             self.action_card(self.card_filter)
         else:
             self.exit(None)
@@ -3603,12 +3573,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         chosen = self.chosen()
         if not chosen:
             return
-        if all(self.marks.is_pinned(s) for s in chosen):
-            self.marks.pinned -= {s.session_id for s in chosen}
-            self.notify(f"Unpinned {self.counted(chosen)}.", timeout=3)
-        else:
-            self.marks.pinned |= {s.session_id for s in chosen}
+        self.marks.pinned, pinned = VM.toggle_pins(self.marks.pinned, {s.session_id for s in chosen})
+        if pinned:
             self.notify(f"Pinned {self.counted(chosen)} above the rest.", timeout=3)
+        else:
+            self.notify(f"Unpinned {self.counted(chosen)}.", timeout=3)
         self.marks.save()
         self.marked()
 

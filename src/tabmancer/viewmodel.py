@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import hashlib
 import posixpath
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 
-from . import accounts, agy, context, picks, teambus, teams
+from . import accounts, agy, context, picks, search, teambus, teams
 from .sessions import INTERRUPTED, Exit, Session, Status, folder_key
 from .teams import TeamState, counts
 from .tokens import duration
@@ -687,3 +688,78 @@ def lanes_of(team: teams.Team, said: list) -> list[str]:
     left = [teams.YOU] if people & {teams.YOU, teams.TABMANCER} else []
     right = [OTHER] if people - set(names) - {teams.YOU, teams.TABMANCER} else []
     return [*left, *names, *right]
+
+
+# --- the list's filters, pins and the row kept -----------------------------------------------------
+
+ALL_PROJECTS = "*"  # the project filter's "every project"
+CARDS = {"open": ("1", "OPEN NOW"), "waiting": ("2", "NEED YOU"), "continue": ("3", "TO CONTINUE")}  # key, title
+
+
+def counted_by(session: Session, card: str) -> bool:
+    """Whether a card counts this session: open; open and waiting for you; closed mid-work."""
+    if card == "open":
+        return session.exit is Exit.RUNNING
+    if card == "waiting":
+        return session.exit is Exit.RUNNING and state_of(session)[2] < 2
+    return session.exit is not Exit.RUNNING and session.status in INTERRUPTED
+
+
+def toggle_card(current: str | None, card: str) -> str | None:
+    """1 2 3, or a click on a card: only what that card counts; the same again shows everything."""
+    return None if current == card else card
+
+
+def in_sight(sessions: Iterable[Session], is_hidden: Callable[[Session], bool], show_hidden: bool) -> list[Session]:
+    """Every session but the hidden ones (X shows them too)."""
+    if show_hidden:
+        return list(sessions)
+    return [s for s in sessions if not is_hidden(s)]
+
+
+def visible(sessions: Iterable[Session], is_hidden: Callable[[Session], bool], *, show_hidden: bool = False,
+            text: str = "", said_in: Callable[[], set[str]] = set, project: str = ALL_PROJECTS,
+            card: str | None = None, live: bool = False) -> list[Session]:
+    """The list's sessions, filtered and in order: the words (in its folder, title, prompts, or anywhere
+    in the conversation: said_in, asked only with words), one project, what a card counts; live, the open
+    ones by what they do. Else open sessions first in a fixed order, closed ones newest first: neither
+    moves while a session merely keeps working, so rows stay put under the mouse. The pinned ones are
+    set apart by group()."""
+    needle = search.fold(text)
+    said = said_in() if needle else set()
+    shown = [s for s in in_sight(sessions, is_hidden, show_hidden)
+             if not needle or s.session_id in said or search.matches(s, needle)]
+    if project != ALL_PROJECTS:
+        shown = [s for s in shown if folder_key(s.cwd) == project]
+    if card:
+        shown = [s for s in shown if counted_by(s, card)]
+    if live:
+        shown = [s for s in shown if s.exit is Exit.RUNNING]
+        shown.sort(key=lambda s: (state_of(s)[2], s.project.casefold(), s.session_id))
+        return shown
+    shown.sort(key=lambda s: (0, s.project.casefold(), s.session_id) if s.exit is Exit.RUNNING
+               else (1, -s.last_active.timestamp(), s.session_id))
+    return shown
+
+
+def toggle_pins(pinned: set[str], ids: set[str]) -> tuple[set[str], bool]:
+    """f: these pinned above the rest, or unpinned when all of them were; and whether they are pinned now."""
+    if ids <= pinned:
+        return pinned - ids, False
+    return pinned | ids, True
+
+
+def kept_row(keys: list[str], current: str | None, row: int, keep_place: bool) -> int | None:
+    """Where the cursor goes when the rows are made again: on its row (current: its key) if still
+    listed; else, keep_place, on the row that took its place (it was on row), not the newest, where
+    the next x or Enter would act on a session never picked; else None (the top)."""
+    if current is not None and current in keys:
+        return keys.index(current)
+    if keep_place and current is not None and keys:
+        return min(row, len(keys) - 1)
+    return None
+
+
+def back_step(search_open: bool, card: str | None) -> str:
+    """Esc: the words' filter cleared ("search"), else a card's ("card"), else "quit"."""
+    return "search" if search_open else "card" if card else "quit"

@@ -25,8 +25,8 @@ from .sessions import INTERRUPTED, Exit, Session, Status, _shorten, folder_key  
 from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, mix
 from .tokenchart import PixelPicture, draw_hours
 from .usage import Limit
+from .viewmodel import ALL_PROJECTS  # one copy, the list's filters'
 
-ALL_PROJECTS = "*"
 # A 3x5 pixel font drawn with half blocks: three rows high and bolder than Digits' thin lines.
 FONT = {
     "0": ("111", "101", "101", "101", "111"),
