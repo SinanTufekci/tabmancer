@@ -2966,11 +2966,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.check_limits()
 
     def who(self, session: Session) -> str:
-        """A session as a note names it: its project, or a team member as 'team: member'."""
-        if session.session_id in self.member_rows:
-            team, member = self.member_rows[session.session_id]
-            return f"{team}: {member}"
-        return session.project
+        """A session as a note names it: its project, or a team member as 'team: member' (VM.who)."""
+        return VM.who(session, self.member_rows)
 
     def tell_fallback(self, session: Session) -> None:
         """Another model took over in an open session by itself (alerts.fallback_event)."""
