@@ -110,6 +110,7 @@ COMMANDS = {  # the command, and words its output must hold
     "updates": (["updates"], [tabmancer.__version__]),
     "claude-updates": (["claude-updates"], []),
     "team who": (["team", "who", "shop"], ["lead"]),
+    "new help": (["new", "--help"], ["--prompt", "--cli"]),
 }
 
 
@@ -134,6 +135,19 @@ def test_doctor_checks_without_textual_or_qt(home):
     assert done.returncode == 1 and "LOADED []" in done.stderr
     assert "Claude Code CLI (claude) is not on PATH" in done.stdout
     assert "Endings readable" in done.stdout and "Bit" in done.stdout
+
+
+def test_new_builds_its_launches_without_textual_or_qt(home, tmp_path):
+    """`tabmancer new` up to the tabs it would open: the form's rules (newforms) and the launches,
+    with open_tabs stood in for, so nothing is started."""
+    folder = tmp_path / "shopfront"
+    folder.mkdir()
+    stand_in = ("from tabmancer import cli\n"
+                "cli.open_tabs = lambda launches: print('WOULD OPEN', [launch.title for launch in launches]) or []\n")
+    done = run(home, "new", str(folder), "--prompt", "hi", tail=stand_in + CLI)
+    assert "blocked:" not in done.stderr and "the test " not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == 0 and "LOADED []" in done.stderr, done.stderr[-3000:]
+    assert "WOULD OPEN ['shopfront: hi']" in done.stdout
 
 
 def test_wrapped_saves_its_picture_without_textual_or_qt(home, tmp_path):
