@@ -22,7 +22,7 @@ from tabmancer.desktop import conversation, look
 from tabmancer.palette import mix
 
 look.fonts_for_offscreen()
-TODAY = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+TODAY = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)  # read again as each test starts (today)
 COLOURS = {"lead": "#d97757", "api": "#56b6c2", "ui": "#98c379", "tests": "#e5c07b", teams.YOU: look.TEXT}
 TEAM = teams.Team("shop", "C:/work/shop", "g", [teams.Member("lead", lead=True), teams.Member("api"),
                                                 teams.Member("ui"), teams.Member("tests")])
@@ -31,6 +31,13 @@ TEAM = teams.Team("shop", "C:/work/shop", "g", [teams.Member("lead", lead=True),
 @pytest.fixture(scope="module")
 def qapp():
     return QApplication.instance() or QApplication(["tabmancer-tests"])
+
+
+@pytest.fixture(autouse=True)
+def today(monkeypatch):
+    """Today at ten, as the test starts: a run that goes past midnight would have the lanes draw a day's
+    line before messages written for today, as yesterday's."""
+    monkeypatch.setitem(globals(), "TODAY", datetime.now().replace(hour=10, minute=0, second=0, microsecond=0))
 
 
 class Clock:
