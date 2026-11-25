@@ -4,6 +4,7 @@ looks the same drawn from rowwords; and fit() cuts words as rich's Text.truncate
 
 import os
 from dataclasses import replace
+from datetime import datetime
 from functools import partial
 from types import SimpleNamespace
 
@@ -14,8 +15,8 @@ from rich.text import Text
 from tabmancer import app as terminal
 from tabmancer import demo, rowwords, teamtree
 from tabmancer import viewmodel as VM
-from tabmancer.palette import BLUE
-from tabmancer.sessions import Exit
+from tabmancer.palette import BLUE, mix
+from tabmancer.sessions import Exit, Session, Status
 
 DEMO_ENV = ("CLAUDE_CONFIG_DIR", "TABMANCER_CONFIG_DIR", "CODEX_HOME")  # what demo.prepare points elsewhere
 SCREEN = Console(color_system="truecolor", force_terminal=True, width=400, legacy_windows=False)
@@ -230,3 +231,49 @@ async def test_the_lists_room_headings_and_motion_are_the_terminals(in_demo, mon
                 still, "pulse", accent, seconds)))
         calm = rowwords.moving([("✶ ", ""), ("Working", "")], "spin", accent, 1.0, sweep=False)
         assert [words for words, _ in calm] == [f"{rowwords.star_at(1.0)} ", "Working"] and calm[1][1] == f"bold {BLUE}"
+        # A row lit after its state changed: the terminal's highlight is rowwords' (changed, flash_background,
+        # lit), on a closed one's badge, under a turning star, and never on the red of one that needs you.
+        closed = next(s for s in tui.sessions.values() if s.exit is not Exit.RUNNING)
+        busy = next(s for s in tui.sessions.values() if rowwords.status(s, accent)[1] == "spin")
+        updates = {closed.session_id: replace(closed, exit=Exit.RUNNING, status=Status.RUNNING, live_state="busy"),
+                   busy.session_id: busy, "new": replace(busy, session_id="new")}
+        tui.flash = {}
+        tui.flash_changed(updates)
+        assert set(tui.flash) == rowwords.changed(tui.sessions, updates.values()) == {closed.session_id}
+        for left in (rowwords.FLASH_SECONDS, 0.7, 0.0):
+            lit = rowwords.flash_background(accent, left)
+            tui.flash = {sid: 100.0 + left for sid in (closed.session_id, busy.session_id, pulsing.session_id)}
+            with monkeypatch.context() as moment:
+                moment.setattr(terminal, "STAR", rowwords.STAR)
+                moment.setattr(terminal, "time", SimpleNamespace(monotonic=partial(float, 100.0)))
+                drawn_closed, drawn_busy = tui.status_cell(closed), tui.status_cell(busy)
+            assert drawn(drawn_closed) == drawn(Text.assemble(*rowwords.lit(rowwords.status(closed, accent)[0], lit)))
+            assert drawn(drawn_busy) == drawn(Text.assemble(*rowwords.lit(rowwords.moving(
+                rowwords.status(busy, accent)[0], "spin", accent, 100.0), lit)))
+            assert drawn(tui.status_cell(pulsing)) == drawn(Text.assemble(*rowwords.moving(
+                still, "pulse", accent, tui.frame * terminal.SPIN_SECONDS)))
+        tui.flash = {}
+
+
+def test_which_rows_light_after_a_change_and_how_the_light_fades():
+    def one(sid: str, live: str = "idle", exit: Exit = Exit.RUNNING, status: Status = Status.RUNNING, **more) -> Session:
+        return Session(session_id=sid, path=None, cwd="C:/work/shop", status=status, exit=exit, live_state=live,
+                       last_active=datetime(2026, 11, 25, 9), **more)
+
+    before = {s.session_id: s for s in (one("same"), one("busy"), one("ended"), one("renamed"))}
+    fresh = [one("same"), one("busy", "busy"), one("ended", "", Exit.CLEAN, Status.DONE),
+             one("renamed", title="A new name"), one("new", "busy")]
+    assert rowwords.changed(before, fresh) == {"busy", "ended"}  # not a new title, not one new to the list
+    accent = "#d97757"
+    first = rowwords.flash_background(accent, rowwords.FLASH_SECONDS)
+    assert first == f"on {mix('#000000', accent, rowwords.FLASH)}"
+    half = rowwords.flash_background(accent, rowwords.FLASH_SECONDS / 2)
+    assert half == f"on {mix('#000000', accent, rowwords.FLASH / 2)}"
+    assert rowwords.flash_background(accent, 9.0) == first  # never brighter than as it lights
+    assert rowwords.flash_background(accent, 0.1, fade=False) == first  # less motion: held, then out
+    assert rowwords.flash_background(accent, 0.0) == rowwords.flash_background(accent, -1.0, fade=False) == ""
+    badge = [("cut off", "bold #e5a33a on #32240d")]
+    assert rowwords.lit(badge, first) == [("cut off", f"bold #e5a33a {first}")]  # in place of the badge's
+    assert rowwords.lit([("✶ ", "bold #d97757"), ("Working", f"bold {BLUE}")], first) == [
+        ("✶ ", f"bold #d97757 {first}"), ("Working", f"bold {BLUE} {first}")]
+    assert rowwords.lit(badge, "") == badge

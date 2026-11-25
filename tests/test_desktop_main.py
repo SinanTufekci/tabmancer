@@ -805,6 +805,26 @@ def test_the_ones_open_at_the_last_shutdown_come_ticked_as_in_the_terminal(qapp,
     assert shown.selected == {login}
 
 
+def test_a_row_whose_state_changed_since_the_last_reading_is_lit(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    assert not shown.table.flash  # the first reading lights none
+    snap = shown.snap
+    plane = titled(snap, "Route the power plane on the 4-layer board").session_id
+    opened = dataclasses.replace(snap.sessions[plane], exit=sessions.Exit.RUNNING, status=sessions.Status.RUNNING,
+                                 live_state="busy")
+    new = dataclasses.replace(opened, session_id="made-up-new")  # new to the list: nothing seen changed
+    shown.take(shown.store, dataclasses.replace(snap, sessions={**snap.sessions, plane: opened, new.session_id: new}),
+               False, "")
+    assert set(shown.table.flash) == {plane}
+    views = {button.text(): button for button in shown.views.buttons()}
+    QTest.mouseClick(views["Table"], Qt.MouseButton.LeftButton)
+    shown.tick()
+    table = shown.table
+    parts = table.grid.item(table.keys.index(plane), COLUMN["status"]).data(PARTS)
+    assert parts and all(look.ink(style).background for _, style in parts)  # lit behind its words
+
+
 def test_space_ticks_f_pins_and_x_hides_as_marks_json_keeps_them(qapp, window):
     shown = window()
     read(qapp, shown)

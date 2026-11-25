@@ -2,7 +2,8 @@
 word. The rows, their order, every cell's words and colours, a team's chips and its tree come from
 rowwords (one copy with the terminal's list); this draws them: each cell's parts in their colours
 (a badge's background behind its words), the headings over the groups, the turning star, its sweep
-of light and the red pulse as the window's motion allows.
+of light and the red pulse as the window's motion allows, and a row's Status lit for a moment after its
+state changed (rowwords.changed), as in the terminal: fading, or held then put out with less motion.
 
 The pick is shared with the Board's: it goes out (picked) in the drawer's words, a session's id or a
 team's card (viewmodel.TEAM_CARD + its name). A team's row unfolds its members under it (e, a click on
@@ -13,7 +14,8 @@ on its [ ]) shows [x], as there; the Open as column says how m left it."""
 from __future__ import annotations
 
 import math
-from collections.abc import Collection, Mapping
+import time
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import replace
 from functools import partial
 
@@ -124,9 +126,11 @@ class Table(QTreeView):
     ticking = Signal(str)
     menu = Signal(QPoint)
 
-    def __init__(self, accent: str) -> None:
+    def __init__(self, accent: str, clock: Callable[[], float] = time.monotonic) -> None:
         super().__init__()
         self.accent = accent
+        self.clock = clock  # when a lit row goes out
+        self.flash: dict[str, float] = {}  # session id -> when its row's light goes out
         self.snap: DashSnapshot | None = None
         self.shown: list[Session] = []
         self.live = False
@@ -193,6 +197,12 @@ class Table(QTreeView):
         self.motion = motion
         if motion == "off":
             self.tick(0.0)  # still now
+
+    def light(self, ids: Iterable[str]) -> None:
+        """These sessions' rows lit (their state changed since the last reading), for FLASH_SECONDS: drawn
+        at the next tick."""
+        until = self.clock() + rowwords.FLASH_SECONDS
+        self.flash.update(dict.fromkeys(ids, until))
 
     def label_columns(self) -> None:
         self.grid.setHorizontalHeaderLabels(list(rowwords.labels(self.live, self.model_shown)))
@@ -388,14 +398,20 @@ class Table(QTreeView):
 
     def tick(self, seconds: float) -> None:
         """What moves, at this moment: a session at work's star and the light across its words, the red
-        of one that needs you, a folded team's members at work. Calm: the stars turn, nothing else; no
-        motion: all still."""
+        of one that needs you, a folded team's members at work, a row lit after a change (not one that
+        needs you: its red says it) fading. Calm: the stars turn, a lit row is held till it goes out,
+        nothing else; no motion: all still, a lit row held too."""
         listing = self.listing
-        if listing is None or not self.motions or not self.isVisible():
+        if listing is None or not (self.motions or self.flash) or not self.isVisible():
             return
+        now = self.clock()
         still = self.motion == "off"
         turning = listing if still else replace(listing, star=rowwords.star_at(seconds))
-        for row, motion in self.motions.items():
+        rows = dict(self.motions)
+        if self.flash:  # a lit row's light fades, and one that went out is drawn once more without it
+            rows.update({row: self.motions.get(row, "") for row, session in enumerate(self.sessions)
+                         if session is not None and session.session_id in self.flash})
+        for row, motion in rows.items():
             if row >= len(self.keys):
                 continue
             key, session = self.keys[row], self.sessions[row]
@@ -405,8 +421,12 @@ class Table(QTreeView):
             else:
                 column = COLUMN["status"]
                 parts = rowwords.row(listing, key, session).cells[column]
-                if not still and not (self.motion == "calm" and motion == "pulse"):
+                if motion and not still and not (self.motion == "calm" and motion == "pulse"):
                     parts = rowwords.moving(parts, motion, self.accent, seconds, sweep=self.motion == "full")
+                if motion != "pulse":
+                    parts = rowwords.lit(parts, rowwords.flash_background(
+                        self.accent, self.flash.get(session.session_id, now) - now, fade=self.motion == "full"))
             item = self.grid.item(row, column)
             if item is not None and item.data(PARTS) != parts:
                 item.setData(parts, PARTS)
+        self.flash = {sid: until for sid, until in self.flash.items() if until > now}

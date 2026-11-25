@@ -188,6 +188,45 @@ def test_what_moves_moves_as_the_window_allows(qapp, shown_table):
     assert shown.grid.item(busy, status).data(table.PARTS) == still_busy
 
 
+def test_a_row_whose_state_changed_is_lit_then_goes_out_as_the_window_allows(qapp, shown_table):
+    now = [100.0]
+    shown = shown_table(world())
+    shown.clock = lambda: now[0]
+    status = table.COLUMN["status"]
+    done, busy, asks = (shown.keys.index(sid) for sid in ("done", "busy", "asks"))
+    still = {row: shown.grid.item(row, status).data(table.PARTS) for row in (done, busy, asks)}
+
+    def at(row: int) -> list:
+        return shown.grid.item(row, status).data(table.PARTS)
+
+    shown.light({"done", "busy", "asks"})
+    shown.tick(100.0)
+    first = rowwords.flash_background(ACCENT, rowwords.FLASH_SECONDS)
+    assert at(done) == rowwords.lit(still[done], first) != still[done]
+    assert at(busy) == rowwords.lit(rowwords.moving(still[busy], "spin", ACCENT, 100.0), first)  # its star turns, lit
+    assert at(asks) == rowwords.moving(still[asks], "pulse", ACCENT, 100.0)  # its red says it: never lit
+    rect = shown.visualRect(shown.grid.index(done, status))
+    picture = shown.viewport().grab().toImage()
+    assert look.ink(first).background in {picture.pixelColor(x, rect.center().y()).name()
+                                          for x in range(rect.left() + 2, rect.right() - 2)}  # behind its words
+    now[0] = 100.8
+    shown.tick(100.8)
+    assert at(done) == rowwords.lit(still[done], rowwords.flash_background(
+        ACCENT, 100.0 + rowwords.FLASH_SECONDS - 100.8))  # fading
+    now[0] = 100.0 + rowwords.FLASH_SECONDS
+    shown.tick(now[0])
+    assert at(done) == still[done] and not shown.flash  # out: drawn once more without it, and forgotten
+    for motion in ("calm", "off"):
+        shown.set_motion(motion)
+        shown.light({"done"})
+        now[0] += 1.2
+        shown.tick(now[0])
+        assert at(done) == rowwords.lit(still[done], first)  # held as it lit
+        now[0] += 0.4
+        shown.tick(now[0])
+        assert at(done) == still[done] and not shown.flash
+
+
 def test_a_badge_is_drawn_behind_its_words(qapp, shown_table):
     shown = shown_table(world())
     shown.set_motion("off")  # the pulse at its middle shade

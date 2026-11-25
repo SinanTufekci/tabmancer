@@ -68,7 +68,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, actions, bitart, clis, commands, marks, search, teams
+from .. import __version__, actions, bitart, clis, commands, marks, rowwords, search, teams
 from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
@@ -484,7 +484,10 @@ class MainWindow(QMainWindow):
         if self.remark is not None:  # read before the window changed the marks: as they are now (the file
             now = marks.Marks.read(tries=1)  # held or unreadable now: as this window saved them; no wait here)
             snap, self.remark = snap.with_marks(now if now is not None else self.remark), None
-        starting, self.snap, self.agy_first = self.snap is None, snap, first
+        before, self.snap, self.agy_first = self.snap, snap, first
+        starting = before is None
+        if before is not None:  # a row whose state changed since the last reading: lit for a moment
+            self.table.light(rowwords.changed(before.sessions, snap.sessions.values()))
         if starting:  # the ones open at the last shutdown come ticked, as in the terminal dashboard
             self.selected = VM.preselect(snap.sessions, snap.open_at_shutdown, lambda s: s.session_id in snap.hidden)
             self.preselected = set(self.selected)

@@ -13,7 +13,8 @@ What moves is not drawn here: a row says it (RowWords.motion) and each front mov
 status of a session at work turns a star and sweeps a light across its words ('spin': the parts are
 a still star in the accent and the words in bold blue), one that needs you breathes red ('pulse': the
 parts are its middle shade). A folded team's row with a member at work turns that member's star
-('spin': star is the frame to draw). A row lit after a change is the front's own.
+('spin': star is the frame to draw). A row lit after its state changed: which ones (changed()) and the
+background behind its Status words (flash_background(), lit()) are here; when, each front's clock.
 
 A heading's row is set apart from what is above it: the terminal draws it two lines high, a blank
 line over each of its cells.
@@ -491,6 +492,8 @@ OTHER_COLUMNS = {"picker": 72, "live": 84}
 TITLE_WIDEST, TITLE_MIN = 64, 18  # the Title column's room at its widest (an outcome wraps inside it), narrowest
 MODEL_COLUMN = 18  # the Model column with its padding; on a narrow screen it is left empty
 SHIMMER = "#e8f3ff"  # the bright band that sweeps across the words of a session at work
+FLASH_SECONDS = 1.6  # how long a row stays lit after its state changes
+FLASH = 0.55  # how much of the accent is behind its Status words as it lights
 
 
 def title_room(cells: int, live: bool) -> tuple[int, bool]:
@@ -533,3 +536,32 @@ def moving(cell: Cell, motion: str, accent: str, seconds: float, sweep: bool = T
         glow = (math.sin(seconds * 4.0) + 1) / 2
         return [(cell[0][0], f"bold #ffffff on {mix(*PULSE, glow)}")]
     return cell
+
+
+def changed(before: Mapping[str, Session], fresh: Iterable[Session]) -> set[str]:
+    """The sessions whose state changed since the last reading (before, by id): what they are doing, how
+    they ended, their status. A session new to the list is not lit: nothing changed that was seen."""
+    return {session.session_id for session in fresh if (old := before.get(session.session_id)) is not None
+            and (old.live_state, old.exit, old.status) != (session.live_state, session.exit, session.status)}
+
+
+def flash_background(accent: str, left: float, fade: bool = True) -> str:
+    """The background behind a lit row's Status words, left seconds before it goes out: the accent,
+    fading back to black (fade), or held as it lights till then (less motion); '' once it is out."""
+    if left <= 0:
+        return ""
+    return f"on {mix('#000000', accent, FLASH * (min(left, FLASH_SECONDS) / FLASH_SECONDS if fade else 1))}"
+
+
+def lit(cell: Cell, background: str) -> Cell:
+    """A cell on this background (flash_background), in place of the one its words had (a badge's)."""
+    if not background:
+        return cell
+    parts = []
+    for words, style in cell:
+        said = style.split()
+        if "on" in said:
+            at = said.index("on")
+            said = said[:at] + said[at + 2:]
+        parts.append((words, " ".join([*said, background])))
+    return parts
