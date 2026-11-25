@@ -62,5 +62,6 @@ def test_the_line_up_preview():
     assert said.endswith("\nEach under a 300k context cap.") and parts[1] == ("3 tabs", f"bold {GREEN}")
     loud = handoverwords.lineup_parts([], 0, ["a member at least, one a line"])
     assert loud[-1] == ("\n▲ needs a member at least, one a line", AMBER)
+    assert loud[1] == ("1 tab", f"bold {GREEN}")  # the lead alone: one tab, not "1 tabs"
     assert handoverwords.cap_words(picks.NO_CAP).startswith("Claude's own: ")
     assert handoverwords.cap_words("500k") == f"500k: {picks.OWN_CAP}"  # a cap of its own: said, never a KeyError

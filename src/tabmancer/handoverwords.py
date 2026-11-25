@@ -102,7 +102,7 @@ def lineup_problems(team: teams.Team, members: list[teams.Member]) -> list[str]:
 def lineup_parts(members: list[teams.Member], cap: int, problems: list[str]) -> list[Part]:
     """'Opens 3 tabs: the lead, with the handover', each member with its CLI and pick, the cap, and
     what the line-up still needs. cap: in tokens, 0 for none."""
-    out: list[Part] = [("Opens ", MUTED), (f"{len(members) + 1} tabs", f"bold {GREEN}"),
+    out: list[Part] = [("Opens ", MUTED), (f"{len(members) + 1} tab{'s' if members else ''}", f"bold {GREEN}"),
                        (": the lead, with the handover", MUTED)]
     for member in members:
         out.append(("\n● ", GREEN))
