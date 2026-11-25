@@ -10,6 +10,7 @@ import functools
 import os
 import re
 import sys
+from dataclasses import astuple, dataclass
 from html import escape
 
 from PySide6.QtGui import QColor, QFont, QFontDatabase
@@ -46,16 +47,66 @@ def span(words: str, style: str = "", default: str = TEXT) -> str:
     return f'<span style="color:{colour};{weight}">{text}</span>'
 
 
+@dataclass(frozen=True)
+class Ink:
+    """A style the dashboard's words come in ('bold #f85149 on #3d0f0d', 'dim', 'yellow'), read: what it
+    sets, None where it says nothing (so a style drawn over another keeps the other's there)."""
+
+    colour: str | None = None
+    background: str | None = None
+    bold: bool | None = None
+    dim: bool | None = None
+    italic: bool | None = None
+    reverse: bool | None = None
+
+    def over(self, under: Ink) -> Ink:
+        """This style drawn over another, as rich combines them: what this one says wins."""
+        return Ink(*(mine if mine is not None else theirs
+                     for mine, theirs in zip(astuple(self), astuple(under), strict=True)))
+
+    def drawn(self, default: str = TEXT) -> tuple[str, str | None, bool, bool]:
+        """(colour, background, bold, italic) to draw: dim toward black (the quiet grey with no colour of
+        its own), reverse the colour behind black words."""
+        colour = self.colour or default
+        if self.dim:
+            colour = palette.mix(colour, BLACK, 0.4) if self.colour else DIM
+        background = self.background
+        if self.reverse:
+            colour, background = BLACK, colour
+        return colour, background, bool(self.bold), bool(self.italic)
+
+
+# The terminal's named colours, as the dashboard's own (the live view's 'bold red' and 'yellow').
+NAMED = {"red": RED, "yellow": AMBER, "green": GREEN, "blue": BLUE, "cyan": CYAN, "white": "#ffffff",
+         "black": BLACK}
+FLAGS = ("bold", "dim", "italic", "reverse")
+
+
+@functools.lru_cache(maxsize=512)
+def ink(style: str) -> Ink:
+    """A rich style string read (Ink): a colour (#rrggbb or a name), 'on' a background, the flags."""
+    found: dict = {}  # Ink's fields by name
+    words = (style or "").split()
+    for index, word in enumerate(words):
+        if word == "on" or (index and words[index - 1] == "on"):
+            continue
+        if word in FLAGS:
+            found[word] = True
+        elif HEX.fullmatch(word) or word in NAMED:
+            found["colour"] = NAMED.get(word, word)
+    if "on" in words and words.index("on") + 1 < len(words):
+        behind = words[words.index("on") + 1]
+        found["background"] = NAMED.get(behind, behind if HEX.fullmatch(behind) else None)
+    return Ink(**found)
+
+
 def styled(words: str, style: str = "", default: str = TEXT) -> str:
     """Words as HTML in any style sessionwords and teamwords give: a colour, bold, dim (toward black,
-    or the quiet grey), italic, and reverse (the colour behind black words); a line break kept."""
-    names = (style or "").split()
-    colour, bold = colour_of(style, default)
-    if "dim" in names:
-        colour = palette.mix(colour, BLACK, 0.4) if HEX.search(style) else DIM
-    css = f"color:{colour};" + ("font-weight:600;" if bold else "") + ("font-style:italic;" if "italic" in names else "")
-    if "reverse" in names:
-        css = f"color:{BLACK};background:{colour};" + css.split(";", 1)[1]
+    or the quiet grey), italic, reverse (the colour behind black words) and a background ('on');
+    a line break kept."""
+    colour, background, bold, italic = ink(style).drawn(default)
+    css = (f"color:{colour};" + (f"background:{background};" if background else "")
+           + ("font-weight:600;" if bold else "") + ("font-style:italic;" if italic else ""))
     text = SPACES.sub("&nbsp;", escape(words)).replace("\n", "<br>")
     return f'<span style="{css}">{text}</span>'
 

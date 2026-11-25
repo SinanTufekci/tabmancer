@@ -4,6 +4,8 @@ looks the same drawn from rowwords; and fit() cuts words as rich's Text.truncate
 
 import os
 from dataclasses import replace
+from functools import partial
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
@@ -12,6 +14,7 @@ from rich.text import Text
 from tabmancer import app as terminal
 from tabmancer import demo, rowwords, teamtree
 from tabmancer import viewmodel as VM
+from tabmancer.palette import BLUE
 from tabmancer.sessions import Exit
 
 DEMO_ENV = ("CLAUDE_CONFIG_DIR", "TABMANCER_CONFIG_DIR", "CODEX_HOME")  # what demo.prepare points elsewhere
@@ -178,3 +181,37 @@ def test_the_chips_on_a_teams_row_are_one_copy():
     for width in (80, 40, 20, 8):
         parts = rowwords.chips(members, width, "bold #ff8800")
         assert drawn(teamtree.chips(members, width, "bold #ff8800")) == drawn(Text.assemble(*parts))
+
+
+async def test_the_lists_room_headings_and_motion_are_the_terminals(in_demo, monkeypatch):
+    """How wide the title is and whether the model has room at each width, the columns' headings, and
+    the turning star, its light and the red pulse at a given moment."""
+    tui = in_demo
+    async with tui.run_test(size=(240, 50)) as pilot:
+        await settled(tui, pilot)
+        for live in (False, True):
+            if live:
+                tui.action_toggle_live()
+            for width in (240, 170, 130, 104):
+                await pilot.resize_terminal(width, 50)
+                await pilot.pause(0.2)
+                assert (tui.title_width, tui.model_shown) == rowwords.title_room(tui.table.size.width, live), width
+                assert tuple(str(column.label) for column in tui.table.columns.values()) == \
+                    rowwords.labels(live, tui.model_shown)
+        assert not tui.model_shown  # the narrowest left the model out
+        accent, tui.flash = tui.accent(), {}
+        pulsing = next(s for s in tui.sessions.values() if rowwords.status(s, accent)[1] == "pulse")
+        still = rowwords.status(pulsing, accent)[0]
+        for frame in (0, 5, 23, 103):
+            seconds = frame * terminal.SPIN_SECONDS
+            with monkeypatch.context() as moment:
+                moment.setattr(terminal, "STAR", rowwords.STAR)
+                moment.setattr(terminal, "time", SimpleNamespace(monotonic=partial(float, seconds)))
+                spun = tui.working("Working · bg", "")
+            assert drawn(spun) == drawn(Text.assemble(*rowwords.moving(
+                [("✶ ", ""), ("Working · bg", "")], "spin", accent, seconds)))
+            tui.frame = frame
+            assert drawn(tui.status_cell(pulsing)) == drawn(Text.assemble(*rowwords.moving(
+                still, "pulse", accent, seconds)))
+        calm = rowwords.moving([("✶ ", ""), ("Working", "")], "spin", accent, 1.0, sweep=False)
+        assert [words for words, _ in calm] == [f"{rowwords.star_at(1.0)} ", "Working"] and calm[1][1] == f"bold {BLUE}"

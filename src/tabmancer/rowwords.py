@@ -23,6 +23,7 @@ truncates a Text (cells on the screen, '…' in the style of what it cuts)."""
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -480,3 +481,55 @@ def row(listing: Listing, key: str, session: Session | None) -> RowWords:
                         accent=accent, star=listing.star)
     group = key.removeprefix(HEADING)
     return heading(group, dict(listing.grouped.groups).get(group, []), accent)
+
+
+# --- room and motion -----------------------------------------------------------------------------
+
+# The columns in the terminal's cells, with their padding: every one but the title at its widest (an
+# 18-character project name), with the title's padding and the scrollbar; the title gets the rest.
+OTHER_COLUMNS = {"picker": 72, "live": 84}
+TITLE_WIDEST, TITLE_MIN = 64, 18  # the Title column's room at its widest (an outcome wraps inside it), narrowest
+MODEL_COLUMN = 18  # the Model column with its padding; on a narrow screen it is left empty
+SHIMMER = "#e8f3ff"  # the bright band that sweeps across the words of a session at work
+
+
+def title_room(cells: int, live: bool) -> tuple[int, bool]:
+    """The Title column's room in a list this many cells wide, and whether the Model column has room:
+    the model goes before the title is cut below its least."""
+    room = cells - OTHER_COLUMNS["live" if live else "picker"]
+    shown = room - MODEL_COLUMN >= TITLE_MIN
+    room -= MODEL_COLUMN if shown else 2  # an empty column keeps its padding
+    return max(TITLE_MIN, min(TITLE_WIDEST, room)), shown
+
+
+def labels(live: bool, model_shown: bool) -> tuple[str, ...]:
+    """The columns' headings: the picker's or the live view's; the Model column's empty without room."""
+    said = LIVE_LABELS if live else LABELS
+    return tuple("" if column == "model" and not model_shown else label for column, label in zip(COLUMNS, said,
+                                                                                                strict=True))
+
+
+def star_at(seconds: float) -> str:
+    """The turning star's frame at this moment (seconds on any steady clock)."""
+    return STAR[int(seconds * 8) % len(STAR)]
+
+
+def moving(cell: Cell, motion: str, accent: str, seconds: float, sweep: bool = True) -> Cell:
+    """A status cell that moves (status()), as drawn at this moment. 'spin': the star turns and glows
+    in the accent, and (sweep) a band of light runs across the words; 'pulse': the red breathes. A
+    still cell stays as it is."""
+    if motion == "spin" and len(cell) == 2:
+        glow = (math.sin(seconds * 4.0) + 1) / 2
+        words = cell[1][0]
+        parts = [(f"{star_at(seconds)} ", f"bold {mix(mix(accent, '#000000', 0.5), accent, glow)}")]
+        if not sweep:
+            return [*parts, (words, f"bold {BLUE}")]
+        band = (seconds * 7) % (len(words) + 12) - 6
+        for index, char in enumerate(words):
+            closeness = max(0.0, 1 - abs(index - band) / 4)
+            parts.append((char, f"bold {mix(BLUE, SHIMMER, closeness * closeness)}"))
+        return parts
+    if motion == "pulse" and len(cell) == 1:
+        glow = (math.sin(seconds * 4.0) + 1) / 2
+        return [(cell[0][0], f"bold #ffffff on {mix(*PULSE, glow)}")]
+    return cell
