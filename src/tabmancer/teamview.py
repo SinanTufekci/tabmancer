@@ -766,6 +766,10 @@ class TeamScreen(Screen):
         self.open_team(start.launches)
 
     def action_add_member(self) -> None:
+        """a: new members for the team. At work, each opens and introduces itself to the lead; closed,
+        they join it and start with it (s), as on the team's row in the list."""
+        at_work = any(s is not None and s.exit is Exit.RUNNING for s in self.sessions.values())
+
         def add(text: str | None) -> None:
             added = actions.add_members(self.team, text or "")
             if added.warning:
@@ -773,7 +777,10 @@ class TeamScreen(Screen):
             if not added.new:
                 return
             self.adopt(added.team)
-            self.open_team(added.launches)
+            if at_work:
+                self.open_team(added.launches)
+            else:
+                self.notify(added.joined_words, timeout=6)
 
         self.app.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter="add them"), add)
 
