@@ -370,8 +370,12 @@ def current_lineup(team: teams.Team) -> str:
 def next_team(team: teams.Team, lineup: str, cap: str = "") -> teams.Team:
     """The team's next generation: the same name, folder and goal, its lead as it was (its part, model
     and effort), the members of the line-up, made now, so that the old sessions are no longer its
-    members; under the cap given, else the team's, else the one new sessions get."""
-    lead = team.lead or teams.Member(teams.LEAD, teams.LEAD_FOCUS, lead=True)
+    members; under the cap given, else the team's, else the one new sessions get. A team of peers
+    has no lead to carry on: refused (HandoverError), never one made up in its place."""
+    lead = team.lead
+    if lead is None:  # the words actions.team_handover_problem says before a handover is written
+        raise HandoverError("A team of peers has no lead to write the handover: H hands the picked member over "
+                            "by itself.")
     members = [m for m in teams.parse_members(lineup) if m.name != lead.name]
     return teams.new_team(team.name, team.cwd, team.goal, [lead, *members], team.decide, team.background,
                           worktrees=team.worktrees, cap=cap or team.cap)

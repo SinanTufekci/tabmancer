@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
 from test_team_tree import shop
 
 from tabmancer import app as app_module
@@ -66,6 +67,17 @@ def test_the_next_generation_keeps_the_name_and_lead_and_takes_the_line_up(monke
     old_lead = Session(session_id="was", path=None, cwd="C:/shop", title="shop-lead",
                        started=datetime.now() - timedelta(hours=2))
     assert teams.since_made(old, old_lead) and not teams.since_made(fresh, old_lead)
+
+
+def test_a_team_of_peers_has_no_next_generation_and_no_lead_made_up():
+    from tabmancer import actions
+
+    peers = teams.new_team("shop", "C:/shop", "A checkout", teams.parse_members("api: x; ui: y"), peers=True)
+    assert peers.lead is None
+    with pytest.raises(handover.HandoverError) as refused:
+        handover.next_team(peers, "api: x; tests: z")
+    assert str(refused.value) == actions.team_handover_problem(peers, {})  # as the dashboard says it before
+    assert [(m.name, m.lead) for m in peers.members] == [("api", False), ("ui", False)]  # left as it was
 
 
 def test_the_new_generation_opens_its_members_then_the_lead_with_the_handover():
