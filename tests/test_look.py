@@ -175,3 +175,20 @@ async def test_the_preview_indents_the_words_beside_their_labels(fake_home):
         shown = plain(app.detail.content, width=app.detail.content_size.width).split("\n")
         assert sum("word" in line for line in shown) <= 3
         assert any(line.startswith("Claude") for line in shown)
+
+
+async def test_the_preview_says_brackets_as_written_never_as_markup(fake_home):
+    # Prompts, replies and file names are anyone's words: a stray closing tag once broke the preview
+    # (rich's MarkupError) and a word in brackets went missing.
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: app.sessions)
+        session = app.current()
+        session.first_prompt = "close the [/b] tag"
+        session.last_prompt = "keep [the] word"
+        session.last_reply = "done [/] and [red]this[/red]"
+        session.files = ["src/[id]/page.tsx"]
+        app.update_detail()
+        shown = plain(app.detail.content, width=120)
+        for words in ("close the [/b] tag", "keep [the] word", "done [/] and [red]this[/red]", "src/[id]/page.tsx"):
+            assert words in shown

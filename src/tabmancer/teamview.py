@@ -467,7 +467,7 @@ class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
                         id="handover-about")
             with Horizontal(id="handover-body"):
                 with VerticalScroll(id="handover-text-card", classes="card"):
-                    yield Static(self.written, id="handover-text")
+                    yield Static(Text(self.written), id="handover-text")  # the lead's words: never markup
                 with Vertical(id="handover-side"):
                     with Vertical(id="handover-lineup-card", classes="card"):
                         yield TextArea(self.lineup, id="handover-members", compact=True)

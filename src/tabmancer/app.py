@@ -426,11 +426,12 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
 home_short = sessionwords.home_short
 
 
-def cell(value: sessionwords.Cell) -> str | Text:
-    """A preview's cell (sessionwords) in rich Text: a str as it is, one part as a Text in its style,
-    more assembled."""
+def cell(value: sessionwords.Cell) -> Text:
+    """A preview's cell (sessionwords) in rich Text: a str as plain words (never markup: prompts and
+    replies are anyone's words, and a stray '[/b]' in one would not render), one part as a Text in
+    its style, more assembled."""
     if isinstance(value, str):
-        return value
+        return Text(value)
     if len(value) == 1:
         return Text(value[0][0], style=value[0][1])
     return Text.assemble(*value)
@@ -2401,6 +2402,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         copy_text(self, told.clipboard)
         self.go_to_tab(told.go_to)
         self.say_note(told)
+
+    def notify(self, message: str, *, title: str = "", severity: str = "information",
+               timeout: float | None = None, markup: bool = True) -> None:
+        """Every note as plain words, never markup: notes carry titles, projects, member names and
+        errors, anyone's words, and a stray '[/b]' in one would not show (Textual's MarkupError)."""
+        super().notify(message, title=title, severity=severity, timeout=timeout, markup=False)
 
     def accent(self) -> str:
         return THEMES.get(self.theme, THEMES[DEFAULT_THEME])[1]
