@@ -151,11 +151,14 @@ async def test_s_twice_starts_a_team_once(fake_home, tmp_path, monkeypatch):
 
 def test_the_handover_and_the_tick_count_follow_the_list_as_it_is_now():
     # Read from the code, as a guard against going back: the handover is given the session as the
-    # list has it now, hiding a project drops its ticks, and the footer's context counts the ticks.
+    # list has it now, hiding a project drops its ticks, and the footer's context counts the ticks
+    # (footer.row is given how many, and says them).
     source = Path(__file__).resolve().parent.parent / "src" / "tabmancer" / "app.py"
     text = source.read_text(encoding="utf-8")
     assert "self.hand_over(now, how)" in text
-    assert 'return ("ticked", len(self.selected), waiting)' in text
+    assert text.count("len(self.selected), self.member_rows)") == 2
+    rules = source.with_name("footer.py").read_text(encoding="utf-8")
+    assert 'return Row("ticked", ticked, anyone)' in rules
     assert os.path.exists(source)
 
 

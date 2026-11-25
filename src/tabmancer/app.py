@@ -45,6 +45,7 @@ from . import (
     context,
     engine,
     focus,
+    footer,
     gitstate,
     handover,
     handoverwords,
@@ -206,8 +207,6 @@ QUIET_SECONDS = 5 * 60
 COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon starts it (cold_note)
 KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
 SETTLE_AFTER = (5, 45)  # seconds after the list is shown: memory set aside from the collector (settle_memory)
-PICKER_ONLY = {"toggle", "cycle_mode", "toggle_all", "save_workspace", "open", "hide", "toggle_hidden",
-               "fold_teams"}
 SHIMMER = "#e8f3ff"  # the bright band that sweeps across "working"
 STAR = "·✢✶✻✽✻✶✢"   # Claude Code's turning star; none of these are drawn as emoji
 EXPAND_WIDTH = 64   # the Title column at its widest: the outcome wraps inside it
@@ -2928,47 +2927,23 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.exit(None)
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        # With a dialog or the team view on top, the dashboard's keys belong to it. Enter is a
-        # priority binding, so it would otherwise reach past them.
-        on_top = len(self.screen_stack) > 1
-        if action == "open" and (on_top or self.focused is self.projects):
-            return False
-        # Only the dashboard's own keys: Textual's (Tab between boxes, Ctrl+P) stay on. A monitor never
-        # takes them, not even before its screen is up: x, f, space would hide, pin, tick in the list.
-        if (on_top or self.watch is not None) and action in DASHBOARD_ACTIONS:
-            return False
-        if self.watch is not None and action in ("toggle_mascot", "cycle_theme"):
-            return False  # saved for the dashboard: a monitor leaves them as they are
-        if action == "continue_at_reset":  # shown only when there is something to continue
-            return any(at_limit(s) for s in self.sessions.values())
-        if self.live_mode and action in PICKER_ONLY:
-            return False
-        if not on_top and action in IDLE_ON and self.footer_context()[0] in IDLE_ON[action]:
-            return None  # nothing to do on this row: the key stays in the footer, dimmed
-        if not on_top and action == "next_waiting" and not self.footer_context()[2]:
-            return None  # nobody waits for you
-        return True
+        # With a dialog or the team view on top, the dashboard's keys belong to it (footer.allowed).
+        return footer.allowed(action, on_top=len(self.screen_stack) > 1, monitor=self.watch is not None,
+                              projects_focused=self.focused is self.projects, live_mode=self.live_mode,
+                              own=DASHBOARD_ACTIONS, sessions=self.sessions.values(), at=self.footer_context)
 
     # --- the footer follows the row ---------------------------------------------------------------
 
-    def footer_context(self) -> tuple:
-        """What the footer's words and dimmed keys depend on: the kind of row highlighted ("team",
-        "team-closed", "open", "member-open", "closed", "member", "none", or "ticked" while any are
-        ticked), whether a team is unfolded, whether anyone waits for you."""
+    def footer_context(self) -> footer.Row:
+        """What the footer's words and dimmed keys depend on: the row highlighted (footer.row)."""
         if not hasattr(self, "table") or not self.table.row_count:
-            return ("none", False, False)
-        waiting = any(s.exit is Exit.RUNNING and state_of(s)[2] < 2 for s in self.sessions.values())
+            return footer.NONE
         team = self.team_at()
         if team is not None:
             name = team.team.name
-            return ("team" if self.team_open(name) else "team-closed", name in self.unfolded, waiting)
-        session = self.current()
-        if session is None:
-            return ("none", False, waiting)
-        if self.selected:  # with how many: the footer says "Open 3", and stood at "Open 1" from the first tick
-            return ("ticked", len(self.selected), waiting)
-        member = "member-" if session.session_id in self.member_rows else ""
-        return (member + ("open" if session.status is Status.RUNNING else "closed"), False, waiting)
+            return footer.row(self.sessions.values(), (name, self.team_open(name), name in self.unfolded), None,
+                              len(self.selected), self.member_rows)
+        return footer.row(self.sessions.values(), None, self.current(), len(self.selected), self.member_rows)
 
     def refresh_footer(self) -> None:
         """Make the footer again for the row at hand, only when what it shows would change."""
@@ -2978,22 +2953,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.refresh_bindings()
 
     def footer_words(self, action: str) -> str | None:
-        """What a key does on the row at hand, where it is not what its own name says."""
-        kind, _, _ = self.footer_context()
-        if action == "open":
-            if self.selected:
-                return f"Open {len(self.selected)}"
-            return {"team": "Team view", "team-closed": "Team view",
-                    "open": "Its tab", "member-open": "Its tab"}.get(kind)
-        if action == "summarize":
-            return {"team": "Start rest", "team-closed": "Start team"}.get(kind)
-        if action == "hide":
-            return {"team": "Close team", "team-closed": "Hide team"}.get(kind)
-        if action == "toggle" and kind == "team-closed":
-            return "Tick team"
-        if action == "handover" and kind in TEAM_ROWS:
-            return "Hand team over"
-        return None
+        """What a key does on the row at hand, where it is not what its own name says (footer.words)."""
+        return footer.words(action, self.footer_context(), len(self.selected))
 
     @staticmethod
     def footer_group(action: str) -> str | None:
@@ -3527,14 +3488,3 @@ del _name
 # The dashboard's own keys, which a dialog or the team view on top keeps for itself.
 DASHBOARD_ACTIONS = {binding.action for binding in SessionPicker.BINDINGS} - {
     "quit", "back", "cycle_theme", "toggle_mascot"}
-# Keys that do nothing on a kind of row (footer_context): dimmed in the footer there, never hidden.
-TEAM_ROWS = {"team", "team-closed"}
-IDLE_ON = {
-    "toggle": {"open", "member-open"},  # an open session cannot be ticked
-    "cycle_mode": {"open", "member-open", *TEAM_ROWS},
-    "hide": {"open", "member-open"},  # open sessions always show
-    "pin": TEAM_ROWS,
-    "prompt": TEAM_ROWS,
-    "rename": {"member", "member-open", *TEAM_ROWS},  # members keep the names the team finds them by
-    "monitor": {"open", "closed", "none", "ticked"},  # a team's, from its row or a member's
-}
