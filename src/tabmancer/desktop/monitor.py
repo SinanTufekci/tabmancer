@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, agy, bitart, focus, teams, teamview
+from .. import __version__, agy, bitart, focus, teams, teamwords
 from ..keys import MONITOR_KEYS
 from ..sessions import Exit, Status
 from ..store import Snapshot, TeamStore
@@ -353,11 +353,11 @@ class MonitorWindow(QMainWindow):
             return
         if self.snap is None:
             team = teams.load().get(self.team)
-            self.colours = teamview.colours(team, self.accent) if team is not None else {}
+            self.colours = teamwords.colours(team, self.accent) if team is not None else {}
         self.snap = snap
         if [m.name for m in snap.view.members] != list(self.cards):
             team = teams.load().get(self.team)
-            self.colours = teamview.colours(team, self.accent) if team is not None else self.colours
+            self.colours = teamwords.colours(team, self.accent) if team is not None else self.colours
         self.show_team()
 
     # --- showing ----------------------------------------------------------------------------------
@@ -380,14 +380,10 @@ class MonitorWindow(QMainWindow):
             head += look.span(f"  ·  {human(view.tokens)} tokens", look.MUTED)
         self.head.setText(head)
         self.goal.setText(look.span("Goal  ", look.MUTED) + look.span(view.goal or "no goal written", look.TEXT))
-        waiting = [m for m in view.members if m.needs_you]
-        self.needs.setVisible(bool(waiting))
-        if waiting:
-            # As the terminal monitor says it (monitorview.needs_line).
-            self.needs.setText(look.span("NEEDS YOU  ", f"bold {look.RED}") + look.span(" · ", look.MUTED).join(
-                look.span(m.name, f"bold {self.colours.get(m.name, look.TEXT)}")
-                + look.span(f": {m.label}", tone_colour(m.tone))
-                for m in waiting) + look.span("   j picks them in turn", look.MUTED))
+        needs = teamwords.needs_parts(view, self.colours, tone_colour)  # as the terminal monitor says it
+        self.needs.setVisible(needs is not None)
+        if needs is not None:
+            self.needs.setText("".join(look.span(words, style) for words, style in needs))
         self.show_pills(snap)
         self.show_cards(view)
         self.show_picked()

@@ -10,7 +10,7 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
-from .. import bitart, monitorview
+from .. import bitart, teamwords
 from .. import viewmodel as VM
 from ..tokens import human
 from ..viewmodel import model_words  # the Model column's and the team view's words, for every front end
@@ -105,12 +105,11 @@ class ContextBar(QWidget):
 
 
 def facts_html(member: VM.MemberView, leave_out_model: bool = True) -> str:
-    """The picked member's facts as the terminal monitor words them (monitorview._facts), in HTML:
-    the model as the team view says it (model_words), or not at all (the card's own line), and
-    without the context (its bar)."""
-    facts = monitorview._facts(member)[1:]  # [0] is the model, as its id
-    if not leave_out_model:
-        facts.insert(0, (f"{member.cli} · {model_words(member)}", look.CYAN if member.cli != "claude" else look.MUTED))
+    """The picked member's facts as the terminal monitor words them (teamwords.facts), in HTML: its
+    model first, or not at all (the card's own line), and without the context (its bar)."""
+    facts = teamwords.facts(member)
+    if leave_out_model:
+        facts = facts[1:]  # [0] is the model
     between = f' <span style="color:{look.DIM}">·</span> '
     return between.join(look.span(words, style, look.MUTED) for words, style in facts
                         if not words.startswith("context "))

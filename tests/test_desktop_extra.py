@@ -94,9 +94,9 @@ def test_the_core_runs_without_textual_or_qt(tmp_path):
     assert out.stdout.split() == ["[]"]
 
 
-def test_the_windows_look_needs_no_textual():
-    """The desktop window's colours come from palette.py: its look and its frame load with Qt and
-    without Textual, what the window will stand on once the terminal dashboard is archived."""
+def test_the_windows_need_no_textual():
+    """The desktop windows load with Qt and without Textual (colours from palette.py, a team's words
+    from teamwords.py), what they will stand on once the terminal dashboard is archived."""
     if not os.environ.get("TABMANCER_NEEDS_QT"):
         pytest.importorskip("PySide6", reason="the desktop extra is not installed")
     code = ("import sys\n"
@@ -105,7 +105,7 @@ def test_the_windows_look_needs_no_textual():
             "        if name.split('.')[0] == 'textual':\n"
             "            raise ImportError('blocked: ' + name)\n"
             "sys.meta_path.insert(0, Blocked())\n"
-            "from tabmancer.desktop import frame, look\n"
+            "from tabmancer.desktop import frame, look, main, monitor, widgets\n"
             "print(look.accent(), sorted(m for m in sys.modules if m.split('.')[0] == 'textual'))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
                          env={**os.environ, "PYTHONPATH": str(SOURCE.parent)}, check=False)
