@@ -377,6 +377,83 @@ def test_an_agy_pick_with_no_model_left_or_a_claude_one_is_none(agy_chain):
         router.suggest("refactor the session list", ["a"], cli="agy")
 
 
+@pytest.fixture
+def agy_quota(monkeypatch):
+    """agy's own pick behind the router, as a session gets it: the real refresh, chain and quota, on
+    a temp config. Only agy's /usage run is stood in (the table it prints, in reads["table"]): no
+    agy is started and no Claude is asked."""
+    from tabmancer import agy
+
+    reads = {"runs": 0, "table": ""}
+
+    def usage(timeout):
+        reads["runs"] += 1
+        return reads["table"]
+
+    monkeypatch.setattr(agy, "installed", lambda: True)
+    monkeypatch.setattr(agy, "_run_usage", usage)
+    monkeypatch.setattr(agy, "_last_read", None)
+    monkeypatch.setattr(summarize, "ask", lambda *a, **k: pytest.fail("no Claude call for an agy pick"))
+    return reads
+
+
+def soon(hours: float) -> datetime:
+    """A local time some hours from now, to the second (as a quota note keeps it)."""
+    return (datetime.now().astimezone() + timedelta(hours=hours)).replace(microsecond=0)
+
+
+def test_an_agy_pick_goes_down_agys_own_chain_by_its_saved_quota(agy_quota):
+    from tabmancer import agy
+
+    neon, hydrogen = agy.DEFAULT_CHAIN
+    route = router.suggest("refactor the session list", ["a"], cli="agy")
+    assert route == router.Route(Pick(neon), "Neon first (quota not read yet)", cli="agy")
+    assert agy_quota["runs"] == 1  # read afresh before the pick
+    # Neon out of quota (a 429 noted): Hydrogen, saying until when Neon is out.
+    back = soon(3)
+    agy.note_out_of_quota(neon, resets=back)
+    route = router.suggest("refactor the session list", ["a"], cli="agy")
+    assert route == router.Route(Pick(hydrogen), f"Neon out of quota until {back:%b %d %H:%M}: Hydrogen next",
+                                 cli="agy")
+    # Both out: no model at all (never one put in their place), and agy's words say when and what to do.
+    agy.note_out_of_quota(hydrogen, resets=soon(4))
+    with pytest.raises(summarize.SummaryError) as said:
+        router.suggest("refactor the session list", ["a"], cli="agy")
+    assert str(said.value) == f"Neon and Hydrogen out until {back:%b %d %H:%M}{agy.PICK_OR_WAIT}"
+
+
+def test_an_agy_pick_reads_the_quota_before_it_picks(agy_quota, monkeypatch):
+    from tabmancer import agy
+
+    # The table /usage prints at the pick: the family Neon and Hydrogen share is spent for five hours.
+    back = soon(2)
+    agy_quota["table"] = (f"Gemini Models\tWeekly Limit Remaining\t54%\t{soon(48).isoformat()}\n"
+                          f"Gemini Models\tFive Hour Limit Remaining\t0%\t{back.isoformat()}\n")
+    with pytest.raises(summarize.SummaryError) as said:
+        router.suggest("refactor the session list", ["a"], cli="agy")
+    assert str(said.value) == f"Neon and Hydrogen out until {back:%b %d %H:%M}{agy.PICK_OR_WAIT}"
+    assert agy.load_quota()["rows"]  # kept for the next pick
+    agy_quota["table"] = agy_quota["table"].replace("\t0%\t", "\t40%\t")
+    monkeypatch.setattr(agy, "_last_read", None)  # some time on: read again, and some is left
+    route = router.suggest("refactor the session list", ["a"], cli="agy")
+    assert route == router.Route(Pick(agy.DEFAULT_CHAIN[0]), "Neon: 40% of its 5 hours left", cli="agy")
+
+
+@pytest.mark.parametrize("listed", [
+    ["claude-opus-5-5", "Claude Sonnet 5.5 (High)", "gpt-oss-120b-medium"],
+    ["sonnet", "gemini-4-hydrogen-high", "opus"],
+])
+def test_an_agy_pick_is_never_a_claude_model_whatever_the_chain_lists(agy_quota, listed):
+    from tabmancer import agy
+    from tabmancer.config import write_json
+
+    write_json("config.json", {agy.CHAIN_SETTING: listed})
+    route = router.suggest("refactor the session list", ["a"], cli="agy")
+    assert route.cli == "agy" and route.pick.model.startswith("gemini-")
+    assert not agy.is_claude(route.pick.model) and not agy.barred(route.pick.model)
+    assert route.pick.model == (agy.DEFAULT_CHAIN[1] if agy.DEFAULT_CHAIN[1] in listed else agy.DEFAULT_CHAIN[0])
+
+
 def test_the_router_never_picks_for_codex(monkeypatch):
     monkeypatch.setattr(summarize, "ask", lambda *a, **k: pytest.fail("not asked for Codex"))
     with pytest.raises(summarize.SummaryError, match="Codex"):
