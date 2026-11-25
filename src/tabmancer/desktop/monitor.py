@@ -702,6 +702,14 @@ class MonitorWindow(QMainWindow):
             caller.deleteLater()
         self.come_forward()
 
+    def reopen(self) -> None:
+        """Shown again once closed (M again in the dashboard window): at its door again, and read again
+        as often as before."""
+        self.open_door()
+        self.timer.start()
+        self.poll()
+        self.come_forward()
+
     def come_forward(self) -> None:
         if self.isMinimized():
             self.showNormal()

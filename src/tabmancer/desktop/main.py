@@ -16,8 +16,10 @@ an account; what happens by itself (a limit lifting) is the acting dashboard's. 
 does as the terminal's keys do. Enter opens the ticked sessions, or the picked one, in new tabs, and
 brings an open one's tab to the front (a team's card: its Team panel tab); j goes to the next open
 session waiting for you, and m changes how the picked one opens (opening.py, each on a thread of its
-own). Space and a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the rail, the
-project), X shows the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and
+own). M opens the picked team's monitor (a member's: its team's) in a window of its own (monitor.py), on
+another screen when there is one; open already, here or from the terminal, it comes to the front. Space
+and a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the rail, the project; on a
+team with members open, x twice closes their tabs, as on /exit), X shows the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and
 the sessions, Esc clears what the list is narrowed to. Pins and hides go to marks.json as every
 dashboard changes it (marks.change): what another one changed meanwhile stays, and each shows them at
 its next read; Bit says what a key did. The panels fill in slice by slice; till then a key not done here is greyed in its
@@ -46,7 +48,7 @@ from datetime import datetime
 from functools import partial
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
@@ -64,17 +66,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, bitart, clis, commands, marks, search
+from .. import __version__, actions, bitart, clis, commands, marks, search, teams
 from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
 from ..sessions import Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
-from . import commandbar, frame, look, teamgraph
+from . import commandbar, frame, look, monitor, teamgraph
 from .board import Board
 from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
-from .monitor import sequences
+from .monitor import MonitorWindow, sequences
 from .opening import Opener
 from .rail import Rail
 from .table import Table, drawer_key
@@ -88,9 +90,10 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j"}
+        "j", "M"}
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
+CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
 SEVERITY = {"warning": look.AMBER, "error": look.RED}  # how loud what Bit says is (actions.Note's)
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
@@ -214,6 +217,12 @@ class MainWindow(QMainWindow):
         self.after_open = QTimer(self)
         self.after_open.setSingleShot(True)
         self.after_open.timeout.connect(self.poll)
+        self.closing_team: str | None = None  # x said what a second x does to this team's tabs
+        self.closing_timer = QTimer(self)
+        self.closing_timer.setSingleShot(True)
+        self.closing_timer.timeout.connect(self.forget_closing)
+        self.opener.closed.connect(self.closed_tabs)
+        self.monitors: dict[str, MonitorWindow] = {}  # M: each team's monitor opened from here
         self.tick()
         self.board.setFocus()  # the arrows pick a card from the start
         if start:
@@ -382,7 +391,7 @@ class MainWindow(QMainWindow):
                  "1": self.only_open, "2": self.only_waiting, "3": self.only_continue, "l": self.toggle_live,
                  "Space": self.toggle, "a": self.toggle_all, "e": self.expand, "E": self.fold_teams, "x": self.hide,
                  "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
-                 "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting}
+                 "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -456,6 +465,8 @@ class MainWindow(QMainWindow):
             if thread is not None:
                 thread.join(seconds)
         self.opener.settle(seconds)
+        for shown in self.monitors.values():
+            shown.settle(seconds)  # a read of its own (Python's: there after the window is deleted too)
 
     def take(self, store: DashboardStore, snap: DashSnapshot | None, first: bool, error: str) -> None:
         self.waiting = False
@@ -754,6 +765,39 @@ class MainWindow(QMainWindow):
         key = self.picked_now()
         return key[len(VM.TEAM_CARD):] if key.startswith(VM.TEAM_CARD) else None
 
+    def team_of_pick(self) -> str | None:
+        """The team picked, or the team of the member picked (its row in the Table)."""
+        team, snap = self.picked_team(), self.snap
+        if team is not None or snap is None:
+            return team
+        key = self.picked_now()
+        return next((name for name, state in snap.team_states.items()
+                     if any(s is not None and s.session_id == key for s in state.sessions.values())), None)
+
+    def monitor_key(self) -> None:
+        """M: the picked team's monitor (a member's: its team's) in a window of its own, on another screen
+        when there is one, as the terminal dashboard's M opens it; open already (from here, or from a
+        terminal), it comes to the front. It only watches, as this window does."""
+        team = self.team_of_pick()
+        if team is None:
+            self.say("M opens a team's monitor: pick a team, or one of its members.")
+            return
+        shown = self.monitors.get(team)
+        if shown is not None and shown.isVisible():
+            shown.come_forward()
+            self.say(f"The monitor of {team} is in front.")
+            return
+        if monitor.knock(team):  # one a terminal opened (tabmancer desktop --monitor): it comes forward
+            self.say(f"The monitor of {team} is in front.")
+            return
+        if shown is None:
+            shown = self.monitors[team] = MonitorWindow(team)
+            shown.show()
+            elsewhere(shown, self)
+        else:  # closed since: the same window again, where it was (none is deleted while this one lives)
+            shown.reopen()
+        self.say(f"The monitor of {team} opened in a window of its own.")
+
     def chosen(self) -> list[Session]:
         """The ticked sessions, or else the one picked (none for a team's card)."""
         snap = self.snap
@@ -856,12 +900,40 @@ class MainWindow(QMainWindow):
         team = self.picked_team() if not self.selected else None
         state = snap.team_states.get(team) if team is not None else None
         if state is not None and VM.members_open(state, snap.sessions):
-            self.say("Closing a team's tabs is in the terminal dashboard for now: x twice on its row there.")
+            self.close_team(state)
             return
         chosen = ([snap.sessions.get(s.session_id, s) for s in state.sessions.values() if s is not None]
                   if state is not None else self.chosen())
         if chosen:
             self.remarked(marks.change(partial(marks.hide, chosen=chosen)))
+
+    def close_team(self, state: teams.TeamState) -> None:
+        """x on a team with members open says what x again does; x again on it within CLOSING_MS closes
+        every open member's tab, as on /exit (the sessions stay: s starts them), on a thread of its own."""
+        snap = self.snap
+        if snap is None:
+            return
+        sessions = {name: snap.sessions.get(s.session_id, s) if s is not None else None
+                    for name, s in state.sessions.items()}
+        note = actions.closing_note(state.team, sessions)
+        if note is None:
+            self.say("No member is open.", 3)
+            return
+        if self.closing_team != state.team.name:
+            self.closing_team = state.team.name
+            self.closing_timer.start(CLOSING_MS)
+            self.say(note, CLOSING_MS / 1000, look.AMBER)
+            return
+        self.forget_closing()
+        self.opener.close_team(actions.open_names(state.team, sessions))
+
+    def forget_closing(self) -> None:
+        self.closing_timer.stop()
+        self.closing_team = None
+
+    def closed_tabs(self) -> None:
+        """The members' tabs closed: the sessions read again soon, to show them closed."""
+        self.after_open.start(AFTER_OPEN_MS)
 
     def hide_project(self) -> None:
         """x on the rail: the project picked there out of sight (its open sessions still show), or back."""
@@ -1051,8 +1123,24 @@ class MainWindow(QMainWindow):
         self.door.close()
         self.timer.stop()
         self.ticker.stop()
+        self.closing_timer.stop()
+        for shown in self.monitors.values():  # the monitors M opened go with the window
+            shown.close()
+            shown.deleteLater()
         frame.save_layout(self, LAYOUT_KEY)
         super().closeEvent(event)
+
+
+def elsewhere(shown: QMainWindow, beside: QMainWindow) -> None:
+    """A window on another screen than beside's when there is one and it opened on the same (a monitor
+    placed on another screen before stays where it was put)."""
+    here = beside.screen()
+    other = next((screen for screen in QGuiApplication.screens() if screen is not here), None)
+    if other is None or shown.screen() is not here:
+        return
+    room = other.availableGeometry()
+    shown.move(room.left() + max(0, (room.width() - shown.width()) // 2),
+               room.top() + max(0, (room.height() - shown.height()) // 2))
 
 
 def door() -> str:

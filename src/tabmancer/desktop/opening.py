@@ -1,6 +1,7 @@
 """The window's keys that reach past it: Enter opens the ticked sessions, or the picked one, each in a
 new tab (one running in the background is attached to), and on an open one brings its tab to the front,
-as j does for the next open session waiting for you; m changes how the picked one opens.
+as j does for the next open session waiting for you; m changes how the picked one opens; x twice on a
+team with members open closes their tabs.
 
 The terminal dashboard's own steps (actions.py), each on a thread of its own: finding a tab, or today's
 claude update before Claude Code sessions open (claudeupdate), takes a while, and the window never waits
@@ -64,6 +65,7 @@ class Opener(QObject):
 
     said = Signal(str, float, str)
     opened = Signal(object)
+    closed = Signal()
 
     def __init__(self, parent: QObject | None = None, clock: Callable[[], float] = time.monotonic,
                  update: bool = True) -> None:
@@ -157,6 +159,20 @@ class Opener(QObject):
             return None
         self.go_to(self.turn.session)
         return self.turn.session
+
+    # --- x twice on a team ---------------------------------------------------------------------------
+
+    def close_team(self, names: list[str]) -> None:
+        """These members' tabs closed, as on /exit (actions.closed_note), on a thread of its own: finding
+        each tab takes a moment."""
+        self.start(self.close_now, names)
+
+    def close_now(self, names: list[str]) -> None:
+        self.say(actions.closed_note(names))
+        try:
+            self.closed.emit()
+        except RuntimeError:
+            pass  # the window has gone meanwhile
 
     # --- threads and words ------------------------------------------------------------------------
 

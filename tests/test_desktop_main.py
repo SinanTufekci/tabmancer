@@ -46,7 +46,18 @@ from tabmancer import (
 from tabmancer import sessionwords as preview_words
 from tabmancer import viewmodel as VM
 from tabmancer.config import config_dir, merge_json, read_json
-from tabmancer.desktop import commandbar, drawer, frame, look, main, opening, rail, teamgraph, teampanel
+from tabmancer.desktop import (
+    commandbar,
+    drawer,
+    frame,
+    look,
+    main,
+    monitor,
+    opening,
+    rail,
+    teamgraph,
+    teampanel,
+)
 from tabmancer.desktop.table import COLUMN, PARTS
 from tabmancer.keys import KEYS
 from tabmancer.launch import Mode
@@ -938,8 +949,9 @@ def test_the_table_ticks_with_space_and_its_box_and_e_and_shift_e_unfold_teams(q
     assert table.unfolded == set()
     press(shown, "a")
     assert shown.bit_line.text().startswith("Adding members is in the terminal dashboard for now")
-    press(shown, "x")  # an open team: its tabs close in the terminal dashboard (x twice)
-    assert shown.bit_line.text().startswith("Closing a team's tabs") and saved_marks()["hidden"] == []
+    press(shown, "x")  # an open team: x again closes its members' tabs (hidden: none)
+    assert shown.bit_line.text().startswith("Press x again to close the") and saved_marks()["hidden"] == []
+    shown.forget_closing()
     assert table.show_key(login)
     press(shown, "e")
     assert shown.docks["Preview"].isVisible()  # how it ended: the drawer says it
@@ -1073,6 +1085,67 @@ def test_j_goes_to_the_next_one_waiting_and_with_no_terminal_the_commands_go_to_
     settled(qapp, shown)
     assert len(asked["opened"]) == 1 and QApplication.clipboard().text() == "claude --resume made-up"
     assert shown.bit_line.text() == opening.NO_TERMINAL and not shown.after_open.isActive()
+
+
+def test_x_twice_on_a_team_with_members_open_closes_their_tabs(qapp, window, monkeypatch):
+    closed = []
+
+    def close_tab(name):
+        closed.append(name)
+        return True
+
+    monkeypatch.setattr(focus, "close_tab", close_tab)
+    shown = window()
+    read(qapp, shown)
+    state = next(state for state in shown.snap.team_states.values()
+                 if VM.members_open(state, shown.snap.sessions))
+    team = state.team.name
+    members = {name: shown.snap.sessions.get(s.session_id, s) if s is not None else None
+               for name, s in state.sessions.items()}
+    names = actions.open_names(state.team, members)
+    assert names and shown.board.reveal(VM.TEAM_CARD + team)
+    press(shown, "x")
+    assert shown.bit_line.text() == actions.closing_note(state.team, members) and closed == []
+    assert shown.closing_team == team and shown.closing_timer.isActive()
+    shown.closing_timer.timeout.emit()  # too late: x again only says it again
+    press(shown, "x")
+    assert closed == [] and shown.bit_line.text().startswith(f"Press x again to close the {len(names)} open")
+    press(shown, "x")
+    settled(qapp, shown)
+    assert closed == names and shown.closing_team is None and saved_marks()["hidden"] == []
+    assert shown.bit_line.text() == f"The team's members: closed {len(names)} tabs." and shown.after_open.isActive()
+
+
+def test_m_opens_the_picked_teams_monitor_and_again_brings_it_to_the_front(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    login = titled(shown.snap, "Fix the login redirect loop").session_id  # in no team
+    assert shown.board.reveal(login)
+    press(shown, "M")
+    assert shown.bit_line.text().startswith("M opens a team's monitor: pick a team") and shown.monitors == {}
+    team, state = next(iter(shown.snap.team_states.items()))
+    assert shown.board.reveal(VM.TEAM_CARD + team)
+    press(shown, "M")
+    watching = shown.monitors[team]
+    assert isinstance(watching, monitor.MonitorWindow) and watching.isVisible() and watching.team == team
+    assert shown.bit_line.text() == f"The monitor of {team} opened in a window of its own."
+    shown.activateWindow()  # the monitor took the keys: back to the dashboard's
+    assert QTest.qWaitForWindowActive(shown, 3000)
+    shown.set_view("table")
+    press(shown, "E")  # every team unfolded in the Table
+    member = next(s.session_id for s in state.sessions.values() if s is not None)
+    assert shown.table.show_key(member)
+    press(shown, "M")  # a member's row: its team's monitor, the one open
+    assert shown.monitors == {team: watching} and shown.bit_line.text() == f"The monitor of {team} is in front."
+    watching.close()
+    assert not watching.timer.isActive()
+    shown.activateWindow()
+    assert QTest.qWaitForWindowActive(shown, 3000)
+    press(shown, "M")  # closed since: the same one again, reading again
+    assert shown.monitors == {team: watching} and watching.isVisible() and watching.timer.isActive()
+    shown.settle()
+    shown.close()  # the monitors M opened go with the window
+    assert not watching.isVisible()
 
 
 def test_the_demo_window_says_what_would_have_opened(qapp, monkeypatch):
