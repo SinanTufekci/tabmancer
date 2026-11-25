@@ -126,13 +126,13 @@ def close_tabs(names: list[str]) -> tuple[str, str]:
     missed = [name for name in names if not focus.close_tab(name)]
     stopped = 0
     if missed:
-        from . import background  # here: it holds the B screen too, and actions loads no UI
+        from . import bgjobs
 
-        running = {job.name: job for job in background.jobs() or [] if job.running}
+        running = {job.name: job for job in bgjobs.jobs() or [] if job.running}
         for name in list(missed):
             if name in running:
                 try:
-                    background.stop(running[name].id)
+                    bgjobs.stop(running[name].id)
                 except OSError:
                     continue
                 missed.remove(name)

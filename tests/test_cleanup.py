@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from tabmancer import cleanup, sessions, summarize
+from tabmancer import cleanup, diskclean, sessions, summarize
 from tabmancer.theme import DEFAULT_THEME
 
 
@@ -61,9 +61,9 @@ def test_trash_skips_open_sessions_and_forgets_summaries(home, monkeypatch):
     monkeypatch.setattr(sessions, "_agents_json", lambda: [{"sessionId": "open", "kind": "interactive"}])
     summarize._store("closed", {"summary": "x", "size": 1})
     trashed = []
-    monkeypatch.setattr(cleanup, "_trash_one", lambda path: trashed.append(path.name))
+    monkeypatch.setattr(diskclean, "_trash_one", lambda path: trashed.append(path.name))
     items = {i.session.session_id: i for i in cleanup.collect()}
-    moved, problems = cleanup.trash(list(items.values()))
+    moved, problems = diskclean.trash(list(items.values()))
     assert [i.session.session_id for i in moved] == ["closed"]
     assert sorted(trashed) == ["closed", "closed.jsonl"]
     assert problems == ["demo: open right now, skipped"]
@@ -77,8 +77,8 @@ def test_trash_refuses_paths_outside_claude_dir(home, tmp_path_factory, monkeypa
     outside.write_text("keep me", encoding="utf-8")
     item = cleanup.Item(sessions.read_session(path), [path, outside], 1)
     trashed = []
-    monkeypatch.setattr(cleanup, "_trash_one", lambda p: trashed.append(p))
-    moved, problems = cleanup.trash([item])
+    monkeypatch.setattr(diskclean, "_trash_one", lambda p: trashed.append(p))
+    moved, problems = diskclean.trash([item])
     assert trashed == [path] and moved == []
     assert "outside" in problems[0]
 
@@ -102,7 +102,7 @@ async def test_cleanup_app_select_confirm_and_delete(home, monkeypatch):
     add("old", days_old=20, history_bytes=100)
     add("new")
     trashed = []
-    monkeypatch.setattr(cleanup, "_trash_one", lambda path: trashed.append(path.name))
+    monkeypatch.setattr(diskclean, "_trash_one", lambda path: trashed.append(path.name))
     app = cleanup.CleanupApp()
     async with app.run_test() as pilot:
         for _ in range(60):
@@ -124,9 +124,18 @@ def test_trash_asks_again_what_is_open(home, monkeypatch):
     _, add = home
     add("later-open")
     trashed = []
-    monkeypatch.setattr(cleanup, "_trash_one", lambda path: trashed.append(path.name))
+    monkeypatch.setattr(diskclean, "_trash_one", lambda path: trashed.append(path.name))
     items = cleanup.collect()  # nothing open yet
     assert not items[0].is_open
-    monkeypatch.setattr(cleanup, "live_sessions", lambda: {"later-open": {"sessionId": "later-open"}})
-    moved, problems = cleanup.trash(items)
+    monkeypatch.setattr(diskclean, "live_sessions", lambda: {"later-open": {"sessionId": "later-open"}})
+    moved, problems = diskclean.trash(items)
     assert not moved and not trashed and problems == ["demo: open right now, skipped"]
+
+
+def test_moving_to_the_recycle_bin_is_diskclean_alone():
+    """A stand-in set on cleanup for trash or _trash_one would not reach the Recycle Bin: they are
+    not there, so setting one fails."""
+    assert not any(hasattr(cleanup, name) for name in ("trash", "_trash_one", "live_sessions"))
+    assert cleanup.collect is diskclean.collect and cleanup.Item is diskclean.Item
+    with pytest.raises(AttributeError):
+        pytest.MonkeyPatch().setattr(cleanup, "_trash_one", lambda path: None)

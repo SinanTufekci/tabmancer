@@ -7,8 +7,8 @@ import time
 import pytest
 
 from tabmancer import background as B
+from tabmancer import bgjobs, sessions
 from tabmancer import launch as L
-from tabmancer import sessions
 
 NOW_MS = time.time() * 1000
 ENTRIES = [
@@ -43,7 +43,7 @@ def cli(monkeypatch):
         return f"{args[0]} {args[1]}"
 
     monkeypatch.setattr(sessions, "_agents_json", agents)
-    monkeypatch.setattr(B, "_run", run)
+    monkeypatch.setattr(bgjobs, "_run", run)
     return calls
 
 
@@ -85,14 +85,14 @@ def test_commands_go_to_the_cli_with_a_clean_environment(monkeypatch):
         seen.update(argv=argv, env=kwargs["env"])
         return Done()
 
-    monkeypatch.setattr(B.shutil, "which", lambda name: "claude")
-    monkeypatch.setattr(B.subprocess, "run", fake_run)
+    monkeypatch.setattr(bgjobs.shutil, "which", lambda name: "claude")
+    monkeypatch.setattr(bgjobs.subprocess, "run", fake_run)
     monkeypatch.setenv("CLAUDECODE", "1")
-    assert B.stop("idle1") == "stopped idle1"
+    assert bgjobs.stop("idle1") == "stopped idle1"
     assert seen["argv"] == ["claude", "stop", "idle1"] and "CLAUDECODE" not in seen["env"]
     Done.returncode, Done.stdout, Done.stderr = 1, "", "has unpushed commits"
     with pytest.raises(OSError, match="unpushed"):
-        B.remove("idle1")
+        bgjobs.remove("idle1")
 
 
 def test_attach_mode_runs_claude_attach():
@@ -143,3 +143,12 @@ async def test_the_dialog_stops_removes_and_cleans_up(fake_home, cli, monkeypatc
         await pilot.press("enter")  # attaches in a new tab
         await until(pilot, lambda: not isinstance(app.screen, B.BackgroundDialog))
         assert [launch.argv for launch in opened] == [["claude", "attach", "busy1"]]
+
+
+def test_what_acts_on_a_job_is_bgjobs_alone():
+    """A stand-in set on background for stop, remove or _run would not reach the CLI: they are not
+    there, so setting one fails (the demo's and the tests' stand-ins go on bgjobs)."""
+    assert not any(hasattr(B, name) for name in ("stop", "remove", "_run"))
+    assert B.jobs is bgjobs.jobs and B.Job is bgjobs.Job  # what lists them is named there too
+    with pytest.raises(AttributeError):
+        pytest.MonkeyPatch().setattr(B, "_run", lambda *args: "")

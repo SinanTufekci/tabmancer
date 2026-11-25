@@ -147,6 +147,17 @@ assert pixelcharts.draw_week([[0.0] * 24, [1.0] * 24], (8, 16), 24 * 3 * 8, 2 * 
                              (5, 5, 5))[1]
 assert errorlog.log_error("headless", ValueError("made up")).read_text(encoding="utf-8").count("made up") == 1
 assert statstext.bar(5, 10, 10) and statstext.TABS[0] == "overview"
+from tabmancer import bgjobs, diskclean
+assert bgjobs.jobs() == [] and bgjobs.ago(None) == ""
+try:
+    bgjobs.stop("b1")  # no claude on PATH: said, and nothing started
+except OSError as error:
+    assert "not on PATH" in str(error)
+else:
+    raise AssertionError("bgjobs.stop ran without the CLI")
+items = diskclean.collect()
+assert items and all(item.size > 0 and item.files for item in items)
+assert diskclean.human(2048) == "2 KB"
 print("LIFTED ok")
 """
 

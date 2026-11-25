@@ -332,7 +332,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
     limits, git, the shutdown log, and saves to your Downloads. tell() says what would have happened."""
     from . import (
         agy,
-        background,
+        bgjobs,
         browsers,
         focus,
         gitstate,
@@ -394,7 +394,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         (app_module, "recent_shutdowns", lambda: [SHUTDOWN]),
         (app_module, "open_tabs", opened),
         (app_module, "run_in_background", refused("starts in the background")),
-        (background, "_run", refused("is stopped or removed")),
+        (bgjobs, "_run", refused("is stopped or removed")),
         (focus, "focus_tab", lambda title: False),
         (focus, "close_tab", lambda title: False),
         (toast, "show", lambda title, body, dashboard: toast.FAILED),

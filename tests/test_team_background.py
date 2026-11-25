@@ -10,7 +10,7 @@ from test_new_team import Host
 from textual.widgets import Input, Static, TextArea
 
 from tabmancer import app as app_module
-from tabmancer import background, cli, focus, teams
+from tabmancer import bgjobs, cli, focus, teams
 from tabmancer import launch as launch_module
 from tabmancer.app import SessionPicker
 from tabmancer.launch import Launch, Mode
@@ -89,10 +89,10 @@ def test_a_lead_adding_members_starts_them_in_the_background(tmp_path, monkeypat
 def test_closing_stops_the_members_that_have_no_tab(monkeypatch):
     stopped: list[str] = []
     monkeypatch.setattr(focus, "close_tab", lambda title: title == "shop-lead")  # only the lead has a tab
-    monkeypatch.setattr(background, "jobs", lambda: [
-        background.Job("b1", "s1", "shop-api", "C:/shop", "idle", True, datetime.now()),
-        background.Job("b2", "s2", "shop-ui", "C:/shop", "stopped", False, datetime.now())])
-    monkeypatch.setattr(background, "stop", lambda job_id: stopped.append(job_id) or "stopped")
+    monkeypatch.setattr(bgjobs, "jobs", lambda: [
+        bgjobs.Job("b1", "s1", "shop-api", "C:/shop", "idle", True, datetime.now()),
+        bgjobs.Job("b2", "s2", "shop-ui", "C:/shop", "stopped", False, datetime.now())])
+    monkeypatch.setattr(bgjobs, "stop", lambda job_id: stopped.append(job_id) or "stopped")
     said, severity = close_tabs(["shop-lead", "shop-api"])
     assert stopped == ["b1"] and severity == "information"
     assert said == "The team's members: closed 1 tab and stopped 1 in the background."
