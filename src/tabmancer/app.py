@@ -1483,11 +1483,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         report = self.token_report
         if report is None:
             return
-        ids = None
-        if self.project_filter != ALL_PROJECTS:
-            # Where the session list knows a session, its folder decides, as in the list.
-            folders = report.folders | {sid: s.cwd for sid, s in self.sessions.items()}
-            ids = {sid for sid, folder in folders.items() if folder_key(folder) == self.project_filter}
+        ids = VM.token_ids(report, self.sessions, self.project_filter)  # the desktop rail's rule too
         target = [use.total for use in report.daily(ids)[-CHART_DAYS:]]
         if not self.activity_target:  # first data: let the bars grow in
             self.grow_until = time.monotonic() + GROW_SECONDS
