@@ -1181,7 +1181,8 @@ def right_click(widget, spot: QPoint) -> None:
 
 
 def menu_key(widget) -> None:
-    QApplication.sendEvent(widget, QContextMenuEvent(QContextMenuEvent.Reason.Keyboard, QPoint(0, 0)))
+    corner = QPoint(0, 0)
+    QApplication.sendEvent(widget, QContextMenuEvent(QContextMenuEvent.Reason.Keyboard, corner, widget.mapToGlobal(corner)))
 
 
 def test_a_right_click_on_a_card_or_a_row_picks_it_and_offers_the_drawers_buttons(qapp, window):
