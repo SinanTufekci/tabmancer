@@ -712,6 +712,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.unfolded: set[str] = set()  # teams shown with their members under their row (e); else one row
         # a team row's keys; their presses are the engine's, shared with the team's view (TeamScreen)
         self.row_keys = teamkeys.TeamKeys(RowSurface(self), clock=time.monotonic, presses=self.engine.state.team_presses)
+        self.handing: dict[int, str] = {}  # the handovers being written (hand_over): a token -> what is handed over
+        self.quit_after = False  # a quit key pressed twice while one was written: quits once none is (finish_quitting)
         self.blocks: list[tuple[teamtree.TeamState, list[tuple[str, Session]]]] = []  # the teams in the list
         self.member_rows: dict[str, tuple[str, str]] = {}  # their members' session ids -> (team, member)
         self.grouped = VM.Groups([], [], {})  # the list as groups() last grouped it (rowwords.Listing)
@@ -1733,35 +1735,67 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def open_ones(self) -> list[Session]:
         return self.engine.open_ones()
 
-    @work(thread=True, group="handover")
     def hand_over(self, session: Session, how: str) -> None:
+        """Write the handover on a thread (writing_handover); quitting meanwhile waits for it (quit_ok)."""
+        self.writing_handover(session, how, self.handing_starts(session.project))
+
+    @work(thread=True, group="handover")
+    def writing_handover(self, session: Session, how: str, token: int) -> None:
         """Write the handover, close the old session if it is open (actions.write_handover), then open
         the fresh one."""
         try:
-            handed = actions.write_handover(session, how, lambda: self.call_from_thread(
-                lambda: (self.sessions.get(session.session_id, session), self.open_ones())), teams.member_of)
-        except actions.ActionError as error:
-            actor.let_go(f"handover-{session.session_id}")  # a queued one: h again may queue it afresh
-            self.call_from_thread(self.notify, error.words, severity="error", timeout=15)
-            return
-        self.call_from_thread(self.handover_ready, session, handed.written, handed.left_open)
+            try:
+                handed = actions.write_handover(session, how, lambda: self.call_from_thread(
+                    lambda: (self.sessions.get(session.session_id, session), self.open_ones())), teams.member_of)
+            except actions.ActionError as error:
+                actor.let_go(f"handover-{session.session_id}")  # a queued one: h again may queue it afresh
+                self.call_from_thread(self.notify, error.words, severity="error", timeout=15)
+                return
+            self.call_from_thread(self.handover_ready, session, handed.written, handed.left_open)
+        finally:
+            self.handing_ended(token)
+
+    def handing_starts(self, what: str) -> int:
+        """A handover being written (on the UI thread, as it starts): its token for handing_ended."""
+        token = max(self.handing, default=0) + 1
+        self.handing[token] = what
+        return token
+
+    def handing_ended(self, token: int) -> None:
+        """From its thread, after what came of it (the fresh session opened, or the dialog shown): no longer
+        written; a quit asked for meanwhile goes on (finish_quitting)."""
+        def ended() -> None:
+            self.handing.pop(token, None)
+            self.finish_quitting()
+
+        try:
+            self.call_from_thread(ended)
+        except RuntimeError:  # the app has closed meanwhile (no active app then)
+            pass
 
     def handover_ready(self, session: Session, written: str, left_open: str = "") -> None:
         """Its handover written: the fresh session opens (Engine.handover_ready)."""
         self.engine.handover_ready(session, written, left_open)
 
-    @work(thread=True, group="team-handover")
     def hand_over_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
+        """A whole team handed over on a thread (writing_team_handover); quitting meanwhile waits for it."""
+        self.writing_team_handover(team, members, self.handing_starts(f"team {team.name}"))
+
+    @work(thread=True, group="team-handover")
+    def writing_team_handover(self, team: teams.Team, members: dict[str, Session | None], token: int) -> None:
         """A whole team handed over (actions.write_team_handover); then the dialog."""
         try:
-            handed = actions.write_team_handover(team, members, lambda lead: self.call_from_thread(
-                lambda: (self.sessions.get(lead.session_id, lead), self.open_ones())), close_tabs)
-        except actions.ActionError as error:
-            self.call_from_thread(self.notify, error.words, severity="error", timeout=15)
-            return
-        if handed is not None:
-            self.call_from_thread(self.engine.team_handover_ready, team, handed.lead, handed.written,
-                                  handed.lineup, handed.suggested)
+            try:
+                handed = actions.write_team_handover(team, members, lambda lead: self.call_from_thread(
+                    lambda: (self.sessions.get(lead.session_id, lead), self.open_ones())), close_tabs)
+            except actions.ActionError as error:
+                self.call_from_thread(self.notify, error.words, severity="error", timeout=15)
+                return
+            if handed is not None:
+                self.call_from_thread(self.engine.team_handover_ready, team, handed.lead, handed.written,
+                                      handed.lineup, handed.suggested)
+        finally:
+            self.handing_ended(token)
 
     def ask_team_start(self, team: teams.Team, written: str, lineup: str, suggested: bool,
                        then: Callable[[tuple[str, str] | None], None]) -> None:
@@ -2402,7 +2436,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def update_claude(self) -> None:
         """claude update (claudeupdate.py), and with a new version, whether it still takes every flag
         tabmancer runs it with (doctor's check)."""
-        self.call_from_thread(self.engine.claude_updated, *alerts.run_claude_update())
+        self.call_from_thread(self.claude_updated, *alerts.run_claude_update())
+
+    def claude_updated(self, outcome: claudeupdate.Outcome, missing: list[str] | None) -> None:
+        """Done: what waited for it opens (Engine.claude_updated), and a quit asked for meanwhile goes on."""
+        self.engine.claude_updated(outcome, missing)
+        self.finish_quitting()
 
     def after_update(self, what: str, then: Callable[[], None]) -> bool:
         """While claude update runs: then, once it is done (Engine.after_update)."""
@@ -2563,14 +2602,37 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             await super().action_quit()
 
     def quit_ok(self, key: str) -> bool:
-        """Whether a quit key quits now: with handovers queued here (h on sessions at work), which go with
-        the dashboard, the first press says so and a second within QUIT_AGAIN_SECONDS quits (the presses
-        on row_keys' clock: no timer to forget them)."""
+        """Whether a quit key quits now. A handover being written (minutes) would be lost, its old session
+        closed already when it writes its own: the first press says so, and a second within
+        QUIT_AGAIN_SECONDS quits once it is written and its fresh session opened (finish_quitting). With
+        handovers queued here (h on sessions at work), which go with the dashboard, the first press says so
+        and a second quits. The presses are on row_keys' clock: no timer to forget them."""
+        writing = list(self.handing.values())
+        if writing:
+            if self.quit_after or self.row_keys.again("quit", "dashboard", QUIT_AGAIN_SECONDS):
+                self.quit_after = True
+                self.say_note(handoverwords.finishing_note(writing))
+            else:
+                self.say_note(handoverwords.writing_on_quit(writing, key))
+            return False
         count = len(self.queued)
         if not count or self.row_keys.again("quit", "dashboard", QUIT_AGAIN_SECONDS):
             return True
         self.say_note(handoverwords.queued_on_quit(count, key))
         return False
+
+    def finish_quitting(self) -> None:
+        """A quit asked for while handovers were written: once none is, and the fresh sessions waiting for a
+        claude update have opened, it quits (still asked first about handovers queued here). A team's
+        handover dialog shown meanwhile is left to be answered: quitting would lose what it holds."""
+        if not self.quit_after or self.handing or self.engine.state.updating_claude:
+            return
+        self.quit_after = False
+        if isinstance(self.screen, TeamHandoverDialog):
+            self.say_note(handoverwords.team_written_on_quit(self.screen.team.name))
+            return
+        if self.quit_ok("q"):
+            self.exit(None)
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # With a dialog or the team view on top, the dashboard's keys belong to it (footer.allowed).

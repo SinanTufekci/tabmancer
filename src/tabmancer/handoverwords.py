@@ -106,6 +106,21 @@ def queued_on_quit(count: int, key: str) -> Note:
                 f"drops {'them' if many else 'it'}. {QUEUED_WHY}", "warning", 6)
 
 
+def writing_on_quit(names: list[str], key: str) -> Note:
+    """Said on the terminal's first quit key while handovers are written (minutes): quitting now would lose
+    them, so the same key again waits for them (and their fresh sessions) and quits then."""
+    many = len(names) != 1
+    return Note(f"The handover{'s' if many else ''} of {', '.join(names)} {'are' if many else 'is'} being "
+                f"written: {key} again waits for {'them' if many else 'it'}, then quits.", "warning", 6)
+
+
+def team_written_on_quit(team: str) -> Note:
+    """Quit was asked for while a team's handover was written: written now, its dialog stays to be answered
+    (what it holds is lost on quitting), and the dashboard stays open."""
+    return Note(f"{team}'s handover is written: Ctrl+S starts its new generation, Esc keeps it for h. Not "
+                "quitting yet: q quits after.", "warning", 15)
+
+
 def finishing_note(names: list[str]) -> Note:
     """Said on closing while a handover is written (minutes): the window waits for it, since one cut short
     loses it (a session that writes its own is closed before it starts writing)."""
