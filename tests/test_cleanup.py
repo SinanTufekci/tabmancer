@@ -119,6 +119,28 @@ async def test_cleanup_app_select_confirm_and_delete(home, monkeypatch):
         assert set(app.items) == {"new"} and app.selected == set()
 
 
+async def test_a_problem_shows_as_plain_words_not_markup(home, monkeypatch):
+    """An OS error's words reach a note as they are: a '[/b]' in one is shown, not parsed as markup."""
+    _, add = home
+    add("old", days_old=20)
+
+    def refuse(path):
+        raise OSError("denied [/b] [red]x")
+
+    monkeypatch.setattr(diskclean, "_trash_one", refuse)
+    app = cleanup.CleanupApp()
+    async with app.run_test() as pilot:
+        for _ in range(60):
+            await pilot.pause(0.05)
+            if app.items:
+                break
+        await pilot.press("o", "enter", "y")
+        await pilot.pause()
+        said = [note.message for note in app._notifications]
+        assert any("denied [/b] [red]x" in message for message in said), said
+        assert all(not note.markup for note in app._notifications)
+
+
 def test_trash_asks_again_what_is_open(home, monkeypatch):
     # Listed while closed, then resumed while the clean-up screen stood open: still not moved.
     _, add = home

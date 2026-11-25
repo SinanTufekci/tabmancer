@@ -99,6 +99,12 @@ class CleanupApp(App[None]):
             self.table.add_column(label, key=key)
         self.load()
 
+    def notify(self, message: str, *, title: str = "", severity: str = "information",
+               timeout: float | None = None, markup: bool = True) -> None:
+        """Every note as plain words, never markup: a problem carries a path and an OS error, and a
+        stray '[/b]' in one would not show (Textual's MarkupError)."""
+        super().notify(message, title=title, severity=severity, timeout=timeout, markup=False)
+
     def watch_sub_title(self, sub_title: str) -> None:
         if self.is_mounted:
             self.topbar.show_info(sub_title)
