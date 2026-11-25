@@ -154,6 +154,28 @@ def test_new_builds_its_launches_without_textual_or_qt(home, tmp_path):
     assert "WOULD OPEN ['shopfront: hi']" in done.stdout
 
 
+def test_no_command_without_textual_or_qt_says_how_to_get_the_window(home):
+    """A core install's `tabmancer`: no terminal dashboard and no Qt, so the install line and the
+    commands, and exit 0."""
+    done = run(home)
+    assert "the test " not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == 0 and "LOADED []" in done.stderr, done.stderr[-3000:]
+    assert 'uv tool install "tabmancer[desktop]"' in done.stdout
+    assert "cleanup" in done.stdout and "doctor" in done.stdout  # the command list
+
+
+def test_no_command_without_textual_opens_the_desktop_window(home):
+    """With Qt there (stood in for: this test's Python has none), the dashboard is the window:
+    `tabmancer desktop`'s own path, not a copy of it."""
+    stand_in = ("from tabmancer import cli, desktop\n"
+                "desktop.available = lambda: True\n"
+                "cli.desktop_window = lambda monitor, name, demo=False: print('WINDOW', monitor, repr(name)) or 0\n")
+    done = run(home, tail=stand_in + CLI)
+    assert "the test " not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == 0 and "LOADED []" in done.stderr, done.stderr[-3000:]
+    assert "WINDOW False ''" in done.stdout and "uv tool install" not in done.stdout
+
+
 def test_wrapped_saves_its_picture_without_textual_or_qt(home, tmp_path):
     out = tmp_path / "week.png"
     done = run(home, "wrapped", "--out", str(out))

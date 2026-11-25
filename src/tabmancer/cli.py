@@ -249,8 +249,13 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "startup-run":
         startup_main()
     else:
+        try:
+            from .app import SessionPicker  # Textual is slow to import; only the picker needs it
+        except ModuleNotFoundError as error:
+            if args.command is not None or not (error.name or "").startswith("textual"):
+                raise
+            sys.exit(without_textual(parser))  # a core install: the window, or how to get it
         from . import sixel
-        from .app import SessionPicker  # Textual is slow to import; only the picker needs it
 
         sixel.probe()  # whether Bit can be drawn in real pixels: asked before Textual reads the keys
         # The picker opens sessions itself and stays open; it only hands back commands
@@ -503,6 +508,21 @@ def m_opens(choice: str) -> int:
     else:
         print("M in the dashboard opens the team's monitor in the desktop window once Qt is installed "
               f"({desktop.INSTALL}); till then, in a terminal window.")
+    return 0
+
+
+CORE_INSTALL = 'uv tool install "tabmancer[desktop]"'
+
+
+def without_textual(parser: argparse.ArgumentParser) -> int:
+    """`tabmancer` with no command where the terminal dashboard is not installed (no Textual): the
+    desktop window if Qt is there, else how to add it and what the commands are."""
+    from . import desktop
+
+    if desktop.available():
+        return desktop_window(False, "")
+    print(f"The dashboard is a desktop window, which needs Qt: {CORE_INSTALL}")
+    print(f"Without it the commands work as they are:\n\n{parser.format_help()}")
     return 0
 
 
