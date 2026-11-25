@@ -187,7 +187,6 @@ NAMELESS = ("This dashboard could not read its own start time, so it only shows 
             "continue them at their reset, send desktop notes or run updates. Another tabmancer dashboard can.")
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
-FLASH_SECONDS = 1.6  # how long a row stays lit after its state changes
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
 COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon starts it (cold_note)
 KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
@@ -1228,10 +1227,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def flash_background(self, session: Session) -> str:
         """While a row is lit after a change, a background that fades back to black."""
         left = self.flash.get(session.session_id, 0) - time.monotonic()
-        if left <= 0:
-            return ""
-        accent = THEMES.get(self.theme, THEMES[DEFAULT_THEME])[1]
-        return f" on {mix('#000000', accent, 0.55 * left / FLASH_SECONDS)}"
+        return rowwords.flash_background(THEMES.get(self.theme, THEMES[DEFAULT_THEME])[1], left)
 
     def status_cell(self, session: Session) -> Text:
         """Its Status (State) cell, rowwords.status as it moves now: the turning star and its band of
@@ -1242,7 +1238,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             return self.working(said[-1][0], lit)
         if motion == "pulse":  # a smooth pulse rather than a blink: the red breathes in and out
             return cell(rowwords.moving(said, motion, self.accent(), self.frame * SPIN_SECONDS))
-        return cell([(words, style + lit) for words, style in said])
+        return cell(rowwords.lit(said, lit))
 
     def working(self, label: str, background: str) -> Text:
         """Claude's own look (rowwords.moving): a turning star in the accent colour that glows softly,
@@ -1251,7 +1247,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         now = time.monotonic()
         parts = rowwords.moving([("", ""), (label, "")], "spin", accent, now)
         parts[0] = (f"{STAR[int(now * 8) % len(STAR)]} ", parts[0][1])  # this front's frames (a test stills them)
-        return Text.assemble(*((words, style + background) for words, style in parts))
+        return Text.assemble(*rowwords.lit(parts, background))
 
     def spin(self) -> None:
         """Advance the spinners and pulses of open sessions; touch only their cells. Not behind a
@@ -2954,12 +2950,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         return self.watch is not None
 
     def flash_changed(self, updates: dict[str, Session]) -> None:
-        until = time.monotonic() + FLASH_SECONDS
-        for sid, fresh in updates.items():
-            old = self.sessions.get(sid)
-            if old is not None and (old.live_state, old.exit, old.status) != (
-                    fresh.live_state, fresh.exit, fresh.status):
-                self.flash[sid] = until
+        until = time.monotonic() + rowwords.FLASH_SECONDS
+        for sid in rowwords.changed(self.sessions, updates.values()):
+            self.flash[sid] = until
 
     def untick_open(self, updates: dict[str, Session]) -> None:
         """A session that turns out to be open was not left open at shutdown: untick it if it was
