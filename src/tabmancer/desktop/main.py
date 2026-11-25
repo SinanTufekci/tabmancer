@@ -4,9 +4,11 @@ The terminal dashboard in its black, with room: monospace, the accent, panels yo
 float and close (Panels puts them back), menus that name every key of the dashboard, and the key
 bar under the window. The top bar says what the terminal dashboard's says, in the same words
 (viewmodel): the sessions listed, who each CLI is signed in as, the plan limits and agy's chain,
-a live dot and the clock. The Sessions panel is the Board (board.py): the sessions as cards in
-lanes by what they want from you, the cards' rules (a switch under the top bar picks the view; the
-table comes later).
+a live dot and the clock. The Sessions panel shows the sessions three ways, picked by a switch under
+the top bar: the Board (board.py), as cards in lanes by what they want from you; the Table
+(table.py), the terminal dashboard's list row for row (its teams unfold under their rows); and the
+Live view, the open sessions by what each does (l, as in the terminal, and l again goes back). The
+pick is one across them: the row or card picked stays picked when the view changes.
 
 It only watches, as a second dashboard does: the dashboard's store (store.DashboardStore) is read
 on a thread of its own every two seconds, and nothing here claims the actor lock, records a plan
@@ -49,6 +51,7 @@ from PySide6.QtWidgets import (
     QMenuBar,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -65,6 +68,7 @@ from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
 from .monitor import sequences
 from .rail import Rail
+from .table import Table, drawer_key
 from .teampanel import TeamPanel
 from .widgets import KeyBar, bit_pixmap, text_label
 
@@ -74,7 +78,7 @@ INFO_LEAST = 20  # characters the info line keeps before the accounts give way
 LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
-HERE = {"?", "q", "T", "/", "1", "2", "3"}
+HERE = {"?", "q", "T", "/", "1", "2", "3", "l"}
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
 KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), ("c", "continue"), ("M", "monitor"),
@@ -85,8 +89,14 @@ TONES = {"muted": look.MUTED, "text": look.TEXT, "empty": "#2a2a2a", "ok": look.
          "out": look.RED}
 PANELS = ("Sessions", "Preview", "Projects", "Bit", "Team")
 VIEWS = (("board", "Board"), ("table", "Table"), ("live", "Live"))  # what the Sessions panel shows
-SHOWN_HERE = {"board"}
-BOARD_HINT = f"↑ ↓ ← → pick a card · 1 2 3 or a lane's heading narrows it · / finds · {commandbar.KEY} any command"
+HINTS = {
+    "board": f"↑ ↓ ← → pick a card · 1 2 3 or a lane's heading narrows it · / finds · {commandbar.KEY} any command",
+    "table": f"↑ ↓ pick a row · Enter or a click on ▸ unfolds a team · 1 2 3 narrows · / finds · {commandbar.KEY} any command",
+    "live": f"the open sessions by what each does · ↑ ↓ pick · l again goes back · / finds · {commandbar.KEY} any command",
+}
+VIEW_TIPS = {"board": "The sessions as cards, by what they want from you",
+             "table": "The sessions as the terminal dashboard lists them, its teams under their rows",
+             "live": "Only the open sessions and what each is doing (l)"}
 FILTER_WORDS = "Find by project, title or anything said  ( / )"
 
 
@@ -144,6 +154,8 @@ class MainWindow(QMainWindow):
         self.relay = Relay()
         self.relay.polled.connect(self.take)
         self.relay.indexed.connect(self.take_index)
+        self.view = "board"  # what the Sessions panel shows (VIEWS)
+        self.before_live = "board"  # the view l goes back to
         self.project = VM.ALL_PROJECTS  # what the board is narrowed to: a project (the rail),
         self.card: str | None = None  # what a card counts (1 2 3),
         self.words = ""  # and words (/)
@@ -196,6 +208,7 @@ class MainWindow(QMainWindow):
         docks["Team"].visibilityChanged.connect(self.team_panel.wake)  # behind a tab: its picture rests
         self.board.card.connect(self.toggle_card)
         self.board.picked.connect(self.show_pick)
+        self.table.picked.connect(self.show_pick)
         self.drawer.act.connect(self.run_key)
         self.rail.projects.picked.connect(self.set_project)
         self.rail.teams.picked.connect(self.pick_team)
@@ -247,7 +260,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(bar)
         row.setContentsMargins(12, 5, 12, 5)
         row.setSpacing(0)
-        self.hint = text_label(BOARD_HINT, look.DIM, 9)
+        self.hint = text_label(HINTS["board"], look.DIM, 9)
         row.addWidget(self.hint)
         row.addStretch(1)
         self.filter_box = FilterBox()
@@ -261,18 +274,17 @@ class MainWindow(QMainWindow):
         row.addWidget(self.filter_box)
         row.addSpacing(12)
         self.views = QButtonGroup(self)
-        for name, words in VIEWS:
+        for at, (name, words) in enumerate(VIEWS):
             button = QPushButton(words)
             button.setObjectName("view")
             button.setFont(look.font(9))
             button.setCheckable(True)
             button.setChecked(name == "board")
-            button.setEnabled(name in SHOWN_HERE)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.setToolTip("The sessions as cards, by what they want from you" if name in SHOWN_HERE
-                              else f"{words}: {ELSEWHERE.lower()}")
-            self.views.addButton(button)
+            button.setToolTip(VIEW_TIPS[name])
+            self.views.addButton(button, at)
             row.addWidget(button)
+        self.views.idClicked.connect(self.view_clicked)
         return bar
 
     def rich_label(self) -> QLabel:
@@ -297,8 +309,13 @@ class MainWindow(QMainWindow):
             box.addWidget(self.team_panel)
         elif title == "Sessions":
             self.board = Board(self.accent)
+            self.table = Table(self.accent)
+            self.table.set_motion(teamgraph.motion())
+            self.sessions_shown = QStackedWidget()  # the board, or the table (its live view too)
+            self.sessions_shown.addWidget(self.board)
+            self.sessions_shown.addWidget(self.table)
             box.setContentsMargins(0, 0, 0, 0)
-            box.addWidget(self.board)
+            box.addWidget(self.sessions_shown)
         elif title == "Projects":
             self.rail = Rail(self.accent)
             box.setContentsMargins(6, 0, 0, 0)
@@ -326,7 +343,7 @@ class MainWindow(QMainWindow):
         bar.setFont(look.font(9.5))
         self.actions_by_key: dict[str, QAction] = {}
         doing = {"?": self.show_keys, "q": self.close, "T": self.show_teams, "/": self.find_words,
-                 "1": self.only_open, "2": self.only_waiting, "3": self.only_continue}
+                 "1": self.only_open, "2": self.only_waiting, "3": self.only_continue, "l": self.toggle_live}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -417,12 +434,13 @@ class MainWindow(QMainWindow):
     # --- narrowing --------------------------------------------------------------------------------
 
     def shown(self) -> list[Session]:
-        """The sessions the board shows: the terminal dashboard's list over the same filters."""
+        """The sessions shown: the terminal dashboard's list over the same filters (the open ones alone,
+        by what they do, in the live view)."""
         snap = self.snap
         if snap is None:
             return []
         return VM.visible(snap.sessions.values(), lambda s: s.session_id in snap.hidden, text=self.words,
-                          said_in=self.said_in, project=self.project, card=self.card)
+                          said_in=self.said_in, project=self.project, card=self.card, live=self.view == "live")
 
     def said_in(self) -> set[str]:
         if self.finder is None or self.snap is None:
@@ -436,10 +454,55 @@ class MainWindow(QMainWindow):
         snap = self.snap
         if snap is None:
             return
-        self.board.set(snap, self.shown(), self.card)
+        if self.view == "board":
+            self.board.set(snap, self.shown(), self.card)
+        else:
+            self.table.set(snap, self.shown())
         self.rail.set(snap, self.project)
-        self.show_pick(self.board.pick or "")
+        self.show_pick(self.picked_now())
         self.show_pills()
+
+    def picked_now(self) -> str:
+        """The card or row picked in the view shown, in the drawer's words ('' for none)."""
+        if self.view == "board":
+            return self.board.pick or ""
+        return drawer_key(self.table.pick or "")
+
+    def reveal(self, key: str) -> bool:
+        """A session's card or row (or its team's) picked and in view, in the view shown."""
+        return self.board.reveal(key) if self.view == "board" else self.table.show_key(key)
+
+    def shown_now(self) -> QWidget:
+        return self.board if self.view == "board" else self.table
+
+    def view_clicked(self, at: int) -> None:
+        self.set_view(VIEWS[at][0])
+
+    def toggle_live(self) -> None:
+        """l: the live view, and l again goes back to the view before it."""
+        if self.view == "live":
+            self.set_view(self.before_live)
+        else:
+            self.before_live = self.view
+            self.set_view("live")
+
+    def set_view(self, name: str) -> None:
+        """What the Sessions panel shows: the board, the table or the live view; the pick goes with it."""
+        if name == self.view:
+            return
+        picked = self.picked_now()
+        self.view = name
+        self.views.button(next(at for at, (view, _) in enumerate(VIEWS) if view == name)).setChecked(True)
+        self.hint.setText(HINTS[name])
+        self.table.set_live(name == "live")
+        self.sessions_shown.setCurrentWidget(self.shown_now())
+        self.refilter()
+        if picked:
+            self.reveal(picked)
+        dock = self.docks["Sessions"]
+        dock.show()
+        dock.raise_()
+        self.shown_now().setFocus()
 
     def show_pick(self, key: str) -> None:
         """The card picked on the board, in the drawer; the filter's words where they were said in it."""
@@ -508,7 +571,7 @@ class MainWindow(QMainWindow):
             self.index_words()
 
     def back_to_board(self) -> None:
-        self.board.setFocus()
+        self.shown_now().setFocus()
 
     def clear_filters(self) -> None:
         self.project, self.card = VM.ALL_PROJECTS, None
@@ -595,11 +658,14 @@ class MainWindow(QMainWindow):
 
     def tick(self) -> None:
         """The live dot breathes (a slow sine between dim and bright green), the clock goes on."""
-        phase = (math.sin((time.monotonic() - self.started) * 2.2) + 1) / 2
+        now = time.monotonic()
+        phase = (math.sin((now - self.started) * 2.2) + 1) / 2
         self.live.setText(look.span("● ", mix("#163d1f", look.GREEN, phase)) + look.span("live", look.MUTED))
-        now = datetime.now().strftime("%H:%M:%S")
-        if self.clock.text() != now:
-            self.clock.setText(now)
+        clock = datetime.now().strftime("%H:%M:%S")
+        if self.clock.text() != clock:
+            self.clock.setText(clock)
+        if self.view != "board":
+            self.table.tick(now)  # its stars turn, its light sweeps, its red breathes
 
     def show_keys(self) -> None:
         KeysDialog(self, "Keys · tabmancer", KEYS, HERE, ELSEWHERE).show()
@@ -631,10 +697,10 @@ class MainWindow(QMainWindow):
             self.set_project(command.target)
         else:
             card = VM.TEAM_CARD + command.target if command.kind == "team" else command.target
-            if not self.board.reveal(card) and self.narrowed():
+            if not self.reveal(card) and self.narrowed():
                 self.clear_filters()
-                self.board.reveal(card)
-        self.board.setFocus()
+                self.reveal(card)
+        self.shown_now().setFocus()
 
     def pick_team(self, name: str) -> None:
         """A team on the rail: its card on the board (the filters cleared if they kept it out), and its tab
@@ -644,9 +710,10 @@ class MainWindow(QMainWindow):
         self.run_command(commands.Command("team", name, target=name))
 
     def motion_changed(self) -> None:
-        """View ▸ Reduce motion picked: the Team panel and the rail's teams move as it says now."""
+        """View ▸ Reduce motion picked: the Team panel, the rail's teams and the table move as it says now."""
         self.team_panel.show_team()
         self.rail.teams.set_motion(teamgraph.motion())
+        self.table.set_motion(teamgraph.motion())
 
     def show_teams(self) -> None:
         """T: the Team panel to the front (back where it was, if it was closed), its tabs to pick with."""

@@ -24,7 +24,20 @@ from PySide6.QtGui import QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
 
-from tabmancer import accounts, actor, agy, cli, commands, demo, sessions, store, teambus, teams, usage
+from tabmancer import (
+    accounts,
+    actor,
+    agy,
+    cli,
+    commands,
+    demo,
+    rowwords,
+    sessions,
+    store,
+    teambus,
+    teams,
+    usage,
+)
 from tabmancer import sessionwords as preview_words
 from tabmancer import viewmodel as VM
 from tabmancer.config import merge_json, read_json
@@ -269,9 +282,46 @@ def test_the_sessions_panel_is_the_board(qapp, window):
     QTest.keyClick(board, Qt.Key.Key_Down)
     assert board.pick == board.keys()[1]
     views = {button.text(): button for button in shown.views.buttons()}
-    assert list(views) == ["Board", "Table", "Live"] and views["Board"].isChecked() and views["Board"].isEnabled()
-    for name in ("Table", "Live"):  # the terminal dashboard's for now, and said so
-        assert not views[name].isEnabled() and main.ELSEWHERE.lower() in views[name].toolTip()
+    assert list(views) == ["Board", "Table", "Live"] and views["Board"].isChecked()
+    assert all(button.isEnabled() and button.toolTip() for button in views.values())
+
+
+def test_the_table_and_the_live_view_list_as_the_terminal_does_and_keep_the_pick(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    board, table, drawer = shown.board, shown.table, shown.drawer
+    cards = board.keys()
+    session = next(key for key in cards if not key.startswith(VM.TEAM_CARD))
+    board.move(session)
+    views = {button.text(): button for button in shown.views.buttons()}
+    QTest.mouseClick(views["Table"], Qt.MouseButton.LeftButton)
+    assert shown.view == "table" and shown.sessions_shown.currentWidget() is table and table.hasFocus()
+    assert views["Table"].isChecked() and shown.hint.text() == main.HINTS["table"]
+    assert table.shown == shown.shown() and not table.live
+    assert table.keys == [key for key, _ in rowwords.keys(table.listing)]  # the terminal's rows (test_rowwords)
+    assert table.pick == session and drawer.key == session  # the pick came along
+    QTest.keyClick(table, Qt.Key.Key_Down)
+    assert drawer.key == main.drawer_key(table.pick) != session
+    team = shown.snap.view.teams[0].name
+    shown.run_command(commands.Command("team", team, target=team))  # Ctrl+K's jump, in the table
+    assert table.pick == rowwords.TEAM_ROW + team and drawer.key == VM.TEAM_CARD + team
+    QTest.keyClick(table, Qt.Key.Key_Return)
+    assert team in table.unfolded and table.keys.index(rowwords.TEAM_ROW + team) < len(table.keys) - 1
+    QTest.keyClick(shown, Qt.Key.Key_1)  # 1 2 3 narrow the table too
+    assert shown.card == "open" and table.shown == shown.shown()
+    QTest.keyClick(shown, Qt.Key.Key_1)
+    QTest.keyClick(shown, Qt.Key.Key_L)  # l: the live view
+    assert shown.view == "live" and table.live and views["Live"].isChecked()
+    assert table.shown == shown.shown() == VM.visible(shown.snap.sessions.values(), lambda s: False, live=True)
+    assert set(table.keys) == {s.session_id for s in table.shown}
+    assert tuple(table.grid.horizontalHeaderItem(c).text() for c in range(table.grid.columnCount())) == \
+        rowwords.labels(True, table.model_shown)
+    shown.tick()  # what moves, moves
+    QTest.keyClick(shown, Qt.Key.Key_L)  # l again: back where it was
+    assert shown.view == "table" and not table.live
+    picked = drawer.key
+    QTest.mouseClick(views["Board"], Qt.MouseButton.LeftButton)
+    assert shown.sessions_shown.currentWidget() is board and board.hasFocus() and board.pick == picked
 
 
 def test_a_layout_kept_with_the_cards_panel_opens_without_it(qapp, window):
@@ -301,9 +351,9 @@ def test_views_says_how_much_moves(qapp, window):
     assert graph.mode == "full"
     picks["off"].trigger()
     assert read_json("config.json")["motion"] == "off" and graph.mode == "off" and shown.team_panel.lanes.mode == "off"
-    assert picks["off"].isChecked() and not picks["full"].isChecked()
+    assert picks["off"].isChecked() and not picks["full"].isChecked() and shown.table.motion == "off"
     picks["full"].trigger()
-    assert graph.mode == "full"
+    assert graph.mode == "full" and shown.table.motion == "full"
 
 
 def every_key(keys) -> list[tuple[str, str]]:
