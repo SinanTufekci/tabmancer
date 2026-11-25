@@ -37,6 +37,7 @@ from . import (
     agy,
     alerts,
     background,
+    backgroundwords,
     browsers,
     claudeupdate,
     clis,
@@ -2325,14 +2326,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def show_background(self, found: list[background.Job] | None) -> None:
         if found is None:
-            self.notify("`claude agents --json` did not answer, so background sessions cannot be listed.",
-                        severity="warning")
+            self.notify(backgroundwords.NO_ANSWER, severity="warning")
             return
 
         def attach(job: background.Job | None) -> None:
             if job is not None:
-                self.open_sessions([Launch(title=_clip(f"{job.project}: {job.name}", 48), cwd=job.cwd,
-                                           mode=Mode.ATTACH, session_id=job.id)])
+                self.open_sessions([backgroundwords.attach_launch(job)])
 
         self.push_screen(background.BackgroundDialog(found), attach)
 
