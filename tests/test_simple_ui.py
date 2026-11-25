@@ -49,7 +49,7 @@ async def test_nothing_is_said_that_says_nothing(fake_home):
         await pilot.press("space")
         assert "1 selected" in app.sub_title
         two = app.sessions["two"]
-        assert str(app.process_cell(two)) == "" and str(app.mode_cell(two)) == ""  # clean, resume: the usual
+        assert str(app.cells(two)[5]) == "" and str(app.mode_cell(two)) == ""  # process clean, resume: the usual
         assert str(app.mode_cell(two, plain=True)) == "resume"  # the preview says it all the same
         assert len(app.cards) == 4
 

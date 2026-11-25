@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import math
 import sys
 import textwrap
 import time
-from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -42,7 +40,6 @@ from . import (
     browsers,
     claudeupdate,
     clis,
-    context,
     engine,
     focus,
     footer,
@@ -55,6 +52,7 @@ from . import (
     newsessions,
     picks,
     rename,
+    rowwords,
     search,
     sessionwords,
     sixel,
@@ -132,7 +130,6 @@ from .teamview import (
 from .teamview import colours as team_colours
 from .theme import (
     AMBER,
-    BLUE,
     CYAN,
     DEFAULT_THEME,
     GREEN,
@@ -164,15 +161,16 @@ from .widgets import (
 # The view model's tones in this terminal's colours: quiet for what needs nothing from you, loud for
 # what does. Amber is what TO CONTINUE counts, red what NEED YOU counts (viewmodel says it all).
 TONE = sessionwords.TONE
-STATUS_LABEL = {status: (label, TONE[tone]) for status, (label, tone) in VM.STATUS.items()}
+STATUS_LABEL = rowwords.STATUS_LABEL
+BADGE, badge = rowwords.BADGE, rowwords.badge  # a loud state as a badge, its colour tinted in behind it
 STATUS_HELP, EXIT_HELP, TOOLTIP_STATUS = VM.STATUS_HELP, VM.EXIT_HELP, VM.OUTCOME
 MODES = [Mode.RESUME, Mode.AUTO, Mode.FORK, Mode.NEW]
 MODE_LABEL = sessionwords.MODE_LABEL
 # Raw states from `claude agents --json` -> label, style, sort rank (lowest first).
 LIVE_STATES = {raw: (label, TONE[tone], rank) for raw, (label, tone, rank, _) in VM.LIVE.items()}
-SPINNING = {"busy", "working"}
+SPINNING = rowwords.SPINNING
 # A team's members, counted on its row by what each does (VM.state_id), in this order (VM.TEAM_GLYPHS).
-TEAM_GLYPHS = {state: (glyph, TONE[tone]) for state, (glyph, tone) in VM.TEAM_GLYPHS.items()}
+TEAM_GLYPHS = rowwords.TEAM_GLYPHS
 MONITOR_AGAIN = 4.0  # seconds in which a second M for the same team does nothing: its window is on its way
 TEAM_MESSAGES_FROM = 150  # columns from which a team's preview lists its messages beside the tree
 # Columns and rows from which the preview stands beside the list, both at full height (V keeps it
@@ -186,14 +184,6 @@ PANE_TAKES = 132
 # The sidebar's marks, said once under its projects (two lines of the sidebar's width).
 LEGEND = Text.assemble(("● ", RED), ("your turn  ", MUTED), ("● ", GREEN), ("open\n", MUTED),
                        ("▲ ", AMBER), ("to continue  ", MUTED), ("± ", AMBER), ("↑ ", CYAN), ("git", MUTED))
-BADGE = 0.22  # a loud state's background: its own colour this much over black
-
-
-def badge(style: str) -> str:
-    """A loud state (a bold style) as a badge: its colour tinted in behind it. Quiet ones stay plain."""
-    if not style.startswith("bold "):
-        return style
-    return f"{style} on {mix('#000000', style.split()[-1], BADGE)}"
 FULL_POLL_EVERY = 8        # every 8th poll asks `claude agents --json` (background sessions too)
 SPIN_SECONDS = 0.08
 TIMER_THREADS = 64  # Windows: a thread for every timer at once, the team view's and dialogs' too
@@ -204,24 +194,18 @@ GROW_SECONDS = 0.8  # the token chart rises on load
 FLASH_SECONDS = 1.6  # how long a row stays lit after its state changes
 CAME_UP_SECONDS = 45  # by then a session opened from here has shown up open, or it is said that it did not
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
-QUIET_SECONDS = 5 * 60
 COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon starts it (cold_note)
 KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
 SETTLE_AFTER = (5, 45)  # seconds after the list is shown: memory set aside from the collector (settle_memory)
-SHIMMER = "#e8f3ff"  # the bright band that sweeps across "working"
-STAR = "·✢✶✻✽✻✶✢"   # Claude Code's turning star; none of these are drawn as emoji
-EXPAND_WIDTH = 64   # the Title column at its widest: the outcome wraps inside it
-TITLE_MIN = 18      # ...and at its narrowest
-# Every column but the title at its widest (an 18-character project name), with the title's padding
-# and the scrollbar: the title gets the rest. tests/test_layout.py holds these to it.
-OTHER_COLUMNS = {"picker": 72, "live": 84}
-MODEL_COLUMN = 18  # the Model column ('sonnet 5.5·xhigh' and its padding); on a narrow screen it is left empty
+STAR = rowwords.STAR  # Claude Code's turning star
+EXPAND_WIDTH, TITLE_MIN = rowwords.TITLE_WIDEST, rowwords.TITLE_MIN  # the Title column's room (rowwords.title_room)
+OTHER_COLUMNS = rowwords.OTHER_COLUMNS  # every column but the title (tests/test_layout.py holds these to it)
+MODEL_COLUMN = rowwords.MODEL_COLUMN  # the Model column with its padding; on a narrow screen it is left empty
 MODEL_ROOM = MODEL_COLUMN - 2  # ...its words
 COLUMNS = ("sel", "project", "title", "status", "model", "exit", "active", "mode")
 EFFORT_SHORT = sessionwords.EFFORT_SHORT  # as the Model column says an effort
 HEADING = "\x00"  # the keys of the rows that head the open sessions and the rest
 TEAM_ROW = "\x01"  # ...and of the row that heads a team in OPEN NOW, which the cursor does stop on
-CONTEXT_BAR = 4     # cells in the bar that shows how full a context is
 SIDEBAR = 26 + 3    # the project sidebar with its margins; it steps aside when the table would not fit
 MINI_BELOW = 40     # rows of terminal under which the cards take two lines each, not seven
 KEY_GROUPS = {action: group for group, rows in KEYS for _, action, _ in rows if action}  # the ? screen's
@@ -242,12 +226,6 @@ def state_of(session: Session) -> tuple[str, str, int]:
     """What an open session is doing: (label, style, rank)."""
     label, tone, rank = VM.state_of(session)
     return label, TONE[tone], rank
-
-
-def limit_cell(session: Session) -> Text:
-    """'◐ limit · 16:00' until the limit lifts, then '◐ limit lifted'."""
-    words, tone = VM.limit_words(session)
-    return Text(words, style=TONE[tone])
 
 
 def by_project(sessions: list[Session], style: str) -> list[tuple[str, str]]:
@@ -432,6 +410,12 @@ def based(parts: list[tuple[str, str]]) -> Text:
     for words, style in parts[1:]:
         out.append(words, style=style)
     return out
+
+
+def drawn_cells(words: rowwords.RowWords) -> list[Text]:
+    """A list row's words (rowwords) as the table's cells: the Model column on its first part's style."""
+    return [based(parts) if column in rowwords.BASED else cell(parts)
+            for column, parts in zip(COLUMNS, words.cells, strict=True)]
 
 
 class SessionTable(DataTable):
@@ -742,6 +726,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.cold_team: str | None = None  # a team started once while its cache was gone: again starts it
         self.blocks: list[tuple[teamtree.TeamState, list[tuple[str, Session]]]] = []  # the teams in the list
         self.member_rows: dict[str, tuple[str, str]] = {}  # their members' session ids -> (team, member)
+        self.grouped = VM.Groups([], [], {})  # the list as groups() last grouped it (rowwords.Listing)
         self.default_cap = picks.cap_tokens(picks.default_cap())  # the cap new sessions get, in tokens
         # Teams whose lead wrote a handover not taken yet (Esc in its dialog): h shows it again, unwritten.
         self.kept_handovers: dict[str, tuple[Session, str, str, bool]] = {}
@@ -1158,11 +1143,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         resize sent it there)."""
         table = self.table
         was = (self.cursor_key(), table.cursor_row, table.scroll_y)
-        model = "Model" if self.model_shown else ""
-        labels = (["", "Project", "Title", "State", model, "Kind", "Last activity", "ctx"] if self.live_mode
-                  else ["", "Project", "Title", "Status", model, "Context", "Last", "Open as"])
         table.clear(columns=True)
-        for key, label in zip(COLUMNS, labels):
+        for key, label in zip(COLUMNS, rowwords.labels(self.live_mode, self.model_shown)):
             table.add_column(label, key=key)
         if keep:
             self.refresh_rows(was=was)
@@ -1199,62 +1181,14 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def mode(self, session: Session) -> Mode:
         return self.modes.get(session.session_id) or default_mode(session.status)
 
-    def live_cells(self, session: Session) -> tuple[Text, ...]:
-        rank = state_of(session)[2]
-        last = Text(ago(session.last_active), style="dim")
-        if rank == 2 and (datetime.now() - session.last_active).total_seconds() > QUIET_SECONDS:
-            # Busy but writing nothing: a long command, or a prompt nobody has answered.
-            last = Text(f"{ago(session.last_active)} · quiet", style="yellow")
-        return (
-            Text(" ! " if rank == 0 else "", style="bold red"),
-            Text(_clip(session.project, 18)),
-            Text(_clip(session.title, self.title_width)),
-            self.status_cell(session),
-            self.model_cell(session),
-            Text("background" if session.status is Status.BACKGROUND else "terminal", style="dim"),
-            last,
-            self.context_cell(session),
-        )
-
-    def context_cell(self, session: Session) -> Text:
-        """'▰▰▰▱ 73%' (of its cap, for a session opened with one), amber from the point where a handover
-        is worth it, red past 85%."""
-        if not session.context or session.cli != "claude":
-            return Text("")
-        cap = self.cap_of(session)
-        share = context.share(session, cap)
-        colour = RED if share >= 0.85 else AMBER if context.crowded(session, cap, self.default_cap) else MUTED
-        filled = min(CONTEXT_BAR, round(share * CONTEXT_BAR))
-        return Text.assemble(("▰" * filled, colour), ("▱" * (CONTEXT_BAR - filled), "#2a2a2a"),
-                             (f" {share:.0%}", colour))
-
     def cells(self, session: Session) -> tuple[Text, ...]:
-        if self.live_mode:
-            return self.live_cells(session)
-        if session.status is Status.RUNNING:  # open in a terminal: nothing to tick
-            mark = Text("")
-        elif session.session_id in self.selected:
-            mark = Text("[x]", style=f"bold {self.accent()}")
-        elif session.status is Status.BACKGROUND:  # open too, though Space ticks it to attach to it:
-            mark = Text("")                        # a box would put it with the closed ones
-        else:
-            mark = Text("[ ]", style="#5a5a5a")
-        open_here = session.status is Status.RUNNING  # open in a terminal: cannot be selected
-        dim = "dim" if open_here else ""
-        if session.session_id in self.member_rows:  # in a team's tree
-            place, title = self.member_cells(session, "" if session.exit is Exit.RUNNING else "dim")
-        else:
-            place, title = Text(_clip(session.project, 18), style=dim), self.title_cell(session, dim)
-        return (
-            mark,
-            place,
-            title,
-            self.status_cell(session),
-            self.model_cell(session),
-            self.process_cell(session),
-            Text(ago(session.last_active), style=MUTED),
-            self.mode_cell(session),
-        )
+        """A session's row (rowwords.row), in the picker's columns or the live view's. Its status as
+        it moves now (status_cell); opened, how it ended under its title (expansion)."""
+        out = drawn_cells(rowwords.row(self.listing(), session.session_id, session))
+        out[3] = self.status_cell(session)
+        if session.session_id in self.expanded and not self.live_mode:
+            out[2] = Text("\n").join([out[2], *self.expansion(session)])
+        return tuple(out)
 
     def model_cell(self, session: Session) -> Text:
         """'opus 5.5·xhigh': the model of its last reply, with its version, and the effort it ran at (as
@@ -1264,27 +1198,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if not self.model_shown:
             return Text("")
         return based(sessionwords.model_parts(session, self.effort_of(session), MODEL_ROOM))
-
-    def process_cell(self, session: Session) -> Text:
-        """How the process ended; other CLIs leave no record of that, so it names the CLI."""
-        if session.cli != "claude":
-            return Text(session.cli, style=CYAN)
-        if session.exit is Exit.RUNNING:  # still going: how full its context is matters more
-            return self.context_cell(session)
-        if session.exit is Exit.CLEAN:  # the usual: said in the preview, not on every row
-            return Text("")
-        return Text(session.exit.value, style=AMBER if session.exit is Exit.KILLED else MUTED)
-
-    def title_cell(self, session: Session, style: str) -> Text:
-        if self.marks.is_pinned(session):
-            title = Text.assemble(("★ ", self.accent()), (_clip(session.title, self.title_width - 2), style))
-        elif self.marks.is_hidden(session):  # shown with X: says so
-            title = Text.assemble(("hidden · ", MUTED), (_clip(session.title, self.title_width - 9), f"{style} {MUTED}"))
-        else:
-            title = Text(_clip(session.title, self.title_width), style=style)
-        if session.session_id not in self.expanded:
-            return title
-        return Text("\n").join([title, *self.expansion(session)])
 
     def expansion(self, session: Session) -> list[Text]:
         """How the session ended, wrapped to fit under its title."""
@@ -1302,10 +1215,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """Narrow windows get shorter titles, so every column fits without scrolling sideways."""
         if not hasattr(self, "table") or not self.table.size.width:
             return
-        room = self.table.size.width - OTHER_COLUMNS["live" if self.live_mode else "picker"]
-        shown = room - MODEL_COLUMN >= TITLE_MIN  # the model goes before the title is cut below its least
-        room -= MODEL_COLUMN if shown else 2  # an empty column keeps its padding
-        width = max(TITLE_MIN, min(EXPAND_WIDTH, room))
+        width, shown = rowwords.title_room(self.table.size.width, self.live_mode)
         if width != self.title_width or shown != self.model_shown:
             self.title_width, self.model_shown = width, shown
             self.setup_columns(keep=True)  # a column keeps the width of its widest cell so far
@@ -1338,37 +1248,24 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         return f" on {mix('#000000', accent, 0.55 * left / FLASH_SECONDS)}"
 
     def status_cell(self, session: Session) -> Text:
-        """Closed sessions say how they ended; open ones animate what they are doing."""
+        """Its Status (State) cell, rowwords.status as it moves now: the turning star and its band of
+        light, the red pulse; a row lit after a change, on a background that fades."""
+        said, motion = rowwords.status(session, self.accent())
         lit = self.flash_background(session)
-        if at_limit(session):
-            cell = limit_cell(session)
-            return Text(cell.plain, style=badge(str(cell.style)) + lit)
-        if session.exit is not Exit.RUNNING:
-            label, style = STATUS_LABEL[session.status]
-            return Text(label, style=badge(style) + lit)
-        label, style, rank = state_of(session)
-        kind = " · bg" if session.status is Status.BACKGROUND else ""
-        if session.live_state.lower() in SPINNING:
-            return self.working(f"{label}{kind}", lit)
-        if rank == 0:
-            # A smooth pulse rather than a blink: the red breathes in and out.
-            glow = (math.sin(self.frame * SPIN_SECONDS * 4) + 1) / 2
-            return Text(f"! {label}{kind}", style=f"bold #ffffff on {mix('#3d0f0d', RED, glow)}")
-        return Text(f"● {label}{kind}", style=style + lit)
+        if motion == "spin":
+            return self.working(said[-1][0], lit)
+        if motion == "pulse":  # a smooth pulse rather than a blink: the red breathes in and out
+            return cell(rowwords.moving(said, motion, self.accent(), self.frame * SPIN_SECONDS))
+        return cell([(words, style + lit) for words, style in said])
 
     def working(self, label: str, background: str) -> Text:
-        """Claude's own look: a turning star in the accent colour that glows softly,
-        and a slow band of light sweeping across the word."""
-        now = time.monotonic()
+        """Claude's own look (rowwords.moving): a turning star in the accent colour that glows softly,
+        and a slow band of light sweeping across the word; on a lit row's background."""
         accent = THEMES.get(self.theme, THEMES[DEFAULT_THEME])[1]
-        glow = (math.sin(now * 4.0) + 1) / 2
-        star = STAR[int(now * 8) % len(STAR)]
-        text = Text(f"{star} ", style=f"bold {mix(mix(accent, '#000000', 0.5), accent, glow)}{background}")
-        band = (now * 7) % (len(label) + 12) - 6
-        for index, char in enumerate(label):
-            closeness = max(0.0, 1 - abs(index - band) / 4)
-            text.append(char, style=f"{mix(BLUE, SHIMMER, closeness * closeness)}{background}")
-        return text
+        now = time.monotonic()
+        parts = rowwords.moving([("", ""), (label, "")], "spin", accent, now)
+        parts[0] = (f"{STAR[int(now * 8) % len(STAR)]} ", parts[0][1])  # this front's frames (a test stills them)
+        return Text.assemble(*((words, style + background) for words, style in parts))
 
     def spin(self) -> None:
         """Advance the spinners and pulses of open sessions; touch only their cells. Not behind a
@@ -1398,7 +1295,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             key = f"{TEAM_ROW}{state.team.name}"
             if (state.team.name not in self.unfolded and key in self.table.rows
                     and any(s.live_state.lower() in SPINNING for _, s in self.team_members(state.team.name))):
-                changes.append((key, "title", self.team_chips(state)))
+                changes.append((key, "title", self.team_cells(key)[2]))
         for session in self.visible():
             sid = session.session_id
             if self.animates(session) and sid in self.table.rows:
@@ -1495,8 +1392,18 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """The sessions shown, in the groups the list heads: open (the teams with a member open
         first, closed members too), pinned, the rest (viewmodel.group)."""
         grouped = VM.group(self.visible(), self.marks.pinned, self.team_states, teams_too=not self.live_mode)
-        self.blocks, self.member_rows = grouped.blocks, grouped.members
+        self.grouped, self.blocks, self.member_rows = grouped, grouped.blocks, grouped.members
         return grouped.groups
+
+    def listing(self) -> rowwords.Listing:
+        """What the list is drawn from now (rowwords.Listing): the sessions as groups() last grouped
+        them, and the star's frame this moment for a folded team's member at work."""
+        return rowwords.Listing(
+            self.grouped, self.sessions, self.team_states, self.accent(), self.title_width,
+            model_shown=self.model_shown, live=self.live_mode, unfolded=self.unfolded, selected=self.selected,
+            pinned=self.marks.pinned, is_hidden=self.marks.is_hidden, modes=self.modes, armed=self.armed,
+            queued=self.queued, tokens=self.session_tokens, default_cap=self.default_cap,
+            star=STAR[int(time.monotonic() * 8) % len(STAR)])
 
     def rows(self) -> list[tuple[str, Session | None, int]]:
         """(key, session, height) of the table's rows: the sessions shown, under a heading for
@@ -1523,17 +1430,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         return out
 
     def heading_cells(self, key: str) -> tuple[Text, ...]:
-        group = key.removeprefix(HEADING)
-        items = dict(self.groups()).get(group, [])
-        # OPEN NOW counts the open ones: a team shows its closed members there too.
-        count = sum(s.exit is Exit.RUNNING for s in items) if group == "open" else len(items)
-        title, style = {"open": ("OPEN NOW", f"bold {GREEN}"), "pinned": ("★ PINNED", f"bold {self.accent()}"),
-                        "rest": ("EARLIER", f"bold {TEXT}")}[group]
-        label = Text.assemble("\n", (title, style), (f" · {count}", MUTED))
-        # The Context column shows how a closed session's process ended: said where its sessions are.
-        closed = group == "rest" or (bool(items) and all(s.exit is not Exit.RUNNING for s in items))
-        caption = Text("\nprocess", style=MUTED) if closed else Text("")
-        return (Text(""), label, Text(""), Text(""), Text(""), caption, Text(""), Text(""))
+        """A group's heading (rowwords.heading), two rows high: a blank line sets it apart from what is
+        above it."""
+        self.groups()  # as the list heads them now
+        words = rowwords.row(self.listing(), key, None)
+        return tuple(Text("") if not parts else Text("\n" + parts[0][0], style=parts[0][1]) if len(parts) == 1
+                     else Text.assemble("\n", *parts) for parts in words.cells)
 
     def refresh_rows(self, keep_place: bool = True, was: tuple[str | None, int, float] | None = None) -> None:
         """Build the table again. A filter that changed (keep_place False) starts at its newest match.
@@ -1581,83 +1483,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         return sum(s.exit is Exit.RUNNING for _, s in self.team_members(name))
 
     def team_cells(self, key: str) -> tuple[Text, ...]:
-        """A team's row. Folded (as it starts): its members as chips, each with a sign of what it is
-        doing. Unfolded, its members are listed under it, and the row says how many are open and how
-        many messages went between them. Then what the open members are doing (or that it is closed),
-        its tokens, and when it last spoke."""
-        name = key.removeprefix(TEAM_ROW)
-        state = self.team_states.get(name)
-        if state is None:  # gone since the rows were made: the next refresh drops the row
-            return tuple(Text("") for _ in COLUMNS)
-        accent = self.accent()
-        members = self.team_members(name)
-        opened = any(s.exit is Exit.RUNNING for _, s in members)
-        if opened:
-            mark = Text("▾" if name in self.unfolded else "▸", style=f"bold {accent}")
-        else:  # closed: it opens as a team, so it is ticked as one
-            closed = {s.session_id for _, s in members}
-            ticked = closed & self.selected
-            mark = (Text("[x]", style=f"bold {accent}") if ticked == closed else
-                    Text("[-]", style=f"bold {accent}") if ticked else Text("[ ]", style="#5a5a5a"))
-        heading = Text.assemble(("TEAM ", f"bold {MUTED}"), (name, f"bold {accent}"))
-        heading.truncate(18, overflow="ellipsis")
-        if name in self.unfolded:
-            said = len(state.between_members())
-            messages = f"{said} message{'' if said == 1 else 's'}"
-            opened_now, everyone = sum(s.exit is Exit.RUNNING for _, s in members), len(state.team.members)
-            what = next((words for words in (f"{messages} · {opened_now} of {everyone} open",
-                                             f"{messages} · {opened_now}/{everyone} open", messages)
-                         if len(words) <= self.title_width), messages)
-            title = Text(_clip(what, self.title_width), style=MUTED)
-        else:
-            title = self.team_chips(state)
-        if opened:
-            doing = Counter(VM.state_id(s) for _, s in members if s.exit is Exit.RUNNING)
-            status = Text()
-            for what in sorted(doing, key=lambda s: list(TEAM_GLYPHS).index(s) if s in TEAM_GLYPHS else len(TEAM_GLYPHS)):
-                glyph, style = TEAM_GLYPHS.get(what, ("●", MUTED))
-                status.append(f"{'  ' if status else ''}{glyph} {doing[what]}", style=style)
-            last = ago(state.said[-1].at) if state.said else ""
-        else:
-            stopped = sum(s.status in INTERRUPTED for _, s in members)
-            status = (Text(f"▲ {stopped} to continue", style=badge(f"bold {AMBER}")) if stopped
-                      else Text("closed", style=MUTED))
-            last = ago(max(s.last_active for _, s in members)) if members else ""
-        spent = state.tokens(self.session_tokens)
-        return (mark, heading, title, status, Text(""), Text(human(spent) if spent else "", style=MUTED),
-                Text(last, style=MUTED), Text(""))
-
-    def chip(self, session: Session | None) -> tuple[str, str, str, int]:
-        """A member's sign on its team's row, the sign's style, its name's, and how much it needs you
-        (lowest first): red when it waits for you, Claude's turning star while it works; a closed one
-        is quiet, with ▲ when it was cut off."""
-        if session is None or session.exit is not Exit.RUNNING:
-            if session is not None and session.status in INTERRUPTED:
-                label, style = STATUS_LABEL[session.status]
-                return label.split()[0], style, MUTED, 4
-            return "", "", MUTED, 5
-        if at_limit(session):
-            return "◐", AMBER, AMBER, 3
-        raw = session.live_state.lower()
-        rank = state_of(session)[2]
-        if raw in SPINNING:
-            return STAR[int(time.monotonic() * 8) % len(STAR)], f"bold {BLUE}", TEXT, rank
-        if rank == 0:
-            return "!", f"bold {RED}", f"bold {RED}", rank
-        if rank == 1:
-            return "●", RED, RED, rank
-        if raw in ("shell", "aside"):
-            return "◦", CYAN, TEXT, 3
-        return "●", state_of(session)[1], TEXT, rank
-
-    def team_chips(self, state: teamtree.TeamState) -> Text:
-        """Every member of a team on its row, in the team's order, the lead first."""
-        listed = dict(self.team_members(state.team.name))
-        items = []
-        for member in state.team.ordered:
-            session = listed.get(member.name) or state.sessions.get(member.name)
-            items.append((member.name, member.lead, *self.chip(session)))
-        return teamtree.chips(items, self.title_width, f"bold {self.accent()}")
+        """A team's row (rowwords.team_row). Folded (as it starts): its members as chips, a member at
+        work with the star's frame now. Unfolded, its members are listed under it."""
+        return tuple(drawn_cells(rowwords.row(self.listing(), key, None)))
 
     def update_team_rows(self) -> None:
         for state, _ in self.blocks:
@@ -1665,29 +1493,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if key in self.table.rows:
                 for column, value in zip(COLUMNS, self.team_cells(key)):
                     self.table.update_cell(key, column, value)
-
-    def member_cells(self, session: Session, style: str) -> tuple[Text, Text]:
-        """A team member's place in the tree, where the project goes, and the latest message to or
-        from it, where the title goes (its role, while nothing is said)."""
-        name, member = self.member_rows[session.session_id]
-        state = self.team_states[name]
-        colours = team_colours(state.team, self.accent())
-        members = next((members for st, members in self.blocks if st.team.name == name), [])
-        lead = state.team.lead is not None and member == state.team.lead.name
-        branch = "★ " if lead else "└ " if members and members[-1][0] == member else "├ "
-        place = Text.assemble((branch, f"bold {colours[member]}" if lead else MUTED),
-                              (member, f"bold {colours.get(member, TEXT)} {style}".strip()))
-        place.truncate(18, overflow="ellipsis")
-        said = teamtree.last_word(state, member)
-        if said is not None:
-            line = teamtree.word(said, member, colours)
-        else:
-            focus = next((m.focus for m in state.team.members if m.name == member), "")
-            line = Text(focus, style=MUTED)
-        line.truncate(self.title_width, overflow="ellipsis")
-        if session.session_id in self.expanded:
-            line = Text("\n").join([line, *self.expansion(session)])
-        return place, line
 
     def off_heading(self, step: int) -> None:
         """The cursor never rests on a heading: on to the next row (or back, at the end)."""
