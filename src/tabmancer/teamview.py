@@ -24,6 +24,7 @@ from . import (
     actions,
     agy,
     context,
+    handoverwords,
     improve,
     newsessions,
     picks,
@@ -462,9 +463,7 @@ class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(title("Hand the team over", self.team.name, "its new generation"))
-            yield Label("The lead wrote this for its successor. The team starts again under its name: a fresh lead "
-                        "with this handover, and the members on the right, fresh. The old sessions stay, resumable.",
-                        id="handover-about")
+            yield Label(handoverwords.TEAM_ABOUT, id="handover-about")
             with Horizontal(id="handover-body"):
                 with VerticalScroll(id="handover-text-card", classes="card"):
                     yield Static(Text(self.written), id="handover-text")  # the lead's words: never markup
@@ -493,11 +492,7 @@ class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
         return [m for m in teams.parse_members(self.query_one("#handover-members", TextArea).text) if m.name != lead]
 
     def problems(self) -> list[str]:
-        members = self.members()
-        # A name kept from before goes on in its worktree, on its branch (teams.launch): the lead is
-        # asked to keep the name of a member whose part goes on, and every such name was refused.
-        return [problem for problem, wrong in (
-            ("a member at least, one a line", not members and not self.team.decide),) if wrong]
+        return handoverwords.lineup_problems(self.team, self.members())
 
     def cap(self) -> str:
         return self.query_one("#handover-cap", Choice).value
@@ -505,20 +500,8 @@ class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
     def show_preview(self) -> None:
         members = self.members()
         chosen = self.cap()
-        self.query_one("#handover-cap-words", Label).update(
-            f"{newsessions.CAP_SHORT.get(chosen, chosen)}: {picks.CAP_WORDS[chosen]}")
-        cap = picks.cap_tokens(chosen)
-        out = Text.assemble(("Opens ", MUTED), (f"{len(members) + 1} tabs", f"bold {GREEN}"),
-                            (": the lead, with the handover", MUTED))
-        for member in members:
-            out.append("\n● ", style=GREEN)
-            out.append(member.name, style=f"bold {CYAN}")
-            cli_part = f"{member.cli} · " if member.cli != "claude" else ""
-            out.append(f"  {cli_part}{member.pick.short() or 'your default model and effort'}", style=MUTED)
-        out.append(f"\nEach under a {human(cap)} context cap." if cap else
-                   "\nEach on Claude Code's own window, with no cap.", style=MUTED)
-        for problem in self.problems():
-            out.append(f"\n▲ needs {problem}", style=AMBER)
+        self.query_one("#handover-cap-words", Label).update(handoverwords.cap_words(chosen))
+        out = Text.assemble(*handoverwords.lineup_parts(members, picks.cap_tokens(chosen), self.problems()))
         self.query_one("#handover-preview", Static).update(out)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:

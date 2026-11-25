@@ -45,6 +45,7 @@ from . import (
     focus,
     gitstate,
     handover,
+    handoverwords,
     marks,
     newforms,
     newsessions,
@@ -2045,8 +2046,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.set_timer(10, lambda: setattr(self, "handing_team", None))
             return
         self.handing_team = None
-        self.notify(f"{team.name}: its lead is writing the handover and the line-up for the rest. The new team is "
-                    "shown to you once it is done.", title="Handing the team over", timeout=10)
+        self.say_note(handoverwords.team_handing_note(team))
         self.hand_over_team(team, members)
 
     def open_handover(self, session: Session | None, how: str | None = None) -> None:
@@ -2072,7 +2072,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def start_handover(self, session: Session, how: str) -> None:
         """Hand it over now, or once it finishes if it is working."""
-        writer = actions.writer_words(how)
         now = self.sessions.get(session.session_id, session)
         if actions.busy(now):
             self.queued[session.session_id] = how
@@ -2084,9 +2083,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         # As the list has it now, not as it was when h was pressed: it may have opened or closed
         # while the dialog stood, and an open one written to by a second process was not closed.
         self.tell_elsewhere(now, "its whole conversation" if how == "self" else "a digest of it")
-        closing = "Closing it; " if now.exit is Exit.RUNNING else ""
-        self.notify(f"{closing}{writer} in the background. The fresh session opens when it is done.",
-                    title=f"Handing over {session.project}", timeout=10)
+        self.say_note(handoverwords.started_note(now, how))
         self.hand_over(now, how)
 
     def open_ones(self) -> list[Session]:
@@ -2112,11 +2109,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.open_unasked(fresh)
         else:
             self.open_sessions(fresh)
-        if left_open:
-            self.notify(f"Handed {session.project} over to a fresh session, but the old one is still open: "
-                        f"{left_open}.", title="Handed over", severity="warning", timeout=15)
-        else:
-            self.notify(f"Handed {session.project} over to a fresh session.", title="Handed over", timeout=8)
+        self.say_note(handoverwords.handed_note(session, left_open))
         self.mascot.react("handover", f"{session.project}: handed over", self.accent())
 
     @work(thread=True, group="team-handover")
@@ -2139,8 +2132,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
         def start(answer: tuple[str, str] | None) -> None:
             if answer is None:
-                self.notify(f"{team.name} is not started again: its members are closed. h in its view shows the "
-                            "handover again; s starts the team as it was.", timeout=10)
+                self.say_note(handoverwords.team_not_started_note(team))
                 return
             lines, cap = answer
             fresh = handover.next_team(teams.load().get(team.name, team), lines, cap)
@@ -2152,10 +2144,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 if isinstance(screen, TeamScreen) and screen.team.name == team.name:
                     screen.adopt(fresh)
             self.open_team(fresh, handover.team_launches(fresh, lead, written))
-            count = sum(not m.lead for m in fresh.members)
-            self.notify(f"{team.name} handed over: a fresh lead with the handover and {count} fresh "
-                        f"member{'s' if count != 1 else ''}. The old sessions stay, resumable.",
-                        title="Team handed over", timeout=10)
+            self.say_note(handoverwords.team_handed_note(team, fresh))
             self.mascot.react("handover", f"{team.name}: handed over", self.accent())
 
         self.push_screen(TeamHandoverDialog(team, written, lineup, suggested), start)

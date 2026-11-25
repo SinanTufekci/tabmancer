@@ -13,9 +13,9 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
-from . import clis, handover, sessionwords
+from . import handoverwords, sessionwords
 from .dialogs import frame, title
-from .sessions import Exit, Session, _shorten
+from .sessions import Session, _shorten
 from .theme import CYAN, MUTED, TEXT, keys
 
 
@@ -40,29 +40,12 @@ class HandoverDialog(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         session = self.session
-        is_open = session.exit is Exit.RUNNING
-        busy = is_open and session.live_state not in handover.IDLE
-        options = [Option(Text.assemble(("Write it from the transcript", f"bold {TEXT}"),
-                                        ("  cheaper; misses what was never written down\n", MUTED),
-                                        ((f"  Claude ({handover.MODEL}) writes it in about a minute; the session "
-                                          "is not resumed"), MUTED)), id="transcript")]
-        # write_itself resumes these (agy on the chain's model, so only with agy here to run it).
-        if session.cli == "claude" or (session.cli == "agy" and clis.installed("agy")):
-            on = " on the chain's model (agy)" if session.cli == "agy" else ""
-            options.insert(0, Option(Text.assemble(
-                ("Let the session write it", f"bold {TEXT}"), ("  the most complete: it knows everything\n", MUTED),
-                (f"  resumed once in the background{on}, without a tab; it writes the handover and exits", MUTED)),
-                id="self"))
+        options = [Option(Text.assemble((way.title, f"bold {TEXT}"), (f"  {way.why}\n", MUTED), (f"  {way.how}", MUTED)),
+                          id=way.id) for way in handoverwords.ways(session)]
         with Vertical():
             yield Label(title("Hand over", (session.project, f"bold {CYAN}"), f"“{_shorten(session.title, 50)}”"))
             yield Label(Text.assemble(("Context ", MUTED), fill(session)))
-            yield Label(Text("A fresh session takes over, with a full handover as its first message: the goal, "
-                             "the decisions, what is done, what is open, the gotchas and the next steps."
-                             + (" This session is closed first (its tab closes); you can still resume it later."
-                                if is_open else "")
-                             + (" It is working now, so this happens as soon as it finishes." if busy else "")
-                             + (" To go on with the same work in the same session instead, /compact in its tab "
-                                "shrinks its context." if is_open else ""), style=MUTED), id="handover-what")
+            yield Label(Text(handoverwords.about(session), style=MUTED), id="handover-what")
             yield OptionList(*options)
             yield Label(keys(("Enter", "hand over"), ("↑↓", "the other way"), ("Esc", "cancel")), classes="hint")
 
