@@ -129,3 +129,59 @@ async def test_hidden_sessions_are_not_ticked_for_reopening(fake_home, monkeypat
     async with app.run_test(size=(150, 44)) as pilot:
         await wait_for(pilot, lambda: app.sessions)
         assert app.selected == {"two"} and app.preselected == {"two"}
+
+
+async def test_what_another_dashboard_pins_shows_at_the_next_poll_and_f_here_keeps_it(fake_home):
+    """marks.json is shared by every dashboard and window: one pinned elsewhere shows here once a live
+    poll lands, and f here changes the file as it is now, so neither that pin nor a hide written after
+    the poll is lost."""
+    write(fake_home, "demo", "three", "Third task")
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: len(app.sessions) == 3)
+        marks.change(lambda now: marks.pin(now, [app.sessions["two"]]))  # another dashboard's f
+        assert "two" not in app.marks.pinned
+        app.apply_live_updates({})  # a live poll lands
+        assert app.marks.pinned == {"two"}
+        assert keys(app)[:3] == [f"{HEADING}pinned", "two", f"{HEADING}rest"]
+        marks.change(lambda now: marks.hide(now, [app.sessions["three"]]))  # and a hide, after that poll
+        await cursor_on(pilot, app, "one")
+        await pilot.press("f")
+        assert marks.Marks.load() == marks.Marks(hidden={"three"}, pinned={"one", "two"})
+        assert app.marks == marks.Marks.load()
+        assert sorted(keys(app)) == ["one", "two"]  # all pinned: one group, no headings (in the order of their mtimes)
+
+
+async def test_a_row_another_dashboard_hides_is_unticked_here(fake_home):
+    write(fake_home, "demo", "three", "Third task")
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: len(app.sessions) == 3)
+        app.selected = {"one", "three"}
+        marks.change(lambda now: marks.hide(now, [app.sessions["three"]]))
+        app.apply_live_updates({})
+        assert app.selected == {"one"} and "three" not in keys(app)
+
+
+async def test_an_unreadable_marks_file_changes_nothing_on_a_poll_and_f_leaves_it_as_it_was(fake_home):
+    """marks.json there but unreadable (garbage, or held by another writer): a poll keeps the marks the
+    list has, and f says so and saves nothing, since saving over it would wipe what it keeps."""
+    from tabmancer.config import config_dir
+
+    marks.Marks(pinned={"one"}).save()
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: len(app.sessions) == 2)
+        shown = keys(app)
+        assert shown[:2] == [f"{HEADING}pinned", "one"]
+        path = config_dir() / marks.FILE
+        path.write_text("{not json", encoding="utf-8")
+        app.apply_live_updates({})  # a live poll lands
+        assert app.marks == marks.Marks(pinned={"one"}) and keys(app) == shown
+        said = []
+        app.notify = lambda message, **_: said.append(message)
+        await cursor_on(pilot, app, "two")
+        await pilot.press("f")
+        assert said == [marks.UNREAD]
+        assert path.read_text(encoding="utf-8") == "{not json"
+        assert app.marks == marks.Marks(pinned={"one"}) and keys(app) == shown

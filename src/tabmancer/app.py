@@ -2954,22 +2954,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.close_team(team)
             return
         chosen = ([s for _, s in self.team_members(team.team.name)] if team is not None else self.chosen())
-        chosen = [s for s in chosen if s.exit is not Exit.RUNNING]
-        if not chosen:
-            self.notify("Open sessions always show: close one to hide it.", timeout=4)
-            return
-        if all(self.marks.is_hidden(s) for s in chosen):
-            for session in chosen:
-                self.marks.hidden.discard(session.session_id)
-                self.marks.projects.discard(folder_key(session.cwd))  # its project comes back with it
-            self.notify(f"Back in sight: {self.counted(chosen)}.", timeout=4)
-        else:
-            self.marks.hidden |= {s.session_id for s in chosen}
-            self.selected -= {s.session_id for s in chosen}
-            self.notify(f"Hid {self.counted(chosen)}. Nothing is deleted: X shows hidden ones, and x on one "
-                        "brings it back.", timeout=6)
-        self.marks.save()
-        self.marked()
+        self.change_marks(lambda now: marks.hide(now, chosen))
 
     def hide_project(self) -> None:
         key = self.projects.highlighted_id()
@@ -2977,18 +2962,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.notify("Pick a project in the sidebar to hide it, or a session in the list.", timeout=4)
             return
         sessions = [s for s in self.sessions.values() if folder_key(s.cwd) == key]
-        name = sessions[0].project if sessions else key
-        if key in self.marks.projects:
-            self.marks.projects.discard(key)
-            self.notify(f"The project {name} is back in sight.", timeout=4)
-        else:
-            self.marks.projects.add(key)
-            # Ticks on rows out of sight went on counting: Enter opened a session the list no longer showed.
-            self.selected -= {s.session_id for s in sessions if s.exit is not Exit.RUNNING}
-            self.notify(f"Hid the project {name} ({self.counted(sessions)}; open ones still show). X shows it "
-                        "again, and x on it brings it back.", timeout=6)
-        self.marks.save()
-        self.marked()
+        self.change_marks(lambda now: marks.hide_project(now, key, sessions))
 
     def action_toggle_hidden(self) -> None:
         self.show_hidden = not self.show_hidden
@@ -2999,17 +2973,33 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         chosen = self.chosen()
         if not chosen:
             return
-        self.marks.pinned, pinned = VM.toggle_pins(self.marks.pinned, {s.session_id for s in chosen})
-        if pinned:
-            self.notify(f"Pinned {self.counted(chosen)} above the rest.", timeout=3)
-        else:
-            self.notify(f"Unpinned {self.counted(chosen)}.", timeout=3)
-        self.marks.save()
+        self.change_marks(lambda now: marks.pin(now, chosen))
+
+    def change_marks(self, how: Callable[[marks.Marks], marks.Changed]) -> None:
+        """f, x: marks.json changed as it is now (marks.change: what another dashboard or a window changed
+        since this one read it stays), said, and the list following. Ticks on rows it took out of sight
+        go: Enter would open a session the list no longer shows. When marks.json is there but could not be
+        read, nothing changes (saving over it would wipe what it keeps), and it says so."""
+        changed = marks.change(how)
+        if changed is None:
+            self.notify(marks.UNREAD, severity="warning", timeout=6)
+            return
+        self.marks, done = changed
+        self.selected -= done.hid
+        self.notify(done.words, timeout=done.seconds)
         self.marked()
 
-    @staticmethod
-    def counted(sessions: list[Session]) -> str:
-        return f"“{sessions[0].title}”" if len(sessions) == 1 else f"{len(sessions)} sessions"
+    def reread_marks(self) -> None:
+        """At each live poll: what another dashboard or a window pinned or hid since this one read
+        marks.json shows here (ticks on rows it took out of sight go, as with x). Read once, with no
+        wait on the UI thread: held by another writer or unreadable, the list keeps its marks and the
+        next poll reads again."""
+        now = marks.Marks.read(tries=1)
+        if now is None or now == self.marks:
+            return
+        self.marks = now
+        self.selected -= {sid for sid in self.selected if sid in self.sessions and now.is_hidden(self.sessions[sid])}
+        self.marked()
 
     def marked(self) -> None:
         """Hidden or pinned ones changed: the list, the counts and the sidebar follow."""
@@ -3052,6 +3042,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.call_from_thread(self.apply_live_updates, updates, full)
 
     def apply_live_updates(self, updates: dict[str, Session], full: bool = False) -> None:
+        self.reread_marks()
         self.engine.live(updates, full, self.resting_members())
 
     def monitoring(self) -> bool:
