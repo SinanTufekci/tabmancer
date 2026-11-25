@@ -9,31 +9,11 @@ from __future__ import annotations
 
 import functools
 import inspect
-import traceback
-from datetime import datetime
-from pathlib import Path
 
 from textual import work as textual_work
 from textual.app import App
 
-from . import __version__
-from .config import config_dir
-
-LOG = "errors.log"
-LOG_MOST = 256 * 1024  # the newest errors only: enough for a report, never a growing file
-
-
-def log_error(where: str, error: BaseException) -> Path:
-    path = config_dir() / LOG
-    text = (f"--- {datetime.now():%Y-%m-%d %H:%M:%S} in {where} (tabmancer {__version__})\n"
-            + "".join(traceback.format_exception(error)))
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        old = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-        path.write_text((old + text)[-LOG_MOST:], encoding="utf-8")
-    except OSError:
-        pass
-    return path
+from .errorlog import LOG, LOG_MOST, log_error  # noqa: F401  (named here for older callers)
 
 
 def work(**options):

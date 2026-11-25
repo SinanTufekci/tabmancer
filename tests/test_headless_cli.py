@@ -54,6 +54,8 @@ usage.read_usage = list  # nor `claude -p /usage`
 usage.read_codex = lambda now=None: []
 agy._run_usage = lambda timeout: None  # nor `agy -p /usage`
 summarize.ask = lambda prompt, model, timeout=180, effort="": "A made-up week: the checkout got done."
+"""
+CLI = """
 from tabmancer.cli import main
 try:
     main(sys.argv[1:])
@@ -67,7 +69,8 @@ def home(tmp_path_factory) -> Path:
     return tmp_path_factory.mktemp("headless")
 
 
-def run(home: Path, *command: str) -> subprocess.CompletedProcess:
+def run(home: Path, *command: str, tail: str = CLI) -> subprocess.CompletedProcess:
+    """The CLI with these arguments, guarded; or, given a tail, that code in its place."""
     env = {name: value for name, value in os.environ.items()
            if not name.startswith(("ANTHROPIC_", "CLAUDE_", "CODEX_", "GEMINI_"))}
     env.update(PYTHONPATH=str(SOURCE), HOME=str(home), USERPROFILE=str(home), APPDATA=str(home / "appdata"),
@@ -77,7 +80,7 @@ def run(home: Path, *command: str) -> subprocess.CompletedProcess:
                TABMANCER_UPDATE_CHECK="0", TABMANCER_CONTEXT_CAP="auto", COLUMNS="120",
                PATH=os.path.dirname(sys.executable))  # no claude, agy or codex to find
     given = {"BLOCKED": BLOCKED, "HOME": str(home), "REAL_HOME": str(REAL_HOME)}
-    code = "".join(f"{name} = {value!r}\n" for name, value in given.items()) + GUARD
+    code = "".join(f"{name} = {value!r}\n" for name, value in given.items()) + GUARD + tail
     return subprocess.run([sys.executable, "-c", code, *command], capture_output=True, text=True,
                           encoding="utf-8", errors="replace", env=env, cwd=home, timeout=120,
                           stdin=subprocess.DEVNULL, check=False)
@@ -128,11 +131,27 @@ def test_the_guard_catches_textual_and_a_real_file(home):
     """The guard itself: what needs Textual is stopped (`live` is the dashboard, Textual's on
     purpose), and so is reading the real ~/.claude/.credentials.json or starting a program."""
     assert "blocked: textual" in run(home, "live").stderr
-    given = {"BLOCKED": BLOCKED, "HOME": str(home), "REAL_HOME": str(REAL_HOME)}
-    guard = "".join(f"{name} = {value!r}\n" for name, value in given.items())
-    guard += GUARD.split("from tabmancer import demo")[0]  # the finder and the audit hook only
     for code, said in ((f"open({str(REAL_HOME / '.claude' / '.credentials.json')!r})", "opened a real file"),
                        ("import subprocess; subprocess.run(['claude', '--version'])", "started a program")):
-        stopped = subprocess.run([sys.executable, "-c", guard + code], capture_output=True, text=True,
-                                 env={**os.environ, "PYTHONPATH": str(SOURCE)}, timeout=60, check=False)
-        assert f"the test {said}" in stopped.stderr
+        assert f"the test {said}" in run(home, tail=code).stderr
+
+
+# What the CLI's commands and the dashboard's screens share, lifted out of the screens: each loads,
+# and does a little, with neither Textual nor Qt.
+LIFTED = """
+from tabmancer import errorlog, pixelcharts, statstext
+
+palette, rows = pixelcharts.draw([1.0, 3.0, 2.0], 30, 12, (1, 2, 3), (200, 100, 0), (9, 9, 9))
+assert len(rows) == 12 and len(palette) > 2
+assert pixelcharts.draw_week([[0.0] * 24, [1.0] * 24], (8, 16), 24 * 3 * 8, 2 * 16, (0, 0, 0), (9, 9, 9),
+                             (5, 5, 5))[1]
+assert errorlog.log_error("headless", ValueError("made up")).read_text(encoding="utf-8").count("made up") == 1
+assert statstext.bar(5, 10, 10) and statstext.TABS[0] == "overview"
+print("LIFTED ok")
+"""
+
+
+def test_the_lifted_modules_work_without_textual_or_qt(home):
+    done = run(home, tail=LIFTED)
+    assert done.returncode == 0, done.stderr[-3000:]
+    assert "LIFTED ok" in done.stdout

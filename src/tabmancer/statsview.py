@@ -23,6 +23,7 @@ from textual.widgets import Label, Static, TabbedContent, TabPane
 from . import history, sixel, stats, summarize, usage
 from . import report as reports
 from .dialogs import frame
+from .pixelcharts import draw_bars, draw_week
 from .safework import work
 from .sessions import Session
 
@@ -57,7 +58,7 @@ from .statstext import (  # noqa: F401
     work_parts,
 )
 from .theme import MUTED, TEXT, keys
-from .tokenchart import PixelPicture, draw_bars, draw_week
+from .tokenchart import PixelPicture
 from .tokens import Report
 from .widgets import big
 
