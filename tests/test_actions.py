@@ -524,9 +524,41 @@ def test_a_queue_file_that_is_not_a_queue(processes):
     for junk in ([1, 2], {"a": "self"}, {"a": {"how": "self"}}, {"a": {"how": 3, "by": actor.me()}}):
         config.write_json(actions.QUEUE, junk)
         assert actions.read_queued() == {}
-    (config.config_dir() / actions.QUEUE).write_text("{half", encoding="utf-8")
-    assert actions.read_queued() == {} and actions.save_queued({"a": "self"})
-    assert actions.read_queued() == {"a": "self"}
+    config.write_json(actions.QUEUE, [1, 2])  # it reads, but holds no queue: nothing to keep, written over
+    assert actions.save_queued({"a": "self"}) and actions.read_queued() == {"a": "self"}
+
+
+@pytest.mark.parametrize("unreadable", ["half", "folder"])
+def test_a_queue_file_that_cannot_be_read_is_left_as_it_is(processes, unreadable):
+    """Saving only this window's entries would drop what other windows queued: nothing is written, and
+    the note for what h did says so (one note: the window's line shows one at a time)."""
+    from tabmancer import config
+
+    path = config.config_dir() / actions.QUEUE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if unreadable == "half":
+        path.write_text('{"b": {"how": "self", "by": {"pid": 20', encoding="utf-8")  # another window writing
+    else:
+        path.mkdir()
+    before = path.read_bytes() if path.is_file() else None
+    assert actions.save_queued({"a": "self"}) is False
+    assert actions.save_queued({}) is False  # not even to clear this window's entries
+    assert (path.read_bytes() if path.is_file() else None) == before and path.exists()
+    assert actions.read_queued() == {}
+
+    path.unlink() if path.is_file() else path.rmdir()
+    assert actions.save_queued({"a": "self"}) and actions.read_queued() == {"a": "self"}
+
+
+def test_a_queue_note_says_when_the_queue_was_not_saved():
+    told = actions.queued_note(one(), "self")
+    assert actions.queue_note(told, True) is told
+    unsaved = actions.queue_note(told, False)
+    assert unsaved.words == f"{told.words} {actions.QUEUE_UNSAVED.words}"
+    assert (type(unsaved), unsaved.title, unsaved.severity, unsaved.seconds) == (type(told), told.title, "warning", 10)
+    short = actions.queue_note(actions.unqueued_note(one()), False)
+    assert (short.severity, short.seconds) == ("warning", actions.QUEUE_UNSAVED.seconds)
+    assert actions.queue_note(actions.Note("x", "error", 3), False).severity == "error"
 
 
 def test_what_h_says_on_a_working_session_and_when_it_finishes():

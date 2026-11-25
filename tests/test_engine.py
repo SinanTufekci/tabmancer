@@ -104,6 +104,21 @@ def test_a_poll_says_what_turned_hands_over_and_delivers_in_order(claims):
     assert (st.full_polls, st.full_poll_due, st.sessions) == (1, False, updates)
 
 
+def test_a_queue_not_saved_is_said_with_what_h_did(claims, monkeypatch):
+    monkeypatch.setattr(actions, "save_queued", lambda queued: False)  # the file was there but unreadable
+    front = Front()
+    busy, q = s("busy"), s("q")
+    eng = made(front, acts=True, sessions={"busy": busy, "q": q}, queued={"q": "self"})
+    eng.start_handover(busy, "self")
+    eng.handover(busy)  # h again: not after all
+    eng.live({"q": replace(q, live_state="idle")}, False, set())
+    notes = [call[1] for call in front.calls if call[0] == "say_note"]
+    said = [actions.queued_note(busy, "self"), actions.unqueued_note(busy), "q finished: handing it over now."]
+    assert [n.words for n in notes] == [f"{getattr(w, 'words', w)} {actions.QUEUE_UNSAVED.words}" for w in said]
+    assert all(n.severity == "warning" for n in notes)
+    assert "hand_over" in front.names()  # the handover still happens from here
+
+
 def test_the_one_that_watches_sends_no_desktop_note(claims):
     front = Front()
     eng = made(front, sessions={"a": s("a")})

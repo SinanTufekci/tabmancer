@@ -410,9 +410,9 @@ class Engine:
         for sid, fresh in updates.items():
             if sid in handing:
                 how = state.queued.pop(sid)  # it finished: the handover asked for with h
-                actions.save_queued(state.queued)
+                saved = actions.save_queued(state.queued)
                 done = actions.queued_finished(sid, fresh, front.monitoring(), actor.first_to)
-                front.say_note(done.note)
+                front.say_note(actions.queue_note(done.note, saved))
                 if not done.hand_over:
                     continue
                 state.unasked.add(sid)  # its fresh session opens by itself: in the dashboard's window
@@ -516,8 +516,7 @@ class Engine:
             return
         if session.session_id in state.queued:  # h again: not after all
             del state.queued[session.session_id]
-            actions.save_queued(state.queued)
-            front.say_note(actions.unqueued_note(session))
+            front.say_note(actions.queue_note(actions.unqueued_note(session), actions.save_queued(state.queued)))
             front.update_row(session)
             return
         if how is not None:
@@ -532,8 +531,7 @@ class Engine:
         current = state.sessions.get(session.session_id, session)
         if actions.busy(current):
             state.queued[session.session_id] = how
-            actions.save_queued(state.queued)
-            front.say_note(actions.queued_note(session, how))
+            front.say_note(actions.queue_note(actions.queued_note(session, how), actions.save_queued(state.queued)))
             front.update_row(current)
             return
         # As the list has it now, not as it was when h was pressed: it may have opened or closed

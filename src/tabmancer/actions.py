@@ -15,6 +15,7 @@ so every window shows it.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -33,7 +34,7 @@ from . import (
     viewmodel,
     wrapped,
 )
-from .config import merge_json, read_json, write_json
+from .config import config_dir, merge_json, read_json, write_json
 from .launch import Launch, Mode, continue_prompt, run_in_background
 from .sessions import Exit, Session, Status
 from .tokens import human
@@ -883,10 +884,28 @@ def read_queued() -> dict[str, str]:
     return found
 
 
+QUEUE_UNSAVED = Note(f"{QUEUE} could not be read or saved, so it was left as it was: other tabmancer windows "
+                     "may still show the queue as it was before.", "warning", 8)
+
+
+def queue_note(note: Note, saved: bool) -> Note:
+    """The note for what h did to the queue, with QUEUE_UNSAVED's words after it when save_queued could not
+    save it: one note (a Told keeps its title), as the window's line shows one at a time."""
+    if saved:
+        return note
+    return replace(note, words=f"{note.words} {QUEUE_UNSAVED.words}",
+                   severity="error" if note.severity == "error" else "warning",
+                   seconds=max(note.seconds or 0, QUEUE_UNSAVED.seconds or 0))
+
+
 def save_queued(mine: dict[str, str]) -> bool:
     """This window's queued handovers, saved beside the other open windows' (theirs are kept, a closed
-    one's go). False when the file could not be written."""
+    one's go). False, the file left as it was, when it is there but could not be read (saving only this
+    window's would drop the other windows' entries) or could not be written: the caller says
+    QUEUE_UNSAVED. A file that reads but holds no queue has nothing to keep and is written over."""
     saved = read_json(QUEUE)
+    if saved is None and os.path.lexists(config_dir() / QUEUE):
+        return False
     entries = {}
     for sid, entry in (saved.items() if isinstance(saved, dict) else ()):
         if isinstance(entry, dict) and not actor.is_me(entry.get("by")) and actor.running(entry.get("by")):
