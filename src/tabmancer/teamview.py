@@ -1438,15 +1438,19 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         """Where the members run: each in a tab, or in the background with only the lead in a tab.
         Peers each in a tab: you talk to every one of them. And where they work: the project, or
         worktrees of their own."""
-        if self.is_mounted and self.peers():
-            out = Text.assemble(pill("each in a tab", True), ("(peers: you talk to each)", MUTED))
-        else:
-            out = Text.assemble(pill("each in a tab", not self.background), "  ", ("Ctrl+B", MUTED), "\n",
-                                pill("the members in the background", self.background))
+        where = self.form.where(self.is_mounted and self.peers())
+        (first, on), *others = where.runs
+        out = Text.assemble(pill(first, on), (where.note, MUTED))
+        if where.key:
+            out.append("  ")
+            out.append(where.key, style=MUTED)
+        for words, on in others:
+            out.append("\n")
+            out.append_text(pill(words, on))
         out.append("\n")
-        out.append("[x] " if self.worktrees else "[ ] ", style=f"bold {CYAN}" if self.worktrees else MUTED)
-        out.append("own git worktrees", style=f"bold {TEXT}" if self.worktrees else MUTED)
-        out.append("  Ctrl+O", style=MUTED)
+        out.append("[x] " if where.worktrees else "[ ] ", style=f"bold {CYAN}" if where.worktrees else MUTED)
+        out.append(where.worktrees_words, style=f"bold {TEXT}" if where.worktrees else MUTED)
+        out.append(f"  {where.worktrees_key}", style=MUTED)
         return out
 
     def action_toggle_worktrees(self) -> None:

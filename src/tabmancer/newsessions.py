@@ -9,9 +9,7 @@ opens a new session in each, all in one go, optionally with the same first messa
 from __future__ import annotations
 
 import contextlib
-import os
 import time
-from pathlib import Path
 from typing import ClassVar
 
 from rich.text import Text
@@ -48,7 +46,7 @@ from .newforms import (  # noqa: F401  (re-exported: the dashboard, cli and the 
     term_pattern,
     topics,
 )
-from .sessions import folder_key
+from .sessions import folder_key  # noqa: F401  (re-exported: the tests use it)
 from .summarize import SummaryError
 from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, keys
 
@@ -112,20 +110,26 @@ class NewSessions(ModalScreen[Request | None]):
 
     def __init__(self, found: list[Project], ticked: set[str] | None = None) -> None:
         super().__init__()
-        self.found = found
-        self.ticked: set[str] = set(ticked or ())  # folder keys
-        self.extra: list[Project] = []  # folders typed in by hand
-        self.shown: dict[str, Project] = {}
-        self.cli = default_cli()
-        self.linked = False  # Ctrl+L: the lines as a team of peers in the one folder ticked
-        # The router, asked only with Ctrl+R: its answers by the message they were for, the messages
-        # it is being asked about, and whether an answer is taken into the rows when it comes.
-        self.routes: dict[tuple[str, str], router.Route | str] = {}  # by (CLI, message); a string: why none
-        self.routing: set[tuple[str, str]] = set()
-        self.take_route = False
+        # The folders, the CLI, the linking and the router's answers (asked only with Ctrl+R): the rules
+        # are newforms.NewForm's, this draws them.
+        self.form = newforms.NewForm(found=found, ticked=set(ticked or ()))
         self.improving: str | None = None  # Ctrl+E: the first message being rewritten, as it was sent
         self.improve_note = Improving(self.MESSAGE_NOTE, f"improving with {improve.MODEL}")
-        self.quota_read = False  # agy's quota is read once, when agy is first picked
+
+    # The form's state by the names the dashboard's tests know it by.
+    found = property(lambda self: self.form.found)
+    ticked = property(lambda self: self.form.ticked)
+    shown = property(lambda self: self.form.shown)
+    routes = property(lambda self: self.form.routes)
+    routing = property(lambda self: self.form.routing)
+
+    @property
+    def cli(self) -> str:
+        return self.form.cli
+
+    @cli.setter
+    def cli(self, value: str) -> None:
+        self.form.cli = value
 
     def compose(self) -> ComposeResult:
         # Ids of their own: the dashboard's stylesheet hides its own #filter box.
@@ -180,7 +184,7 @@ class NewSessions(ModalScreen[Request | None]):
 
     def can_link(self) -> str:
         """Why the lines cannot be linked now; empty when they can (newforms.can_link)."""
-        return newforms.can_link(self.cli, self.message.text, len(self.ticked))
+        return self.form.can_link(self.message.text)
 
     def show_link(self) -> None:
         """Under the messages, once there are two lines or more: what they open, apart or linked as a
@@ -190,17 +194,18 @@ class NewSessions(ModalScreen[Request | None]):
         label.display = lines >= 2
         if lines >= 2:
             why = self.can_link()
-            out = Text.assemble(pill(f"{lines} sessions apart", not self.linked or bool(why)), " ",
-                                pill("linked, as peers", self.linked and not why), "  ")
-            out.append(f"Ctrl+L ({why})" if why and self.linked else "Ctrl+L",
-                       style=AMBER if why and self.linked else MUTED)
+            linked = self.form.linked
+            out = Text.assemble(pill(f"{lines} sessions apart", not linked or bool(why)), " ",
+                                pill("linked, as peers", linked and not why), "  ")
+            out.append(f"Ctrl+L ({why})" if why and linked else "Ctrl+L",
+                       style=AMBER if why and linked else MUTED)
             label.update(out)
         self.show_opens()
 
     def show_opens(self) -> None:
         """The card on the right: a line for each tab that will open, the folder and its message."""
         card, opens = self.query_one("#opens-card"), self.query_one("#new-opens", Static)
-        what = newforms.opens(self.chosen(), self.message.text, self.linked and not self.can_link())
+        what = self.form.opens(self.message.text)
         if not what.rows:
             card.border_title = what.title
             opens.update(Text("Tick folders on the left with Space.", style=MUTED))
@@ -227,7 +232,7 @@ class NewSessions(ModalScreen[Request | None]):
         self.show_route()  # the router is asked only with Ctrl+R: never half-way through a message
 
     def action_link(self) -> None:
-        self.linked = not self.linked
+        self.form.toggle_link()
         self.show_link()
 
     @property
@@ -241,13 +246,13 @@ class NewSessions(ModalScreen[Request | None]):
     # --- the list -------------------------------------------------------------------
 
     def candidates(self) -> list[Project]:
-        return find(self.filter_box.value, self.extra + self.found)
+        return find(self.filter_box.value, self.form.everything())
 
     def show_folders(self) -> None:
         folders = self.folders
         keep = folders.highlighted or 0
         folders.clear_options()
-        self.shown = {folder_key(p.cwd): p for p in self.candidates()}
+        self.form.listed(self.filter_box.value)
         folders.add_options([Option(self.prompt_for(key, p), id=key) for key, p in self.shown.items()])
         if self.shown:
             folders.highlighted = min(keep, folders.option_count - 1)
@@ -256,7 +261,7 @@ class NewSessions(ModalScreen[Request | None]):
             folders.add_option(Option(Text(f"Nothing matches “{typed}”. A folder path works too." if typed else
                                            "No recent projects. Type a folder path in the box above.",
                                            style=MUTED), disabled=True))
-        everything = len(self.extra) + len(self.found)
+        everything = len(self.form.everything())
         self.query_one("#folders-card").border_subtitle = (
             f"{len(self.shown)} of {everything}" if self.filter_box.value.strip() else
             f"{everything} project{'s' * (everything != 1)}")
@@ -270,7 +275,7 @@ class NewSessions(ModalScreen[Request | None]):
         list_ = self.folders
         width = (list_.size.width - list_.styles.scrollbar_size_vertical - 1 if self.is_mounted else 0)
         width = width if width > 24 else 48
-        tag = max((len(", ".join(sorted(p.used - {"claude"}))) for p in self.extra + self.found), default=0)
+        tag = max((len(", ".join(sorted(p.used - {"claude"}))) for p in self.form.everything()), default=0)
         tag = tag + 2 if tag else 0
         return max(8, width - 2 - TAIL - tag), tag
 
@@ -316,11 +321,8 @@ class NewSessions(ModalScreen[Request | None]):
             self.show_opens()
 
     def toggle(self, key: str | None) -> None:
-        if key is None or key not in self.shown:
+        if not self.form.toggle(key):
             return
-        self.ticked ^= {key}
-        if key in self.ticked and key not in {folder_key(p.cwd) for p in self.found + self.extra}:
-            self.extra.insert(0, self.shown[key])  # a typed folder stays once it is ticked
         self.folders.replace_option_prompt(key, self.prompt_for(key, self.shown[key]))
         self.show_title()
         if self.is_mounted:
@@ -339,8 +341,7 @@ class NewSessions(ModalScreen[Request | None]):
             choice = self.query_one(f"#new-{name}", Choice)
             choice.display = shown
             choice.set_class(not on, "-off")
-        if self.cli == "agy" and not self.quota_read:
-            self.quota_read = True  # once a dialog: what agy has left, for the chain's line
+        if self.form.wants_quota():  # once a dialog: what agy has left, for the chain's line
             self.run_worker(self.read_quota, thread=True, group="agy-quota", exit_on_error=False)
         self.show_pick()
 
@@ -401,35 +402,21 @@ class NewSessions(ModalScreen[Request | None]):
 
     def known(self) -> list[newforms.Project]:
         """The ticked folders' projects, as the list knows them."""
-        known = {folder_key(p.cwd): p for p in self.extra + self.found} | self.shown
-        return [known[key] for key in self.ticked if key in known]
+        return self.form.known()
 
     def chosen(self) -> list[str]:
-        return [project.cwd for project in self.known()]
+        return self.form.chosen()
 
     def chosen_names(self) -> list[str]:
-        return [project.name for project in self.known()]
+        return self.form.chosen_names()
 
     def ask_route(self, take: bool = False) -> None:
         """Ask the router about the first message as it is now, unless it was asked already: one
         quick call to a small model, in a thread. With take, its pick goes into the rows when it comes."""
-        key = self.route_key()
-        if self.cli not in router.CLIS or not router.worth_routing(key):
-            self.show_route()
-            return
-        slot = (self.cli, key)  # each CLI has picks of its own for the same message
-        self.take_route = take or (self.take_route and slot in self.routing)
-        found = self.routes.get(slot)
-        # A guess made when the router was not reached is asked again.
-        if isinstance(found, router.Route) and not (take and found.guessed):
-            if take:
-                self.take(found)
-            self.show_route()
-            return
-        if slot not in self.routing:
-            self.routing.add(slot)
-            self.routes.pop(slot, None)  # asked again after it failed
-            folders = self.chosen_names()
+        asked = self.form.ask(self.message.text, take)
+        self.put(asked.take)
+        if asked.slot is not None:
+            slot, folders = asked.slot, self.chosen_names()
             self.run_worker(lambda: self.ask_router(slot, folders), thread=True, group="route", exit_on_error=False)
         self.show_route()
 
@@ -447,21 +434,21 @@ class NewSessions(ModalScreen[Request | None]):
                 self.app.call_from_thread(self.routed, slot, found)
 
     def routed(self, slot: tuple[str, str], found: router.Route | str) -> None:
-        self.routing.discard(slot)
-        self.routes[slot] = found
-        if not self.is_mounted or slot != (self.cli, self.route_key()):
+        values = self.form.routed(slot, found, self.form.slot(self.message.text) if self.is_mounted else None)
+        if values is None:
             return  # the message or the CLI has changed since: kept, should it come back
-        if isinstance(found, router.Route) and self.take_route:
-            self.take(found)
-        self.take_route = False
+        self.put(values)
         self.show_route()
 
     def take(self, route: router.Route) -> None:
         """The router's pick into the rows: what it named, the rest as it was. An agy pick goes into
         agy's row (Claude Code's stay as they were): as "chain" when it is what the chain picks now,
         so the sessions still follow the quota when they open; another CLI's pick is only said."""
-        self.take_route = False
-        for row, value in newforms.route_take(route).items():
+        self.put(self.form.taking(route))
+
+    def put(self, values: dict[str, str]) -> None:
+        """Row values (newforms.route_take) into the rows."""
+        for row, value in values.items():
             self.query_one(f"#new-{row}", Choice).pick(value)
 
     def taken(self, route: router.Route) -> bool:
@@ -470,9 +457,7 @@ class NewSessions(ModalScreen[Request | None]):
     def show_route(self) -> None:
         """The router's line, under the rows: what it suggests and why, that it is asking, or why not."""
         label = self.query_one("#new-route", Label)
-        slot = (self.cli, self.route_key())
-        parts = newforms.route_line(self.cli, self.message.text, slot in self.routing, self.routes.get(slot),
-                                    self.take_route, self.pick())
+        parts = self.form.route_line(self.message.text, self.pick())
         label.display = parts is not None
         if parts is not None:
             label.update(Text.assemble(*((text, TONES[tone]) for text, tone in parts)))
@@ -539,7 +524,7 @@ class NewSessions(ModalScreen[Request | None]):
     # --- actions --------------------------------------------------------------------
 
     def action_next_cli(self) -> None:
-        self.cli = newforms.next_cli(self.cli)
+        self.form.next_cli()
         self.show_cli()
         self.show_link()
 
@@ -551,24 +536,23 @@ class NewSessions(ModalScreen[Request | None]):
             if not self.message.read_only:
                 self.message.insert("\n")
             return
-        box = self.filter_box
-        typed = Path(os.path.expanduser(box.value.strip())) if box.value.strip() else None
-        if self.focused is box and typed is not None and typed.is_dir():
-            key = folder_key(str(typed))
-            if key not in self.ticked:  # Enter on a typed folder ticks it; the next Enter starts
-                if key not in self.shown:  # typed a moment ago: the list may not have taken it in yet
-                    self.show_folders()
-                self.toggle(key)
-                box.value = ""
-                self.folders.focus()
-                return
-        if not self.ticked:  # Enter on one folder without ticking anything opens that one
-            folders = self.folders
-            if folders.highlighted is None or not folders.option_count:
-                self.notify("Tick the folders first (Space).", severity="warning")
-                return
-            self.toggle(folders.get_option_at_index(folders.highlighted).id)
-        self.dismiss(newforms.request(self.chosen(), self.cli, self.message.text, self.pick(), self.linked))
+        box, folders = self.filter_box, self.folders
+        listed = folders.highlighted is not None and bool(folders.option_count)
+        step = self.form.enter(box.value if self.focused is box else None,
+                               folders.get_option_at_index(folders.highlighted).id if listed else None, listed)
+        if step.kind == newforms.TICK:  # Enter on a typed folder ticks it; the next Enter starts
+            if step.key not in self.form.shown:  # typed a moment ago: the list may not have taken it in yet
+                self.show_folders()
+            self.toggle(step.key)
+            box.value = ""
+            folders.focus()
+            return
+        if step.kind == newforms.REFUSE:
+            self.notify(step.note, severity="warning")
+            return
+        if step.key is not None:  # Enter on one folder without ticking anything opens that one
+            self.toggle(step.key)
+        self.dismiss(self.form.request(self.message.text, self.pick()))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

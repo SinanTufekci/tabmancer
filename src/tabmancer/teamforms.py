@@ -121,6 +121,20 @@ class Keep:
 
 
 @dataclass
+class Where:
+    """Where the members run and where they work, as the form shows it: the ways to run them as
+    (words, picked) pills, the key that switches them ('' for peers, each in a tab, with a note
+    instead), and the own-worktrees box, ticked or not, with its key."""
+
+    runs: list[tuple[str, bool]]
+    key: str = ""
+    note: str = ""
+    worktrees: bool = False
+    worktrees_words: str = "own git worktrees"
+    worktrees_key: str = "Ctrl+O"
+
+
+@dataclass
 class Preview:
     """The right-hand card as the boxes say: its title (with whether it is the green 'what opens'), the
     ready mark, what is still missing (said louder once Ctrl+S was tried), and the line under it in
@@ -268,6 +282,13 @@ class TeamForm:
         """Ctrl+O: each member (not the lead) in a git worktree of its own, on a branch of its own, so
         two members' half-done changes never mix in one checkout."""
         self.worktrees = not self.worktrees
+
+    def where(self, peers: bool) -> Where:
+        """Where the members run and work, as the form says it (peers: whether the box is a team of peers)."""
+        if peers:
+            return Where([("each in a tab", True)], note="(peers: you talk to each)", worktrees=self.worktrees)
+        return Where([("each in a tab", not self.background), ("the members in the background", self.background)],
+                     key="Ctrl+B", worktrees=self.worktrees)
 
     def keep_step(self, members: str) -> Keep:
         """Ctrl+L: keep the members in the box as a line-up of your own, under a name (asked for, then

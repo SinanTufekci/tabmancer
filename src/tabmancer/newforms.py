@@ -372,6 +372,176 @@ def route_line(cli: str, message: str, asking: bool, found: router.Route | str |
             (" picks a model, effort and context for this message.", "muted")]
 
 
+# --- the form's state ----------------------------------------------------------------------------
+
+TICK_FIRST = "Tick the folders first (Space)."
+TICK, START, REFUSE = "tick", "start", "refuse"  # what Enter does (NewForm.enter)
+
+
+@dataclass(frozen=True)
+class RouteAsk:
+    """What Ctrl+R (or a look at the router) comes to: the router to ask in the background about
+    `slot` (CLI, message), or the row values to take now from an answer already there (empty: none)."""
+
+    slot: tuple[str, str] | None = None
+    take: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Enter:
+    """What Enter does: tick a folder typed in the filter box (and start nothing yet), start (ticking
+    `key` first, the highlighted folder when none was ticked), or refuse with a note."""
+
+    kind: str
+    key: str | None = None
+    note: str = ""
+
+
+@dataclass
+class NewForm:
+    """The n form's state beyond its boxes: the projects found and the folders typed in (kept once
+    ticked), those ticked (by folder key), those the filter shows, the CLI, Ctrl+L's linking, whether
+    agy's quota was read, and the router: its answers by (CLI, message), a string when there is none,
+    the messages it is being asked about, and whether an answer goes into the rows when it comes. The
+    terminal dialog (newsessions.NewSessions) draws it; a desktop dialog can draw the same."""
+
+    found: list[Project] = field(default_factory=list)
+    ticked: set[str] = field(default_factory=set)  # folder keys
+    extra: list[Project] = field(default_factory=list)  # folders typed in by hand
+    shown: dict[str, Project] = field(default_factory=dict)  # what the filter shows, by folder key
+    cli: str = field(default_factory=default_cli)
+    linked: bool = False  # Ctrl+L: the lines as a team of peers in the one folder ticked
+    routes: dict[tuple[str, str], router.Route | str] = field(default_factory=dict)
+    routing: set[tuple[str, str]] = field(default_factory=set)
+    take_route: bool = False
+    quota_read: bool = False  # agy's quota is read once, when agy is first picked
+
+    # --- the folders -------------------------------------------------------------------------------
+
+    def everything(self) -> list[Project]:
+        """The folders typed in, then the projects found."""
+        return self.extra + self.found
+
+    def listed(self, typed: str) -> dict[str, Project]:
+        """What the filter shows for what is typed in its box (newforms.find), kept as `shown`."""
+        self.shown = {folder_key(p.cwd): p for p in find(typed, self.everything())}
+        return self.shown
+
+    def toggle(self, key: str | None) -> bool:
+        """Space on a folder shown: ticked or not. A folder typed in stays listed once it is ticked.
+        False when there is no such folder shown (nothing changes)."""
+        if key is None or key not in self.shown:
+            return False
+        self.ticked ^= {key}
+        if key in self.ticked and key not in {folder_key(p.cwd) for p in self.everything()}:
+            self.extra.insert(0, self.shown[key])
+        return True
+
+    def known(self) -> list[Project]:
+        """The ticked folders' projects, as the list knows them."""
+        known = {folder_key(p.cwd): p for p in self.everything()} | self.shown
+        return [known[key] for key in self.ticked if key in known]
+
+    def chosen(self) -> list[str]:
+        return [project.cwd for project in self.known()]
+
+    def chosen_names(self) -> list[str]:
+        return [project.name for project in self.known()]
+
+    # --- the CLI and the lines ---------------------------------------------------------------------
+
+    def next_cli(self) -> None:
+        """Ctrl+O: the next CLI turned on."""
+        self.cli = next_cli(self.cli)
+
+    def wants_quota(self) -> bool:
+        """Whether agy's quota is to be read now (once a dialog, when agy is picked): for the chain's line."""
+        if self.cli == "agy" and not self.quota_read:
+            self.quota_read = True
+            return True
+        return False
+
+    def can_link(self, message: str) -> str:
+        """Why the lines cannot be linked now; empty when they can (newforms.can_link)."""
+        return can_link(self.cli, message, len(self.ticked))
+
+    def toggle_link(self) -> None:
+        """Ctrl+L: the lines apart, or linked as a team of peers."""
+        self.linked = not self.linked
+
+    def opens(self, message: str) -> Opens:
+        """What will open, for the card on the right."""
+        return opens(self.chosen(), message, self.linked and not self.can_link(message))
+
+    def request(self, message: str, pick: picks.Pick) -> Request:
+        """What Ctrl+S (or Enter) asks for."""
+        return request(self.chosen(), self.cli, message, pick, self.linked)
+
+    # --- the router --------------------------------------------------------------------------------
+
+    def slot(self, message: str) -> tuple[str, str]:
+        """The router's answers are kept by this: each CLI has picks of its own for the same message."""
+        return self.cli, route_key(message)
+
+    def ask(self, message: str, take: bool = False) -> RouteAsk:
+        """Ask the router about the first message as it is now, unless it was asked already. With take,
+        its pick goes into the rows when it comes, or now when it is there. A guess made when the router
+        was not reached is asked again with take; an answer being asked for is not asked again."""
+        key = route_key(message)
+        if self.cli not in router.CLIS or not router.worth_routing(key):
+            return RouteAsk()
+        slot = (self.cli, key)
+        self.take_route = take or (self.take_route and slot in self.routing)
+        found = self.routes.get(slot)
+        if isinstance(found, router.Route) and not (take and found.guessed):
+            return RouteAsk(take=self.taking(found) if take else {})
+        if slot not in self.routing:
+            self.routing.add(slot)
+            self.routes.pop(slot, None)  # asked again after it failed
+            return RouteAsk(slot=slot)
+        return RouteAsk()
+
+    def taking(self, route: router.Route) -> dict[str, str]:
+        """The router's pick as row values to put in (newforms.route_take); no answer waits to be taken now."""
+        self.take_route = False
+        return route_take(route)
+
+    def routed(self, slot: tuple[str, str], found: router.Route | str, now: tuple[str, str] | None) -> dict | None:
+        """The router's answer for `slot` is in: kept. `now`: the slot as the form stands (None once it
+        has closed). None when the message or the CLI has changed since (kept, should it come back);
+        else the row values to take (empty: none)."""
+        self.routing.discard(slot)
+        self.routes[slot] = found
+        if slot != now:
+            return None
+        values = self.taking(found) if isinstance(found, router.Route) and self.take_route else {}
+        self.take_route = False
+        return values
+
+    def route_line(self, message: str, pick: picks.Pick) -> list[tuple[str, str]] | None:
+        """The router's line under the rows (newforms.route_line) for the message and the rows as they are."""
+        slot = self.slot(message)
+        return route_line(self.cli, message, slot in self.routing, self.routes.get(slot), self.take_route, pick)
+
+    # --- Enter -------------------------------------------------------------------------------------
+
+    def enter(self, typed: str | None, highlighted: str | None, listed: bool) -> Enter:
+        """What Enter does. typed: the filter box's text when Enter is pressed in it (None elsewhere);
+        highlighted: the highlighted row's folder key; listed: whether a row is highlighted at all.
+        A folder typed in the box is ticked (the next Enter starts); with nothing ticked, the
+        highlighted folder is ticked and started; with nothing to tick, a note."""
+        path = Path(os.path.expanduser(typed.strip())) if typed and typed.strip() else None
+        if path is not None and path.is_dir():
+            key = folder_key(str(path))
+            if key not in self.ticked:
+                return Enter(TICK, key)
+        if not self.ticked:
+            if not listed:
+                return Enter(REFUSE, note=TICK_FIRST)
+            return Enter(START, highlighted)
+        return Enter(START)
+
+
 def improve_refusal(text: str) -> str:
     """Why Ctrl+E rewrites nothing; empty when it does."""
     if improve.worth_improving(text):
