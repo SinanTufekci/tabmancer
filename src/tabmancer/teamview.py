@@ -30,6 +30,7 @@ from . import (
     picks,
     summarize,
     teamforms,
+    teamkeys,
     teams,
     teamtree,
     viewmodel,
@@ -44,7 +45,7 @@ from .actions import (  # noqa: F401  (re-exported)
 )
 from .dialogs import Choice, FolderSuggester, cards, frame, light_rows, pill, pills, tilde, title
 from .safework import work
-from .sessions import Exit, Session, Status, folder_key
+from .sessions import Exit, Session, folder_key
 from .statsview import copy_text
 from .teamforms import (  # noqa: F401  (re-exported)
     LEAD_HELP,
@@ -527,6 +528,57 @@ class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
         self.dismiss(None)
 
 
+class ScreenSurface:
+    """What a team's keys (teamkeys.TeamKeys) ask of its team screen: the dashboard under it does the
+    opening, where it can (a screen shown by itself opens its sessions as they are)."""
+
+    def __init__(self, screen: TeamScreen) -> None:
+        self.screen = screen
+
+    def say(self, note: actions.Note) -> None:
+        self.screen.notify(note.words, title=getattr(note, "title", ""), severity=note.severity,
+                           timeout=note.seconds)
+
+    def later(self, seconds: float, then) -> None:
+        self.screen.set_timer(seconds, then)
+
+    def open_team(self, team: teams.Team, launches: list) -> None:
+        """Through the dashboard's open_team (members in the background when the team says so)."""
+        opener = getattr(self.screen.app, "open_team", None)
+        if opener is not None:
+            opener(team, launches)
+        else:
+            self.screen.app.open_sessions(launches)
+
+    def open_sessions(self, launches: list) -> None:
+        self.screen.app.open_sessions(launches)
+
+    def cold_start_ok(self, team: teams.Team, members: dict[str, Session | None]) -> bool:
+        ok = getattr(self.screen.app, "cold_start_ok", None)
+        return ok is None or ok(team, dict(members))
+
+    def recent(self) -> set[str] | None:
+        openings = getattr(self.screen.app, "openings", None)  # the members opened a moment ago are left out
+        return openings.recent() if openings is not None else None
+
+    def kept_handovers(self) -> dict:
+        return getattr(self.screen.app, "kept_handovers", {})
+
+    def close_tabs(self, names: list[str]) -> None:
+        self.screen.close_members(names)
+
+    def adopt(self, team: teams.Team) -> None:
+        self.screen.adopt(team)
+
+    def go_to_tab(self, session: Session) -> None:
+        go = getattr(self.screen.app, "go_to_tab", None)
+        if go is not None:
+            go(session)
+
+    def put_on_clipboard(self, text: str) -> None:
+        copy_text(self.screen.app, text)
+
+
 class TeamScreen(Screen):
     """The team at work. Arrows pick a member, Enter goes to its tab (or opens it)."""
 
@@ -558,8 +610,7 @@ class TeamScreen(Screen):
         super().__init__()
         self.team, self.accent = team, accent
         self.seen: set[tuple[str, str, str]] | None = None
-        self.closing: str | None = None  # x pressed once on this team: a second press closes every open member
-        self.removing: str | None = None  # d pressed once on this member: a second press takes it off
+        self.team_keys = teamkeys.TeamKeys(ScreenSurface(self))  # its keys, and its presses (x, d)
         self.messages: list[teams.Message] = []
         self.sessions: dict[str, Session | None] = {}
         self.picked = False  # ← → pressed: the conversation shows the picked member's messages only
@@ -690,29 +741,19 @@ class TeamScreen(Screen):
         self.graph.refresh()
         self.show_log()
 
+    @property
+    def closing(self) -> str | None:
+        """x pressed once on this team: a second press closes every open member."""
+        return self.team_keys.closing
+
+    @property
+    def removing(self) -> str | None:
+        """d pressed once on this member: a second press takes it off."""
+        return self.team_keys.removing
+
     def action_open_member(self) -> None:
         member = self.graph.selected_member()
-        if member is None:
-            self.notify("Pick a member with ← → first.", timeout=3)
-            return
-        session = self.sessions.get(member.name)
-        if session is not None and session.status is Status.BACKGROUND:
-            self.notify(f"{member.name} runs in the background, with no tab: B attaches to it.", timeout=5)
-            return
-        if session is not None and session.exit is Exit.RUNNING:
-            go = getattr(self.app, "go_to_tab", None)
-            if go is not None:
-                go(session)
-            return
-        self.app.open_sessions([teams.launch(self.team, member, resume=session if session and session.path else None)])
-
-    def open_team(self, launches: list) -> None:
-        """Through the dashboard's open_team (members in the background when the team says so)."""
-        opener = getattr(self.app, "open_team", None)
-        if opener is not None:
-            opener(self.team, launches)
-        else:
-            self.app.open_sessions(launches)
+        self.team_keys.open_member(self.team, member, self.sessions.get(member.name) if member is not None else None)
 
     def action_handover_team(self) -> None:
         """h, twice: the whole team handed over (the dashboard's press_team_handover): its open members
@@ -736,17 +777,7 @@ class TeamScreen(Screen):
     def action_close_team(self) -> None:
         """x, twice: every open member's tab closes. Claude exits as on /exit, so each session can
         be resumed later (s starts them again)."""
-        note = closing_note(self.team, self.sessions)
-        if note is None:
-            self.notify("No member is open.", timeout=3)
-            return
-        if self.closing != self.team.name:  # keyed by name, as on the team's row in the list
-            self.closing = self.team.name
-            self.notify(note, timeout=6)
-            self.set_timer(6, lambda: setattr(self, "closing", None))
-            return
-        self.closing = None
-        self.close_members(open_names(self.team, self.sessions))
+        self.team_keys.close(self.team, self.sessions)
 
     @work(thread=True, group="team-close")
     def close_members(self, names: list[str]) -> None:
@@ -754,84 +785,36 @@ class TeamScreen(Screen):
         self.app.call_from_thread(self.notify, note.words, severity=note.severity, timeout=note.seconds)
 
     def action_start_team(self) -> None:
-        getattr(self.app, "kept_handovers", {}).pop(self.team.name, None)  # going on as it was, not handed over
-        openings = getattr(self.app, "openings", None)  # the members opened a moment ago are left out
-        start = actions.start_team(self.team, self.sessions, openings.recent() if openings is not None else None)
-        if not start.launches:
-            self.notify(start.words, timeout=3)
-            return
-        ok = getattr(self.app, "cold_start_ok", None)
-        if ok is not None and not ok(self.team, dict(self.sessions)):
-            return  # its cache is gone: said what going on costs, s again starts it
-        self.open_team(start.launches)
+        self.team_keys.start(self.team, self.sessions)
 
     def action_add_member(self) -> None:
         """a: new members for the team. At work, each opens and introduces itself to the lead; closed,
         they join it and start with it (s), as on the team's row in the list."""
         at_work = any(s is not None and s.exit is Exit.RUNNING for s in self.sessions.values())
-
-        def add(text: str | None) -> None:
-            added = actions.add_members(self.team, text or "")
-            if added.warning:
-                self.notify(added.warning, severity="warning", timeout=8)
-            if not added.new:
-                return
-            self.adopt(added.team)
-            if at_work:
-                self.open_team(added.launches)
-            else:
-                self.notify(added.joined_words, timeout=6)
-
-        self.app.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter="add them"), add)
+        self.app.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter="add them"),
+                             lambda text: self.team_keys.add(self.team, text, at_work))
 
     def action_remove_member(self) -> None:
         """d, twice: the picked member is taken off the team. Its session stays, an ordinary one
         from then on, and the lead (or, among peers, the others) is told: it started with the old
         line-up."""
         member = self.graph.selected_member()
-        refusal = actions.removal_refusal(member)
-        if refusal is not None or member is None:  # removal_refusal says why when none is picked
-            if refusal is not None:
-                self.notify(refusal.words, severity=refusal.severity, timeout=refusal.seconds)
-            return
-        if self.removing != member.name:
-            self.removing = member.name
-            ask = actions.removal_ask(member, self.sessions.get(member.name))
-            self.notify(ask.words, timeout=ask.seconds)
-            self.set_timer(6, lambda: setattr(self, "removing", None))
-            return
-        self.removing = None
-        changed = actions.remove_member(self.team, member.name)
+        changed = self.team_keys.remove(self.team, member,
+                                        self.sessions.get(member.name) if member is not None else None)
         if changed is None:
             return
         self.graph.selected = 0
-        self.adopt(changed.team)
-        self.tell_lead(changed.note, changed.done)
+        self.team_keys.changed(changed, self.sessions)
 
     def action_edit_goal(self) -> None:
         """g: the team's goal, changed. Members started from now on get the new one; the lead is told."""
 
         def chosen(goal: str | None) -> None:
-            changed = actions.change_goal(self.team, goal or "")
-            if changed is None:
-                return
-            self.adopt(changed.team)
-            self.tell_lead(changed.note, changed.done)
+            self.team_keys.changed(actions.change_goal(self.team, goal or ""), self.sessions)
 
         # In a box of several lines, as the new-team form writes it: one line flattened a plan pasted
         # there for good, the moment it was changed at all.
         self.app.push_screen(GoalDialog(self.team.goal), chosen)
-
-    def tell_lead(self, note: str, done: str) -> None:
-        """A change made here, for the lead to hear (actions.tell_lead): over the team bus when this team
-        uses one, else to the clipboard and you to its tab, to paste it."""
-        told = actions.tell_lead(self.team, self.sessions, note, done)
-        if told.clipboard:
-            copy_text(self.app, told.clipboard)
-        go = getattr(self.app, "go_to_tab", None)
-        if told.go_to is not None and go is not None:
-            go(told.go_to)
-        self.notify(told.words, title=told.title, timeout=told.seconds)
 
     def action_monitor(self) -> None:
         """M: this team's monitor in a window of its own (the dashboard's action_monitor)."""

@@ -44,7 +44,6 @@ from . import (
     focus,
     footer,
     gitstate,
-    handover,
     limitwords,
     marks,
     newforms,
@@ -58,7 +57,7 @@ from . import (
     sixel,
     store,
     summarize,
-    teambus,
+    teamkeys,
     teams,
     teamtree,
     teamwatch,
@@ -73,9 +72,6 @@ from . import viewmodel as VM
 from .actions import (
     LIMIT_MARGIN,  # noqa: F401  (app.LIMIT_MARGIN, as before)
     close_tabs,
-    closing_note,
-    cold_note,
-    open_names,
 )
 from .actions import clip as _clip
 from .clisettings import CliSettings
@@ -188,7 +184,6 @@ NAMELESS = ("This dashboard could not read its own start time, so it only shows 
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
-COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon starts it (cold_note)
 KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
 SETTLE_AFTER = (5, 45)  # seconds after the list is shown: memory set aside from the collector (settle_memory)
 STAR = rowwords.STAR  # Claude Code's turning star
@@ -714,8 +709,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.team_states: dict[str, teamtree.TeamState] = {}  # the teams with a member open, as last read
         self.team_flights: dict[str, list[tuple[teams.Message, float]]] = {}  # messages in flight, since when
         self.unfolded: set[str] = set()  # teams shown with their members under their row (e); else one row
-        self.closing_team: str | None = None  # x once on an open team's row: again closes its members' tabs
-        self.cold_team: str | None = None  # a team started once while its cache was gone: again starts it
+        self.row_keys = teamkeys.TeamKeys(RowSurface(self))  # a team row's keys, and its presses (x, a cold s)
         self.blocks: list[tuple[teamtree.TeamState, list[tuple[str, Session]]]] = []  # the teams in the list
         self.member_rows: dict[str, tuple[str, str]] = {}  # their members' session ids -> (team, member)
         self.grouped = VM.Groups([], [], {})  # the list as groups() last grouped it (rowwords.Listing)
@@ -1925,74 +1919,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def join_team(self, join: JoinTeam) -> None:
         """T's Ctrl+R found the goal adds to a team at work: the goal grows by it, the members join and
-        open, each introducing itself, and the lead (or the peer it concerns) is told."""
-        team = teams.load().get(join.team)
-        if team is None:
-            self.notify(f"There is no team {join.team} any more.", severity="warning", timeout=6)
-            return
-        asked = [m.name for m in teams.parse_members(join.members)]
-        new, note = teams.add_members(team, join.members)
-        if note:
-            self.notify(note[0].upper() + note[1:] + ".", severity="warning", timeout=8)
-        message = join.message
-        if new:  # the goal grows only for members who joined; the lead hears who did not, after all
-            teams.add_to_goal(team.name, join.goal)
-            team = teams.load().get(team.name, team)
-            self.open_team(team, teams.joining(team, new, adds=join.goal))
-            if left := [name for name in asked if name not in {m.name for m in new}]:
-                message += f" (Not joining after all: {', '.join(left)}.)"
-        else:  # nobody could join: the lead gets the goal, not word of members who never come
-            message = f"A request from the user for the team: {join.goal}"
-        self.tell_team(team.name, join.to, message)
-        self.poll_teams()
-        self.push_screen(TeamScreen(team, self.accent()))
+        open, each introducing itself, and the lead (or the peer it concerns) is told
+        (teamkeys.TeamKeys.join_team)."""
+        self.row_keys.join_team(join)
 
     def tell_team(self, name: str, to: str, message: str) -> None:
         """A message for a team's member (its lead, or the peer the goal concerns): typed into its tab
-        once it waits for you, as c types into one; a closed one opens with it."""
-        team = teams.load().get(name)
-        if team is None:
-            return
-        member = next((m for m in team.members if team.session_name(m).casefold() == to.casefold()), None)
-        member = member or team.lead or (team.members[0] if team.members else None)
-        if member is None:
-            return
-        who = team.session_name(member)
-        state = self.team_states.get(name)
-        found = state.sessions.get(member.name) if state is not None else None
-        session = self.sessions.get(found.session_id, found) if found is not None else None
-        if session is None or session.exit is not Exit.RUNNING:
-            if who in teams.opening():  # opened a moment ago (s, team start): open_team would leave it be
-                copy_text(self, message)
-                self.notify(f"{who} is opening already: the message is on the clipboard, to paste into its tab "
-                            "once it is up (Ctrl+V, Enter).", timeout=14)
-                return
-            # On the tab's command line: a goal of a few pages would not fit there, so its start, and all of
-            # it on the clipboard.
-            prompt = teams.cut(message, teams.MESSAGE_IN_PROMPT, " (the rest follows: the user pastes it)")
-            self.open_team(team, [teams.launch(team, member, resume=session if session is not None and session.path
-                                               else None, prompt=prompt)])
-            if prompt != " ".join(message.split()):
-                copy_text(self, message)
-                self.notify(f"{who} was not open: it opens with the start of the message, all of which is on the "
-                            "clipboard to paste in after it.", timeout=14)
-            else:
-                self.notify(f"{who} was not open: it opens with the message.", timeout=8)
-            return
-        if session.status is Status.BACKGROUND:  # no tab to type into
-            copy_text(self, message)
-            self.notify(f"{who} runs in the background: the message is on the clipboard. Enter on its row "
-                        "attaches to it.", timeout=14)
-            return
-        if team.uses_bus:
-            teambus.send(team.name, teams.YOU, member.name, message)
-            self.notify(f"Sent to {who} over the team bus.", timeout=5)
-            self.poll_teams()
-            return
-        self.notes[session.session_id] = (who, message)
-        if session.live_state not in handover.IDLE:
-            self.notify(f"{who} is at work: the message goes into its tab once it waits for you.", timeout=8)
-        self.deliver_notes()
+        once it waits for you, as c types into one; a closed one opens with it
+        (teamkeys.TeamKeys.tell_team)."""
+        self.row_keys.tell_team(name, to, message)
 
     def deliver_notes(self) -> None:
         """The messages waiting for team members: typed in once one waits for you, never while it works
@@ -2263,67 +2198,34 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     # --- a team's row: its keys -----------------------------------------------------------------
 
+    def team_members_now(self, state: teamtree.TeamState) -> dict[str, Session | None]:
+        """A team's members, each with its session as the list has it now (one never started: None)."""
+        return {name: self.sessions.get(s.session_id, s) if s is not None else None
+                for name, s in state.sessions.items()}
+
     def start_team(self, state: teamtree.TeamState) -> None:
-        """Every member not open: a closed one resumed as itself, one never started new; the lead last."""
-        self.engine.state.kept_handovers.pop(state.team.name, None)  # going on as it was, not handed over
-        sessions = {name: self.sessions.get(s.session_id, s) if s is not None else None
-                    for name, s in state.sessions.items()}
-        start = actions.start_team(state.team, sessions, self.openings.recent())
-        if not start.launches:
-            self.notify(start.words, timeout=3)
-            return
-        if not self.cold_start_ok(state.team, sessions):
-            return
-        self.open_team(state.team, start.launches)
+        """Every member not open: a closed one resumed as itself, one never started new; the lead last
+        (teamkeys.TeamKeys.start)."""
+        self.row_keys.start(state.team, self.team_members_now(state))
 
     def cold_start_ok(self, team: teams.Team, members: dict[str, Session | None]) -> bool:
-        """Whether a closed team starts now: at once, unless its members' cache is gone; then the
-        first press says what going on costs and what a handover saves (cold_note), and a second
-        one within COLD_AGAIN_SECONDS starts it."""
-        note = cold_note(team, members)
-        if note is None or self.cold_team == team.name:
-            self.cold_team = None
-            return True
-        self.cold_team = team.name
-        self.notify(note, timeout=COLD_AGAIN_SECONDS)
-        self.set_timer(COLD_AGAIN_SECONDS, lambda: setattr(self, "cold_team", None))
-        return False
+        """Whether a closed team starts now (teamkeys.TeamKeys.cold_start_ok): at once, unless its
+        members' cache is gone; then a second press within COLD_AGAIN_SECONDS starts it."""
+        return self.row_keys.cold_start_ok(team, members)
 
     def add_to_team(self, state: teamtree.TeamState) -> None:
         """New members for a team: at work, each opens and introduces itself to the lead; closed, they
-        join it and start with it."""
+        join it and start with it (teamkeys.TeamKeys.add)."""
         at_work = self.team_open(state.team.name)
-
-        def add(text: str | None) -> None:
-            added = actions.add_members(state.team, text or "")
-            if added.warning:
-                self.notify(added.warning, severity="warning", timeout=8)
-            if not added.new:
-                return
-            if at_work:
-                self.open_team(added.team, added.launches)
-            else:
-                self.notify(added.joined_words, timeout=6)
-            self.poll_teams()
-
-        self.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter="add them"), add)
+        self.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter="add them"),
+                         lambda text: self.row_keys.add(state.team, text, at_work))
 
     def open_team(self, team: teams.Team, launches: list[Launch]) -> None:
         """A team's sessions: in tabs, or for a team whose members run in the background, its members
-        as background sessions first and then the lead's tab, once they are up. A member opened a
-        moment ago, here or by `tabmancer team start`, is not opened again: s twice, while the first
-        claude --bg calls were still running, started every member twice."""
-        if any(launch.cli == "claude" for launch in launches) and self.after_update(
-                f"{team.name} starts", lambda: self.open_team(team, launches)):
-            return
-        opening = actions.team_opening(team, launches)
-        if opening.words:
-            self.notify(opening.words, timeout=3)
-            return
-        if opening.quiet:
-            self.start_in_background(team, opening.quiet, opening.tabs)
-        elif opening.tabs:
-            self.open_sessions(opening.tabs)
+        as background sessions first and then the lead's tab (teamkeys.TeamKeys.open_team). A member
+        opened a moment ago, here or by `tabmancer team start`, is not opened again: s twice, while the
+        first claude --bg calls were still running, started every member twice."""
+        self.row_keys.open_team(team, launches)
 
     @work(thread=True, group="team-background")
     def start_in_background(self, team: teams.Team, launches: list[Launch], then: list[Launch]) -> None:
@@ -2335,19 +2237,17 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def close_team(self, state: teamtree.TeamState) -> None:
         """x, twice: every open member's tab closes, as on /exit; the sessions stay (s starts them)."""
-        sessions = {name: self.sessions.get(s.session_id, s) if s is not None else None
-                    for name, s in state.sessions.items()}
-        note = closing_note(state.team, sessions)
-        if note is None:
-            self.notify("No member is open.", timeout=3)
-            return
-        if self.closing_team != state.team.name:
-            self.closing_team = state.team.name
-            self.notify(note, timeout=6)
-            self.set_timer(6, lambda: setattr(self, "closing_team", None))
-            return
-        self.closing_team = None
-        self.close_team_tabs(open_names(state.team, sessions))
+        self.row_keys.close(state.team, self.team_members_now(state))
+
+    @property
+    def closing_team(self) -> str | None:
+        """The team x was pressed on once (its row): x again closes its members' tabs."""
+        return self.row_keys.closing
+
+    @property
+    def cold_team(self) -> str | None:
+        """The team started once while its cache was gone: s again starts it."""
+        return self.row_keys.cold
 
     @work(thread=True, group="team-close")
     def close_team_tabs(self, names: list[str]) -> None:
@@ -3161,6 +3061,66 @@ def forward(name: str) -> property:
     """SessionPicker.<name> is its engine's state.<name>: read and set there, one copy."""
     return property(lambda self: getattr(self.engine.state, name),
                     lambda self, value: setattr(self.engine.state, name, value))
+
+
+class RowSurface:
+    """What a team's keys (teamkeys.TeamKeys) ask of the dashboard, for its team rows."""
+
+    def __init__(self, app: SessionPicker) -> None:
+        self.app = app
+
+    def say(self, note: actions.Note) -> None:
+        self.app.say_note(note)
+
+    def later(self, seconds: float, then: Callable[[], None]) -> None:
+        self.app.set_timer(seconds, then)
+
+    def open_team(self, team: teams.Team, launches: list[Launch]) -> None:
+        self.app.open_team(team, launches)
+
+    def open_sessions(self, launches: list[Launch]) -> None:
+        self.app.open_sessions(launches)
+
+    def cold_start_ok(self, team: teams.Team, members: dict[str, Session | None]) -> bool:
+        return self.app.cold_start_ok(team, members)
+
+    def recent(self) -> set[str] | None:
+        return self.app.openings.recent()
+
+    def kept_handovers(self) -> dict:
+        return self.app.engine.state.kept_handovers
+
+    def close_tabs(self, names: list[str]) -> None:
+        self.app.close_team_tabs(names)
+
+    def adopt(self, team: teams.Team) -> None:
+        self.app.poll_teams()  # the list reads its teams again
+
+    def go_to_tab(self, session: Session) -> None:
+        self.app.go_to_tab(session)
+
+    def put_on_clipboard(self, text: str) -> None:
+        copy_text(self.app, text)
+
+    def after_update(self, what: str, then: Callable[[], None]) -> bool:
+        return self.app.after_update(what, then)
+
+    def start_in_background(self, team: teams.Team, launches: list[Launch], then: list[Launch]) -> None:
+        self.app.start_in_background(team, launches, then)
+
+    def member_session(self, team: str, member: str) -> Session | None:
+        state = self.app.team_states.get(team)
+        found = state.sessions.get(member) if state is not None else None
+        return self.app.sessions.get(found.session_id, found) if found is not None else None
+
+    def notes(self) -> dict[str, tuple[str, str]]:
+        return self.app.notes
+
+    def deliver_notes(self) -> None:
+        self.app.deliver_notes()
+
+    def show_team(self, team: teams.Team) -> None:
+        self.app.push_screen(TeamScreen(team, self.app.accent()))
 
 
 for _name in engine.FORWARDED:
