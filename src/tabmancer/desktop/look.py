@@ -6,6 +6,7 @@ the window draws what the terminal monitor says, in its colours, from the same f
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import sys
@@ -56,8 +57,10 @@ def fonts_for_offscreen() -> None:
         os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 
 
+@functools.cache
 def mono_family() -> str:
-    """The first monospace family installed (Cascadia on Windows), else Qt's fixed font."""
+    """The first monospace family installed (Cascadia on Windows), else Qt's fixed font. Looked up once: the
+    list of families is long, and a picture that moves asks for its fonts many times a second."""
     families = set(QFontDatabase.families())
     found = next((f for f in MONO_FAMILIES if f in families), None)
     return found or QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
