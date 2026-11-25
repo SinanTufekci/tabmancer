@@ -17,8 +17,16 @@ from collections.abc import Collection, Mapping
 from dataclasses import replace
 from functools import partial
 
-from PySide6.QtCore import QModelIndex, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QStandardItem, QStandardItemModel
+from PySide6.QtCore import QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QContextMenuEvent,
+    QFont,
+    QFontMetricsF,
+    QPainter,
+    QStandardItem,
+    QStandardItemModel,
+)
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QStyle, QStyledItemDelegate, QTreeView
 
 from .. import picks, rowwords
@@ -109,10 +117,12 @@ class Cells(QStyledItemDelegate):
 class Table(QTreeView):
     """The list: rowwords' rows over the sessions shown (the window's filters), picker's columns or
     the live view's. picked: the row picked now, in the drawer's words ('' for none); ticking: a click on a
-    session's [ ], or a closed team's (its key in the drawer's words, for the window to tick)."""
+    session's [ ], or a closed team's (its key in the drawer's words, for the window to tick); menu: the
+    picked row's menu asked for (a right-click on a row picks it; the menu key), where on the screen."""
 
     picked = Signal(str)
     ticking = Signal(str)
+    menu = Signal(QPoint)
 
     def __init__(self, accent: str) -> None:
         super().__init__()
@@ -353,6 +363,26 @@ class Table(QTreeView):
                 self.ticking.emit(drawer_key(index.data(KEY) or ""))
             else:
                 self.fold_at(index)  # the ▸ of an open team's row
+
+    def contextMenuEvent(self, event) -> None:
+        """A right-click on a row: picked, then its menu (on a heading: nothing); the menu key: the picked
+        row's, at the row."""
+        if event.reason() == QContextMenuEvent.Reason.Keyboard:
+            index = self.currentIndex()
+            if self.pick is None or not index.isValid():
+                event.ignore()
+                return
+            rect = self.visualRect(self.grid.index(index.row(), COLUMN["title"]))
+            at = self.viewport().mapToGlobal(QPoint(rect.left() + 24, rect.center().y()))
+        else:
+            index = self.indexAt(event.pos())
+            if not index.isValid() or self.keys[index.row()].startswith(rowwords.HEADING):
+                event.ignore()
+                return
+            self.setCurrentIndex(self.grid.index(index.row(), 0))
+            at = event.globalPos()
+        self.setFocus()
+        self.menu.emit(at)
 
     # --- motion -----------------------------------------------------------------------------------
 

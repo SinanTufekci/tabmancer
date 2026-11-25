@@ -21,7 +21,7 @@ else:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QTextDocument
+from PySide6.QtGui import QContextMenuEvent, QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
 
@@ -1146,6 +1146,74 @@ def test_m_opens_the_picked_teams_monitor_and_again_brings_it_to_the_front(qapp,
     shown.settle()
     shown.close()  # the monitors M opened go with the window
     assert not watching.isVisible()
+
+
+def menu_items(shown) -> list[tuple[str, bool, str]]:
+    """The right-click menu shown: each item's words (its key after a tab), whether it can be picked, and a
+    greyed key's tip (why not)."""
+    return [(item.text(), item.isEnabled(), "" if item.isEnabled() or item.data() is None else item.toolTip())
+            for item in shown.popup.actions() if not item.isSeparator()]
+
+
+def right_click(widget, spot: QPoint) -> None:
+    QApplication.sendEvent(widget, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, spot, widget.mapToGlobal(spot)))
+
+
+def menu_key(widget) -> None:
+    QApplication.sendEvent(widget, QContextMenuEvent(QContextMenuEvent.Reason.Keyboard, QPoint(0, 0)))
+
+
+def test_a_right_click_on_a_card_or_a_row_picks_it_and_offers_the_drawers_buttons(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    board, snap = shown.board, shown.snap
+    login = titled(snap, "Fix the login redirect loop").session_id  # closed: its lane folds till revealed
+    assert board.reveal(login) and board.reveal(next(key for key in board.cards if key != login))
+
+    def card_spot(key: str):
+        lane = next(view for view in board.views.values() if view.column.rect_of(key) is not None)
+        return lane.column, lane.column.rect_of(key).center().toPoint()
+
+    right_click(*card_spot(login))
+    assert board.pick == login and shown.popup is not None and shown.popup.isVisible()
+    items = menu_items(shown)
+    assert items[0] == ("Fix the login redirect loop", False, "")  # the heading: what it is for
+    assert items[1:] == [(f"{words}\t{key}", shown.why_not(key) is None, shown.why_not(key) or "")
+                         for key, words in shown.drawer.offered]  # the drawer's buttons, greyed as there
+    pin = next(item for item in shown.popup.actions() if item.data() == "f")
+    assert pin.isEnabled()
+    pin.trigger()
+    assert saved_marks()["pinned"] == [login] and shown.bit_line.text().startswith("Pinned “Fix the login")
+    shown.popup.close()
+    assert shown.popup is None
+    team = next(iter(snap.team_states))
+    right_click(*card_spot(VM.TEAM_CARD + team))  # a team's card: its menu, M in it
+    items = menu_items(shown)
+    assert board.pick == VM.TEAM_CARD + team and items[0] == (f"Team {team}", False, "")
+    assert any(words.endswith("\tM") and enabled for words, enabled, _ in items)
+    shown.set_view("table")
+    table = shown.table
+    open_one = next(key for key in table.keys if key in snap.sessions and snap.sessions[key].exit is sessions.Exit.RUNNING)
+
+    def row_spot(key: str) -> QPoint:
+        return table.visualRect(table.grid.index(table.keys.index(key), COLUMN["title"])).center()
+
+    shown.popup.close()
+    picked = table.pick
+    right_click(table.viewport(), row_spot(table.keys[0]))  # the open ones' heading: nothing
+    assert table.keys[0].startswith(rowwords.HEADING) and table.pick == picked and shown.popup is None
+    right_click(table.viewport(), row_spot(open_one))
+    items = menu_items(shown)
+    assert table.pick == open_one and items[0][0] == actions.clip(snap.sessions[open_one].title, main.MENU_TITLE)
+    assert any(not enabled and tip == main.ELSEWHERE for _, enabled, tip in items[1:])  # done in the terminal
+    first = shown.popup
+    menu_key(table)  # the menu key: the picked row's
+    assert shown.popup is not first and menu_items(shown)[0] == items[0] and not first.isVisible()
+    shown.set_view("board")
+    menu_key(board)  # on the board: the picked card's (the pick is one across the views)
+    assert board.pick == open_one and menu_items(shown)[0] == items[0]
+    shown.close()
+    assert shown.popup is None
 
 
 def test_the_demo_window_says_what_would_have_opened(qapp, monkeypatch):

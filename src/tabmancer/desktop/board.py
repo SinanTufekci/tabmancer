@@ -15,8 +15,8 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QContextMenuEvent, QFontMetricsF, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QScrollArea, QToolTip, QVBoxLayout, QWidget
 
 from .. import sessionwords
@@ -142,6 +142,7 @@ class Column(QWidget):
     """A lane's cards, one under the other, drawn at once: it is as tall as they are (in a scroll area)."""
 
     clicked = Signal(str)
+    menu = Signal(str, QPoint)  # a card right-clicked: its key, and where (on the screen)
 
     def __init__(self, accent: str) -> None:
         super().__init__()
@@ -204,6 +205,13 @@ class Column(QWidget):
         if card is not None and event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(card.key)
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        card = self.at(QPointF(event.pos()))
+        if card is None:
+            event.ignore()  # past the cards: the board's (the menu key's), or nothing
+            return
+        self.menu.emit(card.key, event.globalPos())
 
     def event(self, event) -> bool:
         if event.type() == QEvent.Type.ToolTip:
@@ -436,6 +444,7 @@ class LaneView(QFrame):
     """One lane: its heading over its cards (scrolled), or the strip while it is folded."""
 
     clicked = Signal(str)  # a card's key
+    menu = Signal(str, QPoint)  # a card right-clicked: its key, and where
     fold = Signal(str, bool)  # the lane's key, folded
     card = Signal(str)  # its heading clicked: the lane's key, a card's (VM.CARDS)
 
@@ -461,6 +470,7 @@ class LaneView(QFrame):
         column.addWidget(self.scroller, 1)
         column.addWidget(self.strip, 1)
         self.column.clicked.connect(self.clicked)
+        self.column.menu.connect(self.menu)
         self.strip.clicked.connect(self.unfold)
         self.heading.clicked.connect(self.heading_clicked)
 
@@ -502,6 +512,7 @@ class Board(QWidget):
 
     picked = Signal(str)
     card = Signal(str)  # a lane's heading clicked: its card (VM.CARDS), to narrow the list to or back
+    menu = Signal(QPoint)  # the picked card's menu asked for (a right-click on it, or the menu key): where
 
     def __init__(self, accent: str) -> None:
         super().__init__()
@@ -521,6 +532,7 @@ class Board(QWidget):
         for key, *_rest in VM.LANES:
             lane = LaneView(key, accent)
             lane.clicked.connect(self.click)
+            lane.menu.connect(self.menu_at)
             lane.fold.connect(self.fold)
             lane.card.connect(self.card)
             self.views[key] = lane
@@ -643,6 +655,23 @@ class Board(QWidget):
     def click(self, key: str) -> None:
         self.setFocus()
         self.move(key)
+
+    def menu_at(self, key: str, at: QPoint) -> None:
+        """A card right-clicked: picked, as a click picks it, then its menu."""
+        self.click(key)
+        self.menu.emit(at)
+
+    def contextMenuEvent(self, event) -> None:
+        """The menu key (or Shift+F10): the picked card's menu, at the card."""
+        if event.reason() != QContextMenuEvent.Reason.Keyboard or self.pick is None:
+            event.ignore()
+            return
+        for lane in self.views.values():
+            rect = lane.column.rect_of(self.pick)
+            if rect is not None and lane.column.isVisible():
+                self.menu.emit(lane.column.mapToGlobal(QPoint(int(rect.left()) + 24, int(rect.center().y()))))
+                return
+        self.menu.emit(self.mapToGlobal(self.rect().center()))  # in a folded lane: amid the board
 
     def fold(self, key: str, folded: bool) -> None:
         if folded:

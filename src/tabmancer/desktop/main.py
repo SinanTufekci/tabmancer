@@ -35,7 +35,8 @@ each team as a small picture (a click picks its card and its Team panel tab) and
 
 The Preview panel is the drawer (drawer.py): the picked card as the terminal dashboard's preview says
 it, with a button for each key its footer offers there (greyed, saying why, while this window does
-not do that key).
+not do that key). A right-click on a card or a row picks it and offers the same as a menu, its keys
+beside them; the menu key (or Shift+F10) offers it for the one picked.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ from collections.abc import Callable
 from datetime import datetime
 from functools import partial
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
@@ -58,6 +59,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMenuBar,
     QPushButton,
     QSizePolicy,
@@ -94,6 +96,7 @@ HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X"
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
+MENU_TITLE = 48  # a right-click menu's heading: the title clipped to this
 SEVERITY = {"warning": look.AMBER, "error": look.RED}  # how loud what Bit says is (actions.Note's)
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
@@ -223,6 +226,7 @@ class MainWindow(QMainWindow):
         self.closing_timer.timeout.connect(self.forget_closing)
         self.opener.closed.connect(self.closed_tabs)
         self.monitors: dict[str, MonitorWindow] = {}  # M: each team's monitor opened from here
+        self.popup: QMenu | None = None  # a card's or a row's menu, while it is shown
         self.tick()
         self.board.setFocus()  # the arrows pick a card from the start
         if start:
@@ -253,6 +257,8 @@ class MainWindow(QMainWindow):
         self.board.picked.connect(self.show_pick)
         self.table.picked.connect(self.show_pick)
         self.table.ticking.connect(self.tick_key)
+        self.board.menu.connect(self.pick_menu)
+        self.table.menu.connect(self.pick_menu)
         self.rail.projects.left.connect(self.back_to_board)
         self.drawer.act.connect(self.run_key)
         self.rail.projects.picked.connect(self.set_project)
@@ -584,6 +590,48 @@ class MainWindow(QMainWindow):
         action = self.actions_by_key.get(key)
         if action is not None and action.isEnabled():
             action.trigger()
+
+    def pick_menu(self, at: QPoint) -> None:
+        """A card or a row right-clicked (picked by it), or the menu key: the drawer's buttons for it as a
+        menu at this place, each with its key, greyed as there and saying why."""
+        offered = self.drawer.offered
+        if not offered:
+            return
+        if self.popup is not None:
+            self.popup.close()
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        menu.setToolTipsVisible(True)
+        title = menu.addAction(self.pick_name().replace("&", "&&"))
+        title.setEnabled(False)
+        menu.addSeparator()
+        for key, words in offered:
+            item = menu.addAction(f"{words.replace('&', '&&')}\t{key}")  # the key right of it, as menus put one
+            item.setData(key)
+            why = self.why_not(key)
+            item.setEnabled(why is None)
+            item.setToolTip(why or "")
+        menu.triggered.connect(self.menu_chose)
+        menu.aboutToHide.connect(self.popup_gone)  # at once, not when it is deleted later
+        self.popup = menu
+        menu.popup(at)
+
+    def pick_name(self) -> str:
+        """The menu's heading: the picked session's title, or the team's name."""
+        key, snap = self.picked_now(), self.snap
+        if key.startswith(VM.TEAM_CARD):
+            return f"Team {key[len(VM.TEAM_CARD):]}"
+        session = snap.sessions.get(key) if snap is not None else None
+        return actions.clip(session.title if session is not None else key, MENU_TITLE)
+
+    def menu_chose(self, item: QAction) -> None:
+        key = item.data()
+        if isinstance(key, str):
+            self.run_key(key)
+
+    def popup_gone(self) -> None:
+        if self.popup is self.sender():  # not a newer one
+            self.popup = None
 
     def show_pills(self) -> None:
         """What the board is narrowed to, in the top bar."""
@@ -1124,6 +1172,8 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         self.ticker.stop()
         self.closing_timer.stop()
+        if self.popup is not None:
+            self.popup.close()
         for shown in self.monitors.values():  # the monitors M opened go with the window
             shown.close()
             shown.deleteLater()
