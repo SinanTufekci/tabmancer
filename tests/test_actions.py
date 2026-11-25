@@ -270,16 +270,32 @@ def test_a_team_start_and_when_there_is_nothing_to_start():
     assert actions.start_team(team, everyone, set()).words == "Every member of shop is open already, or opening."
 
 
-def test_a_team_opening_leaves_out_who_is_opening_already(monkeypatch):
+def test_a_team_opening_leaves_out_who_is_opening_already():
     team = shop_team()
     launches = actions.start_team(team, {}).launches
-    noted = []
-    monkeypatch.setattr(teams, "opening", lambda now=None: {teams.session_name_of(team, launches[0])})
-    monkeypatch.setattr(teams, "note_opening", noted.extend)
+    names = [teams.session_name_of(team, launch) for launch in launches]
+    teams.note_opening(names[:1])  # tabmancer team start opened the first a moment ago
     opening = actions.team_opening(team, launches)
-    assert opening.quiet == [] and opening.tabs == launches[1:] and len(noted) == len(launches) - 1
-    monkeypatch.setattr(teams, "opening", lambda now=None: {teams.session_name_of(team, x) for x in launches})
-    assert actions.team_opening(team, launches).words == "The members of shop are opening already."
+    assert opening.quiet == [] and opening.tabs == launches[1:] and teams.opening() == set(names)
+    assert actions.team_opening(team, launches).words == "The members of shop are opening already."  # s again
+
+
+def test_two_team_openings_at_once_open_each_member_once(monkeypatch):
+    """Two s presses (two windows) at once: the check and the note are one step under the file's lock, so
+    the second sees what the first noted. While the first holds the lock, the second waits; past the wait
+    it starts nothing and says so."""
+    from tabmancer import config
+
+    team = shop_team()
+    launches = actions.start_team(team, {}).launches
+    with config.locked(teams.OPENING_FILE):
+        monkeypatch.setattr(config.time, "sleep", lambda seconds: None)
+        refused = actions.team_opening(team, launches)
+    assert (refused.quiet, refused.tabs) == ([], []) and refused.words == (
+        "shop was not started: another tabmancer window is starting members right now. Press s again in a moment.")
+    assert teams.opening() == set()  # nothing noted: s again starts them all
+    assert actions.team_opening(team, launches).tabs == launches
+    assert actions.team_opening(team, launches).tabs == []
 
 
 def test_members_started_in_the_background(monkeypatch):
@@ -548,6 +564,20 @@ def test_a_queue_file_that_cannot_be_read_is_left_as_it_is(processes, unreadable
 
     path.unlink() if path.is_file() else path.rmdir()
     assert actions.save_queued({"a": "self"}) and actions.read_queued() == {"a": "self"}
+
+
+def test_a_queue_saved_while_another_window_saves_it_waits_its_turn(processes, monkeypatch):
+    """The read-then-write is under the queue's lock: a window that cannot get it in time leaves the file
+    as it is (its write would drop the other window's entry) and says QUEUE_UNSAVED."""
+    from tabmancer import config
+
+    assert actions.save_queued({"a": "self"})
+    before = (config.config_dir() / actions.QUEUE).read_bytes()
+    monkeypatch.setattr(config.time, "sleep", lambda seconds: None)
+    with config.locked(actions.QUEUE):  # another window is saving it
+        assert actions.save_queued({"b": "self"}) is False
+    assert (config.config_dir() / actions.QUEUE).read_bytes() == before
+    assert actions.save_queued({"b": "self"}) and actions.read_queued() == {"b": "self"}
 
 
 def test_a_queue_note_says_when_the_queue_was_not_saved():

@@ -14,7 +14,7 @@ from dataclasses import asdict
 from datetime import timedelta
 
 from . import claudeupdate, clis, shortcuts, workspaces
-from .config import merge_json, read_json, write_json
+from .config import Busy, merge_json, read_json, write_json
 from .launch import Launch, continue_prompt, open_tabs
 from .picks import EFFORTS, NO_CAP, Pick, cap_tokens
 from .sessions import MOST_DAYS, find_sessions, nothing_found
@@ -418,6 +418,16 @@ def start_team(name: str, spec: str = "") -> int:
             seen = by_id.get(open_ids[called])
             (other if seen is not None and not teams.since_made(team, seen) else already).append(called)
     left_be = set(already) | set(starting) | set(other)
+    wanted_now = [team.session_name(m) for m in chosen if team.session_name(m) not in left_be]
+    try:  # checked and noted under one lock: a dashboard's s at the same moment opens each member once
+        coming = teams.claim_opening(wanted_now)
+    except Busy:
+        print(f"Another tabmancer is starting members of {team.name} right now, so none started: run this again in a "
+              "moment.")
+        return 1
+    starting += [called for called in wanted_now if called in coming]
+    left_be |= coming
+    claimed = [called for called in wanted_now if called not in coming]  # given back unless they start
     launches = teams.start(team, found, only={m.name for m in chosen if team.session_name(m) not in left_be})
     if already:
         how = f"`tabmancer team send {team.name} <member> \"...\"`" if team.uses_bus else "SendMessage"
@@ -428,6 +438,7 @@ def start_team(name: str, spec: str = "") -> int:
     if other:
         print(f"A session of the name {', '.join(other)} is open, not this team's: close it, then start the member.")
     if not launches:
+        teams.forget_opening(claimed)
         return 0 if not other else 1
     opening = {teams.session_name_of(team, launch) for launch in launches}
     for note in teams.agy_notes(team, {m.name for m in chosen if team.session_name(m) in opening}):
@@ -446,12 +457,15 @@ def start_team(name: str, spec: str = "") -> int:
             leftover = open_tabs(tabs)
         except OSError as error:
             print(f"Their tabs could not open: {error}. The dashboard's s starts them.")
+            teams.forget_opening(claimed)
             return 1
         if leftover:  # no terminal here could open tabs: say so, so nobody waits for them
             print("No terminal here could open their tabs, so none started. Run these:\n" + "\n".join(leftover))
+            teams.forget_opening(claimed)
             return 1
         started += tabs
-    teams.note_opening([teams.session_name_of(team, launch) for launch in started])
+    begun = {teams.session_name_of(team, launch) for launch in started}
+    teams.forget_opening([called for called in claimed if called not in begun])  # failed in the background
 
     def said(launch: Launch) -> str:
         how = "where it left off" if launch.mode is Mode.RESUME else "new, as it never started"

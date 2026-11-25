@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import clis, picks, router, teambus
-from .config import config_dir, read_json, write_json
+from .config import config_dir, locked, read_json, write_json
 from .launch import Launch, Mode
 from .sessions import (
     Exit,
@@ -1405,12 +1405,45 @@ def opening(now: float | None = None) -> set[str]:
             if isinstance(when, (int, float)) and 0 <= now - when < OPENING_SECONDS}
 
 
-def note_opening(names: list[str], now: float | None = None) -> None:
-    now = time.time() if now is None else now
+def _opening_now(now: float) -> dict[str, float]:
     data = read_json(OPENING_FILE)
-    kept = {name: when for name, when in (data.items() if isinstance(data, dict) else ())
-            if isinstance(when, (int, float)) and now - when < OPENING_SECONDS}
-    write_json(OPENING_FILE, {**kept, **dict.fromkeys(names, now)})
+    return {name: when for name, when in (data.items() if isinstance(data, dict) else ())
+            if isinstance(when, (int, float)) and 0 <= now - when < OPENING_SECONDS}
+
+
+def note_opening(names: list[str], now: float | None = None) -> None:
+    """These session names noted as opening (the stale ones go), under the file's lock (config.Busy
+    when it could not be got)."""
+    now = time.time() if now is None else now
+    with locked(OPENING_FILE):
+        write_json(OPENING_FILE, {**_opening_now(now), **dict.fromkeys(names, now)})
+
+
+def claim_opening(names: list[str], now: float | None = None) -> set[str]:
+    """Those of these session names opening already; the rest noted as opening now. Checked and noted
+    under one lock, so of two starts at once only one opens each member. config.Busy when the lock could
+    not be got: nothing noted, so start nothing."""
+    now = time.time() if now is None else now
+    with locked(OPENING_FILE):
+        coming = opening(now) & set(names)
+        fresh = [name for name in names if name not in coming]
+        if fresh:
+            write_json(OPENING_FILE, {**_opening_now(now), **dict.fromkeys(fresh, now)})
+    return coming
+
+
+def forget_opening(names: list[str], now: float | None = None) -> None:
+    """Claimed by claim_opening but not started after all: they may be started again at once. Best
+    effort: left noted, they free up after OPENING_SECONDS."""
+    if not names:
+        return
+    try:
+        with locked(OPENING_FILE):
+            noted = _opening_now(time.time() if now is None else now)
+            if any(name in noted for name in names):
+                write_json(OPENING_FILE, {name: when for name, when in noted.items() if name not in names})
+    except OSError:
+        pass
 
 
 def member_of(session: Session, saved: dict[str, Team] | None = None) -> tuple[Team, Member] | None:

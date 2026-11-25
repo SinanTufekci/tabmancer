@@ -266,6 +266,25 @@ def test_team_start_leaves_a_member_open_under_its_name_and_says_when_nothing_op
     assert "none started" in capsys.readouterr().out and "shop-ui" not in teams.opening()  # not taken for opening
 
 
+def test_team_start_while_a_dashboard_starts_members_opens_nothing(fake_home, tmp_path, monkeypatch, capsys):
+    """team start and a dashboard's s at the same moment: the check and the note are one step under
+    opening.json's lock. Past the wait for it, team start opens nothing and says so; a member that did
+    not start after all is given back for s at once."""
+    from tabmancer import cli, config
+
+    opened = []
+    monkeypatch.setattr(cli, "open_tabs", lambda launches: opened.extend(launches) or [])
+    monkeypatch.setattr(config.time, "sleep", lambda seconds: None)
+    shop(fake_home, tmp_path, monkeypatch, api_open=False)
+    with config.locked(teams.OPENING_FILE):
+        assert cli.start_team("shop", "api") == 1 and not opened
+    assert "starting members of shop right now, so none started" in capsys.readouterr().out
+    assert cli.start_team("shop", "api") == 0 and [launch.title for launch in opened] == ["shop: api"]
+    assert "shop-api" in teams.opening()
+    assert cli.start_team("shop", "api") == 0 and len(opened) == 1  # opening a moment ago: not again
+    assert "Opening a moment ago, so not opened again: shop-api" in capsys.readouterr().out
+
+
 def test_a_team_made_in_another_time_zone_keeps_its_members(tmp_path):
     from datetime import timezone
 

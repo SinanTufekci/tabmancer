@@ -34,7 +34,7 @@ from . import (
     viewmodel,
     wrapped,
 )
-from .config import config_dir, merge_json, read_json, write_json
+from .config import Busy, config_dir, locked, merge_json, read_json, write_json
 from .launch import Launch, Mode, continue_prompt, run_in_background
 from .sessions import Exit, Session, Status
 from .tokens import human
@@ -503,11 +503,14 @@ def team_opening(team: teams.Team, launches: list[Launch]) -> TeamOpening:
     """A team's sessions, split into background members and tabs. A member opened a moment ago, here or
     by `tabmancer team start`, is not opened again: s twice, while the first claude --bg calls were
     still running, started every member twice. The ones that go ahead are noted as opening."""
-    coming = teams.opening()
+    try:  # checked and noted under one lock: of two s presses at once, one opens each member
+        coming = teams.claim_opening([teams.session_name_of(team, launch) for launch in launches])
+    except Busy:
+        return TeamOpening([], [], f"{team.name} was not started: another tabmancer window is starting members "
+                                   "right now. Press s again in a moment.")
     launches = [launch for launch in launches if teams.session_name_of(team, launch) not in coming]
     if not launches:
         return TeamOpening([], [], f"The members of {team.name} are opening already.")
-    teams.note_opening([teams.session_name_of(team, launch) for launch in launches])
     quiet = [launch for launch in launches if teams.in_background(team, launch)]
     return TeamOpening(quiet, [launch for launch in launches if launch not in quiet])
 
@@ -884,8 +887,9 @@ def read_queued() -> dict[str, str]:
     return found
 
 
-QUEUE_UNSAVED = Note(f"{QUEUE} could not be read or saved, so it was left as it was: other tabmancer windows "
-                     "may still show the queue as it was before.", "warning", 8)
+QUEUE_UNSAVED = Note(f"{QUEUE} could not be read or saved (or another tabmancer window kept it busy), so it was "
+                     "left as it was: other tabmancer windows may still show the queue as it was before.", "warning",
+                     8)
 
 
 def queue_note(note: Note, saved: bool) -> Note:
@@ -900,9 +904,18 @@ def queue_note(note: Note, saved: bool) -> Note:
 
 def save_queued(mine: dict[str, str]) -> bool:
     """This window's queued handovers, saved beside the other open windows' (theirs are kept, a closed
-    one's go). False, the file left as it was, when it is there but could not be read (saving only this
-    window's would drop the other windows' entries) or could not be written: the caller says
+    one's go), under the queue's lock, so two windows saving at once each keep the other's. False, the
+    file left as it was, when it is there but could not be read (saving only this window's would drop
+    the other windows' entries), its lock could not be got, or it could not be written: the caller says
     QUEUE_UNSAVED. A file that reads but holds no queue has nothing to keep and is written over."""
+    try:
+        with locked(QUEUE):
+            return _save_queued(mine)
+    except Busy:
+        return False
+
+
+def _save_queued(mine: dict[str, str]) -> bool:
     saved = read_json(QUEUE)
     if saved is None and os.path.lexists(config_dir() / QUEUE):
         return False

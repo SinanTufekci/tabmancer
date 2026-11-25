@@ -106,3 +106,41 @@ def test_a_save_that_fails_otherwise_leaves_no_half_file(monkeypatch):
     with pytest.raises(IsADirectoryError):
         config.write_json("teams.json", {"teams": []})
     assert not list(config.config_dir().glob("*.tmp"))
+
+
+def test_a_lock_is_one_process_at_a_time_and_given_back(monkeypatch):
+    """config.locked: the read-then-write of one file, one process at a time. A held lock is waited for
+    BUSY_TRIES times, then Busy; it is given back after the change, and after a change that failed."""
+    waits = []
+    monkeypatch.setattr(config.time, "sleep", waits.append)
+    path = config.config_dir() / "queue.json.lock"
+    with config.locked("queue.json"):
+        assert path.exists()
+        try:
+            with config.locked("queue.json"):
+                raise AssertionError("a second holder")
+        except config.Busy:
+            pass
+        assert waits == [config.BUSY_WAIT] * (config.BUSY_TRIES - 1)
+    assert not path.exists()
+    try:
+        with config.locked("queue.json"):
+            raise ValueError("the change failed")
+    except ValueError:
+        pass
+    assert not path.exists()
+    with config.locked("queue.json"), config.locked("other.json"):  # one lock per file
+        pass
+
+
+def test_a_lock_left_by_a_process_that_died_is_taken_over(monkeypatch):
+    monkeypatch.setattr(config.time, "sleep", lambda seconds: None)
+    path = config.config_dir() / "queue.json.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    old = path.stat().st_mtime - config.LOCK_STALE_SECONDS - 5
+    os.utime(path, (old, old))
+    with config.locked("queue.json"):
+        assert path.stat().st_mtime > old  # this process's now
+    assert not path.exists()
+    assert issubclass(config.Busy, OSError)  # callers that catch OSError catch it too

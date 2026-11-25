@@ -6,6 +6,8 @@ import json
 import os
 import sys
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 OLD_NAMES = ("antyard", "ccharbor", "ccrestore")  # tabmancer's names before, newest first
@@ -90,6 +92,51 @@ def write_json(name: str, data: object, indent: int | None = 1) -> None:
         except OSError:  # elsewhere a folder by that name is IsADirectoryError: no half file left
             tmp.unlink(missing_ok=True)
             raise
+
+
+LOCK_STALE_SECONDS = 10.0  # a lock this old was left by a process that died mid-change: taken over
+
+
+class Busy(OSError):
+    """locked could not get its lock in time: another process is changing that file."""
+
+
+@contextmanager
+def locked(name: str, tries: int | None = None) -> Iterator[None]:
+    """One process at a time in a read-then-write of the config file `name` (two that read it at once
+    would each write back its own, and the first one's change would be lost): `<name>.lock` beside it,
+    made with O_EXCL, tried `tries` times (None: BUSY_TRIES) BUSY_WAIT apart. One older than
+    LOCK_STALE_SECONDS is taken over. Raises Busy when it could not be got: the caller leaves the file
+    as it is and says so."""
+    path = config_dir() / f"{name}.lock"
+    tries = BUSY_TRIES if tries is None else max(1, tries)
+    for attempt in range(tries):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > LOCK_STALE_SECONDS:
+                    path.unlink()
+                    continue
+            except FileNotFoundError:
+                continue  # let go of just now: try again at once
+            except OSError:
+                pass
+        except OSError:
+            pass  # held for a moment (a scanner), or no folder to make it in
+        if attempt + 1 < tries:
+            time.sleep(BUSY_WAIT)
+    else:
+        raise Busy(f"another tabmancer process is changing {name}")
+    try:
+        yield
+    finally:
+        try:
+            path.unlink()
+        except OSError:
+            pass  # taken over as stale meanwhile, or held: it goes stale
 
 
 def merge_json(name: str, **keys: object) -> bool:

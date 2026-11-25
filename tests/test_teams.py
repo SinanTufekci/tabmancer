@@ -230,3 +230,30 @@ def test_a_semicolon_inside_a_members_part_stays_in_it():
         ("ui", "the screens; worktree _wt/ui", "", ""), ("docs", "the guide", "", ""), ("tests", "", "", "haiku"),
         ("review", "", "", "")]
     assert teams.suggested_lines("- örnek: bir iş\nHere you go:") == "ornek: bir iş"  # a name in any letters
+
+
+def test_opening_members_are_claimed_once_and_given_back():
+    """claim_opening: the check and the note in one step under opening.json's lock; forget_opening gives
+    back the ones that did not start, so s may start them again at once."""
+    assert teams.claim_opening(["shop-api", "shop-ui"], now=1000.0) == set()
+    assert teams.claim_opening(["shop-ui", "shop-lead"], now=1010.0) == {"shop-ui"}  # the second start
+    assert teams.opening(now=1020.0) == {"shop-api", "shop-ui", "shop-lead"}
+    assert teams.opening(now=1000.0 + teams.OPENING_SECONDS) == {"shop-lead"}  # the first two have come up
+    teams.forget_opening(["shop-lead", "nobody"], now=1020.0)
+    assert teams.opening(now=1020.0) == {"shop-api", "shop-ui"}
+    teams.forget_opening([])
+    assert not (teams.config_dir() / f"{teams.OPENING_FILE}.lock").exists()
+
+
+def test_a_busy_opening_file_claims_nothing(monkeypatch):
+    from tabmancer import config
+
+    monkeypatch.setattr(config.time, "sleep", lambda seconds: None)
+    with config.locked(teams.OPENING_FILE):
+        try:
+            teams.claim_opening(["shop-api"])
+            raise AssertionError("claimed under another's lock")
+        except config.Busy:
+            pass
+        teams.forget_opening(["shop-api"])  # best effort: no error
+    assert teams.opening() == set()
