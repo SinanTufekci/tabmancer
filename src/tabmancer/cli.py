@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 import os
@@ -175,6 +176,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.demo:
         if args.command:
             parser.error("--demo opens the dashboard: leave out the command")
+        if not has_textual():
+            sys.exit(without_textual(demo=True))  # `tabmancer desktop --demo`, or how to get it
         from .demo import run
 
         run(args.days)
@@ -252,8 +255,12 @@ def main(argv: list[str] | None = None) -> None:
         try:
             from .app import SessionPicker  # Textual is slow to import; only the picker needs it
         except ModuleNotFoundError as error:
-            if args.command is not None or not (error.name or "").startswith("textual"):
+            if not (error.name or "").startswith("textual"):
                 raise
+            if args.command == "live":
+                print(f"The terminal dashboard is not installed (no Textual), so {PROG} live cannot run here. "
+                      f"The dashboard is a desktop window: {PROG} desktop.", file=sys.stderr)
+                sys.exit(1)
             sys.exit(without_textual(parser))  # a core install: the window, or how to get it
         from . import sixel
 
@@ -482,7 +489,10 @@ def watched_team(name: str) -> tuple[str, str]:
 
 def team_watch(name: str, days: float, tabs_window: str = "") -> int:
     """`tabmancer team watch [team]`: the team's monitor, in this window. It acts only when asked
-    (no limits continued, no toasts, no updates): the dashboard stays the one that does."""
+    (no limits continued, no toasts, no updates): the dashboard stays the one that does. Without
+    Textual, the desktop monitor (`tabmancer desktop --monitor`), or how to get it."""
+    if not has_textual():
+        return without_textual(team=name or "")
     team, problem = watched_team(name)
     if problem:
         print(problem, file=sys.stderr)
@@ -514,15 +524,27 @@ def m_opens(choice: str) -> int:
 CORE_INSTALL = 'uv tool install "tabmancer[desktop]"'
 
 
-def without_textual(parser: argparse.ArgumentParser) -> int:
-    """`tabmancer` with no command where the terminal dashboard is not installed (no Textual): the
-    desktop window if Qt is there, else how to add it and what the commands are."""
+def has_textual() -> bool:
+    """Whether the terminal dashboard can run: Textual installed (a core install has none)."""
+    try:
+        return importlib.util.find_spec("textual") is not None
+    except ImportError:
+        return False
+
+
+def without_textual(parser: argparse.ArgumentParser | None = None, demo: bool = False,
+                    team: str | None = None) -> int:
+    """Where the terminal dashboard is not installed (no Textual): the desktop window if Qt is there
+    (the dashboard, over the made-up sessions with demo, or a team's monitor with team: "" asks which),
+    the way `tabmancer desktop` opens it; else how to add it, and with parser what the commands are."""
     from . import desktop
 
     if desktop.available():
-        return desktop_window(False, "")
-    print(f"The dashboard is a desktop window, which needs Qt: {CORE_INSTALL}")
-    print(f"Without it the commands work as they are:\n\n{parser.format_help()}")
+        return desktop_window(team is not None, team or "", demo)
+    what = "A team's monitor" if team is not None else "The demo" if demo else "The dashboard"
+    print(f"{what} is a desktop window, which needs Qt: {CORE_INSTALL}")
+    if parser is not None:
+        print(f"Without it the commands work as they are:\n\n{parser.format_help()}")
     return 0
 
 

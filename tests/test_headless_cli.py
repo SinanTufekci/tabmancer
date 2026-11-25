@@ -164,16 +164,42 @@ def test_no_command_without_textual_or_qt_says_how_to_get_the_window(home):
     assert "cleanup" in done.stdout and "doctor" in done.stdout  # the command list
 
 
-def test_no_command_without_textual_opens_the_desktop_window(home):
-    """With Qt there (stood in for: this test's Python has none), the dashboard is the window:
+WINDOWS = {  # what opens the terminal dashboard, and the desktop window it opens without Textual
+    "no command": ([], "WINDOW False '' False"),
+    "--demo": (["--demo"], "WINDOW False '' True"),  # tabmancer desktop --demo
+    "team watch": (["team", "watch", "shop"], "WINDOW True 'shop' False"),  # tabmancer desktop --monitor shop
+    "team watch, no team": (["team", "watch"], "WINDOW True '' False"),  # the window asks which
+}
+
+
+@pytest.mark.parametrize("name", list(WINDOWS))
+def test_without_textual_the_desktop_window_opens_instead(home, name):
+    """With Qt there (stood in for: this test's Python has none), each is the window, by
     `tabmancer desktop`'s own path, not a copy of it."""
+    command, said = WINDOWS[name]
     stand_in = ("from tabmancer import cli, desktop\n"
                 "desktop.available = lambda: True\n"
-                "cli.desktop_window = lambda monitor, name, demo=False: print('WINDOW', monitor, repr(name)) or 0\n")
-    done = run(home, tail=stand_in + CLI)
+                "cli.desktop_window = lambda monitor, name, demo=False: print('WINDOW', monitor, repr(name), demo) or 0\n")
+    done = run(home, *command, tail=stand_in + CLI)
     assert "the test " not in done.stderr, done.stderr[-3000:]
     assert done.returncode == 0 and "LOADED []" in done.stderr, done.stderr[-3000:]
-    assert "WINDOW False ''" in done.stdout and "uv tool install" not in done.stdout
+    assert said in done.stdout and "uv tool install" not in done.stdout
+
+
+@pytest.mark.parametrize(("command", "what"), [(["--demo"], "The demo"),
+                                               (["team", "watch", "shop"], "A team's monitor")])
+def test_without_textual_or_qt_they_say_how_to_get_the_window(home, command, what):
+    done = run(home, *command)
+    assert "the test " not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == 0 and "LOADED []" in done.stderr, done.stderr[-3000:]
+    assert f'{what} is a desktop window, which needs Qt: uv tool install "tabmancer[desktop]"' in done.stdout
+
+
+def test_live_without_textual_says_the_terminal_dashboard_is_not_installed(home):
+    done = run(home, "live")
+    assert "the test " not in done.stderr and "Traceback" not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == 1 and "LOADED []" in done.stderr
+    assert "terminal dashboard is not installed" in done.stderr and "tabmancer desktop" in done.stderr
 
 
 def test_wrapped_saves_its_picture_without_textual_or_qt(home, tmp_path):
@@ -185,9 +211,9 @@ def test_wrapped_saves_its_picture_without_textual_or_qt(home, tmp_path):
 
 
 def test_the_guard_catches_textual_and_a_real_file(home):
-    """The guard itself: what needs Textual is stopped (`live` is the dashboard, Textual's on
+    """The guard itself: what needs Textual is stopped (the terminal dashboard, Textual's on
     purpose), and so is reading the real ~/.claude/.credentials.json or starting a program."""
-    assert "blocked: textual" in run(home, "live").stderr
+    assert "blocked: textual" in run(home, tail="from tabmancer.app import SessionPicker").stderr
     for code, said in ((f"open({str(REAL_HOME / '.claude' / '.credentials.json')!r})", "opened a real file"),
                        ("import subprocess; subprocess.run(['claude', '--version'])", "started a program")):
         assert f"the test {said}" in run(home, tail=code).stderr
