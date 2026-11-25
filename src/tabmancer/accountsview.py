@@ -18,21 +18,12 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
-from . import accounts, usage
+from . import accounts, accountwords, usage
 from .accounts import Account
-from .browsers import DEFAULT, Place, guess
+from .accountwords import ANOTHER
+from .browsers import DEFAULT, Place
 from .dialogs import frame, title
-from .theme import CYAN, GREEN, MUTED, TEXT, keys
-
-ANOTHER = "+"  # the option for an account not seen yet
-
-
-def seen_words(when: str) -> str:
-    """'last on 2 Nov 14:05' from an ISO time; nothing when it cannot be read."""
-    try:
-        return f"last on {datetime.fromisoformat(when):%d %b %H:%M}"
-    except ValueError:
-        return ""
+from .theme import keys
 
 
 class AccountsDialog(ModalScreen[tuple[str, str] | None]):
@@ -58,66 +49,31 @@ class AccountsDialog(ModalScreen[tuple[str, str] | None]):
         self.last = last or {}  # each account's last limits reading (usage.last_by_account), by key
         # Where each one's page can open; with nothing but the system's own way, no choice to show.
         self.places = places if places is not None and len(places) > 1 else []
-        known = {place.id for place in self.places}
-        picked = picked or {}
-        emails = [account.email for account, _ in seen]
-        self.shared = {email for email in emails if emails.count(email) > 1}  # shown with their organisation
-        self.email: dict[str, str] = {ANOTHER: accounts.ANY_OTHER}  # option id -> the email it opens for
-        self.place: dict[str, str] = {}  # option id -> place id
-        for account, _ in seen:
-            self.email[account.key] = account.email
-            chosen = picked.get(account.email)
-            self.place[account.key] = chosen if chosen in known else guess(account.email, self.places)
-        chosen = picked.get(accounts.ANY_OTHER)
-        self.place[ANOTHER] = chosen if chosen in known else DEFAULT
+        self.shared = accountwords.shared(seen)  # shown with their organisation
+        # option id -> the email it opens for, option id -> place id
+        self.email, self.place = accountwords.opens_in(seen, self.places, picked or {})
 
     def is_current(self, key: str) -> bool:
         return self.current is not None and key == self.current.key
 
     def prompt(self, option_id: str) -> Text:
+        where = accountwords.place_words(self.places, self.place[option_id]) if self.places else ""
         if option_id == ANOTHER:
-            text = Text.assemble(("  Another account", f"bold {TEXT}"), ("  one not listed here", MUTED))
-        else:
-            account, when = next((a, w) for a, w in self.seen if a.key == option_id)
-            now = self.is_current(account.key)
-            where = account.org_words() if account.email in self.shared else ""
-            text = Text.assemble(
-                ("● " if now else "  ", GREEN if now else MUTED), (account.email, f"bold {TEXT}"),
-                (f"  {where}" if where else "", CYAN),
-                (f"  {account.plan}" if account.plan else "", MUTED),
-                ("  signed in now" if now else f"  {seen_words(when)}", GREEN if now else MUTED))
-            if now:
-                return text  # nothing to sign in to: where it would open does not matter now
-            if account.key in self.last:  # how its limits stood when last read: room there, or not yet
-                text.append_text(Text.assemble(("\n    ", MUTED), (usage.last_words(*self.last[account.key]), MUTED)))
-        if self.places:
-            words = next((p.words for p in self.places if p.id == self.place[option_id]), "default browser")
-            text.append_text(Text.assemble(("\n    opens in ", MUTED), (words, CYAN)))
-        return text
+            return Text.assemble(*accountwords.another_parts(where))
+        account, when = next((a, w) for a, w in self.seen if a.key == option_id)
+        return Text.assemble(*accountwords.option_parts(
+            account, when, current=self.is_current(account.key), shared=account.email in self.shared,
+            last=self.last.get(account.key), place=where))
 
     def compose(self) -> ComposeResult:
         options = [Option(self.prompt(account.key), id=account.key, disabled=self.is_current(account.key))
                    for account, _ in self.seen]
         options.append(Option(self.prompt(ANOTHER), id=ANOTHER))
-        if self.places:
-            note = ("Claude Code signs you in, in a new tab, its page where you pick: a browser profile signed in "
-                    "to that account takes one click, a private window asks you to sign in. tabmancer reads "
-                    "only your browsers' profile names.")
-        else:
-            note = ("Claude Code signs you in, in a new tab: your browser opens with the account filled in, and "
-                    "every session goes on with it. tabmancer keeps only the emails it has seen.")
-        if self.stopped:
-            note += (f" {self.stopped} session{' is' if self.stopped == 1 else 's are'} stopped at a usage limit: "
-                     "once you are signed in with another account, c continues "
-                     f"{'it' if self.stopped == 1 else 'them'} at once.")
-        pairs = [("Enter", "sign in with it"), *((("←/→", "where it opens"),) if self.places else ()),
-                 ("Esc", "cancel")]
         with Vertical():
-            yield Label(title("Claude accounts", f"signed in as {self.current.email}" if self.current
-                              else "not signed in"))
+            yield Label(title("Claude accounts", accountwords.title_words(self.current)))
             yield OptionList(*options)
-            yield Label(note, classes="note")
-            yield Label(keys(*pairs), classes="hint")
+            yield Label(accountwords.note(bool(self.places), self.stopped), classes="note")
+            yield Label(keys(*accountwords.key_pairs(bool(self.places))), classes="hint")
 
     def on_mount(self) -> None:
         options = self.query_one(OptionList)
@@ -136,7 +92,7 @@ class AccountsDialog(ModalScreen[tuple[str, str] | None]):
             return
         ids = [place.id for place in self.places]
         now = self.place.get(option.id, DEFAULT)
-        self.place[option.id] = ids[((ids.index(now) if now in ids else 0) + step) % len(ids)]
+        self.place[option.id] = accountwords.next_place(ids, now, step)
         email = self.email.get(option.id, option.id)
         for option_id, its_email in self.email.items():  # the same email's other organisations open there too
             if its_email == email:

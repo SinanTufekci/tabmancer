@@ -33,6 +33,7 @@ from textual.widgets.selection_list import Selection
 
 from . import (
     accounts,
+    accountwords,
     actions,
     actor,
     agy,
@@ -96,7 +97,6 @@ from .sessions import (
     live_sessions,
     nothing_found,
     read_session,
-    sensitive_calls,
 )
 from .shortcuts import DASHBOARD_WINDOW
 from .shutdowns import open_at_shutdown, recent_shutdowns
@@ -2876,73 +2876,43 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if self.after_update("the sign-in opens", lambda: chosen(picked)):
                 return
             email, place = picked
-            login = Launch(title=f"Sign in{f': {email}' if email else ''}", cwd=str(Path.home()), mode=Mode.NEW,
-                           session_id="", options=("auth", "login", *(("--email", email) if email else ())),
-                           env=browsers.login_environment(place))
+            login = accountwords.sign_in_launch(email, place)
             try:
                 left = open_tabs([login])
             except OSError as error:
-                self.notify(f"Could not open the tab: {error}", severity="error", timeout=15)
+                self.say_note(accountwords.open_failed_note(error))
                 return
-            where = next((p.words for p in places if p.id == place and login.env), "your browser")
-            if left:
-                self.notify(f"No terminal to open it in. Run it yourself: {left[0]}", timeout=15)
-            else:
-                self.notify(f"Signing in{f' as {email}' if email else ''} in a new tab: finish it in {where}. "
-                            "The top bar says when it is done.", timeout=8)
+            self.say_note(accountwords.signing_in_note(email, accountwords.where_words(login, places, place), left))
 
         self.push_screen(AccountsDialog(current, seen, stopped, places, accounts.opens_in(), usage.last_by_account()),
                          chosen)
 
     def ran_elsewhere(self, sessions: list[Session]) -> list[Session]:
-        """Those that last ran on another organisation than the account signed in now: going on with
-        them (or a handover, or a summary) sends their conversation there. Unknown either way: none."""
-        here = self.account.org_id if self.account is not None else ""
-        return [s for s in sessions if here and s.org and s.org != here]
+        """Those that last ran on another organisation than the account signed in now (accountwords)."""
+        return accountwords.ran_elsewhere(self.account, sessions)
 
     def org_words(self) -> str:
         """Where a conversation goes now: 'your personal account', 'the Example Labs organisation'."""
-        account = self.account
-        if account is None:
-            return "this account"
-        if account.personal:
-            return "your personal account"
-        return f"the {account.org_name} organisation" if account.org_name else "this organisation"
+        return accountwords.goes_to(self.account)
 
     @staticmethod
     def held(session: Session) -> list[str]:
         """What its tool calls read: those of its tail as read, and any further back (sensitive_calls)."""
-        return list(dict.fromkeys([*session.sensitive, *sensitive_calls(session.path)]))
+        return accountwords.held(session)
 
     def tell_elsewhere(self, session: Session, what: str) -> None:
         """One line, never a stop: what of a session that ran on another organisation goes to this one."""
-        if self.ran_elsewhere([session]):
-            held = self.held(session)
-            held = f" ({' / '.join(held)} content in it)" if held else ""
-            self.notify(f"{session.project} ran on another organisation: {what} goes to {self.org_words()}{held}.",
-                        severity="warning", timeout=10)
+        note = accountwords.elsewhere_note(session, what, self.account)
+        if note is not None:
+            self.say_note(note)
 
     def other_accounts_note(self, opens: datetime | None) -> tuple[str, str]:
-        """For a limit's note: how the other Claude accounts stood when last read (usage.other_accounts),
-        named as the top bar names them. ("", "") with none read."""
-        last = usage.last_by_account()
-        shared = accounts.shared_emails()
-
-        def name(account: accounts.Account) -> str:
-            return accounts.words(replace(account, plan=""), 60, org=account.email in shared)  # no plan
-
-        others = [(name(account), *last[account.key]) for account, _ in accounts.known()
-                  if account.key != self.signed_as and account.key in last]
-        this = name(self.account) if self.account is not None else "this account"
-        return usage.other_accounts(this, opens, others, lifts)
+        """For a limit's note: how the other Claude accounts stood when last read (accountwords)."""
+        return accountwords.other_accounts_note(self.account, self.signed_as, opens)
 
     def other_accounts_words(self) -> list[str]:
-        """How the other Claude accounts' limits stood when last read, one line each, for where you
-        choose to go on: 'b@example.com: session 12% · week 40% · read 45m ago'. None read: nothing."""
-        last = usage.last_by_account()
-        shared = accounts.shared_emails()
-        return [f"{accounts.words(account, 60, org=account.email in shared)}: {usage.last_words(*last[account.key])}"
-                for account, _ in accounts.known() if account.key != self.signed_as and account.key in last]
+        """How the other Claude accounts' limits stood when last read, one line each (accountwords)."""
+        return accountwords.other_accounts_words(self.signed_as)
 
     @work(thread=True, exclusive=True, group="updates")
     def check_updates(self) -> None:
