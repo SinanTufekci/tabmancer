@@ -5,7 +5,8 @@ team with members open closes their tabs.
 
 The terminal dashboard's own steps (actions.py), each on a thread of its own: finding a tab, or today's
 claude update before Claude Code sessions open (claudeupdate), takes a while, and the window never waits
-on it. The modules are looked up when called (launch.open_tabs, focus.focus_tab), so the demo's
+on it. What opening keeps between presses (the ones still starting, and which never came up) is the
+terminal dashboard's one copy too (openings.Openings). The modules are looked up when called (launch.open_tabs, focus.focus_tab), so the demo's
 stand-ins (demo.stand_ins) stand in for them here too. Nothing here claims the actor lock: what a key asks
 for is done, as in a terminal dashboard that only watches; what happens by itself (a limit lifting) is
 the acting dashboard's.
@@ -16,17 +17,18 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from functools import partial
 
 from PySide6.QtCore import QObject, Signal
 
-from .. import actions, claudeupdate, launch, teams
+from .. import actions, claudeupdate, launch, openings
 from ..launch import Launch, Mode, default_mode
-from ..sessions import Exit, Session, Status
+from ..sessions import Session, Status
 from ..store import DashSnapshot, live_entries
 
-CAME_UP_SECONDS = 45  # as the terminal dashboard: by then one opened from here shows open, or it is said
-ALREADY = actions.Note("Already opening: it shows as open in a moment.", "warning", 4)
+CAME_UP_SECONDS = openings.CAME_UP_SECONDS  # by then one opened from here shows open, or it is said
+ALREADY = replace(openings.ALREADY, seconds=4)
 NO_TERMINAL = ("No terminal here opens tabs, so nothing opened: the commands are on the clipboard, to run "
                "in a terminal.")
 
@@ -70,12 +72,9 @@ class Opener(QObject):
     def __init__(self, parent: QObject | None = None, clock: Callable[[], float] = time.monotonic,
                  update: bool = True) -> None:
         super().__init__(parent)
-        self.clock = clock
         self.update = update
         self.modes: dict[str, Mode] = {}  # how one opens, where m changed it
-        self.opening: dict[str, float] = {}  # opened from here: id -> when (actions.still_opening)
-        self.came_up: set[str] = set()  # of those, the ones seen open since
-        self.checks: list[tuple[float, set[str]]] = []  # (when to look, the ones opened then): did they come up?
+        self.openings = openings.Openings(clock=clock)  # the ones opened from here, and which came up
         self.turn = actions.Turn(None)  # where j goes on from
         self.workers: list[threading.Thread] = []
 
@@ -96,16 +95,11 @@ class Opener(QObject):
     def open(self, chosen: list[Session], snap: DashSnapshot) -> None:
         """These sessions in new tabs, each as m says (a team's lead last, so it finds its members up);
         not the ones opened from here a moment ago, still starting."""
-        recent = actions.still_opening(self.opening, self.clock())
-        chosen = [s for s in chosen if s.session_id not in recent]
+        chosen = self.openings.choose(chosen)
         if not chosen:
             self.say(ALREADY)
             return
-        saved = teams.load()
-        launches = [actions.launch_for(s, self.mode(s), snap.background.get(s.session_id)
-                                       if s.status is Status.BACKGROUND else None, saved)
-                    for s in teams.lead_last(chosen, saved)]
-        self.start(self.open_now, launches, dict(snap.background))
+        self.start(self.open_now, self.openings.launches(chosen, self.mode, snap.background), dict(snap.background))
 
     def open_now(self, launches: list[Launch], background: dict[str, dict]) -> None:
         """On a thread of its own: today's claude update first, when it is due and one is Claude Code's;
@@ -121,24 +115,14 @@ class Opener(QObject):
     def took(self, opened: actions.Opened) -> actions.Note | None:
         """Back on the window's thread: the ones opened kept (not opened again while they start; looked
         for a while later), and what to say."""
-        if opened.opened:
-            now = self.clock()
-            self.opening.update(dict.fromkeys(opened.opened_ids, now))
-            self.came_up -= opened.resumed_ids
-            self.checks.append((now + CAME_UP_SECONDS, opened.resumed_ids))
+        self.openings.took(opened)
         return opened_note(opened)
 
     def seen(self, sessions: dict[str, Session]) -> actions.Note | None:
         """At each read: the ones opened from here that show open now; and, a while after they were
         opened, the ones that never did (Claude Code would not resume one: its tab says why)."""
-        self.came_up |= {sid for sid in self.opening
-                         if (session := sessions.get(sid)) is not None and session.exit is Exit.RUNNING}
-        now = self.clock()
-        due = [ids for when, ids in self.checks if when <= now]
-        if not due:
-            return None
-        self.checks = [(when, ids) for when, ids in self.checks if when > now]
-        words = actions.came_up_missing(set().union(*due), self.came_up, sessions)
+        self.openings.seen(sessions)
+        words = self.openings.due(sessions)
         return actions.Note(words, "warning", 10) if words else None
 
     # --- an open session's tab, and j -------------------------------------------------------------

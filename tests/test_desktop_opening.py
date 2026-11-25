@@ -18,7 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen
 
 from PySide6.QtWidgets import QApplication
 
-from tabmancer import actions
+from tabmancer import actions, openings
 from tabmancer.desktop import opening
 from tabmancer.launch import Launch, Mode
 from tabmancer.sessions import Exit, Session, Status
@@ -69,14 +69,16 @@ def test_one_opened_that_never_shows_open_is_said_once_a_while_later(qapp):
     opener = opening.Opener(clock=clock)
     note = opener.took(actions.Opened([resumed("up"), resumed("gone")], [], []))
     assert note == actions.Note("Opened 2 sessions in new tabs.", "information", 4)
-    assert actions.still_opening(opener.opening, clock()) == {"up", "gone"}
+    kept = opener.openings  # the terminal dashboard's one copy (openings.Openings), on the window's clock
+    assert isinstance(kept, openings.Openings) and kept.recent() == {"up", "gone"}
     now = {"up": made("up", status=Status.RUNNING, exit=Exit.RUNNING, live="busy"), "gone": made("gone")}
     clock.now += 10
-    assert opener.seen(now) is None and opener.came_up == {"up"}
+    assert opener.seen(now) is None and kept.came_up == {"up"}
     now["up"] = made("up")  # closed again since: it did come up
     clock.now += opening.CAME_UP_SECONDS
     assert opener.seen(now) == actions.Note("gone did not come up: its tab says why.", "warning", 10)
-    assert opener.seen(now) is None and opener.checks == []  # said once
+    assert opener.seen(now) is None and kept.checks == []  # said once
+    assert opening.ALREADY == actions.Note(openings.ALREADY.words, "warning", 4)  # its words, said for 4 s here
 
 
 def test_what_an_enter_came_to_is_one_line_for_bit():
