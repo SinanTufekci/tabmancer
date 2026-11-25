@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from dataclasses import replace
 
 import pytest
 from conftest import box_has_focus
 
 from tabmancer import app as app_module
 from tabmancer import rename, sessions
-from tabmancer.sessions import Session
+from tabmancer.sessions import Exit, Session, Status
 
 RENAME = rename.rename  # the real one: conftest keeps tests off the claude CLI
 
@@ -34,6 +35,28 @@ def test_a_closed_session_runs_rename_once_without_a_tab(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "Hi!", ""))
     with pytest.raises(OSError):  # an answer that is not the rename: it did not happen
         RENAME(Session(session_id="s1", path=None, cwd=str(tmp_path)), "x")
+
+
+def test_what_r_says_is_one_copy_for_both_front_ends(tmp_path, monkeypatch):
+    """Refused for another CLI, a team's member and a background session; the heading and Enter's words; the
+    open one's command, on the clipboard and its tab brought forward; failed and done."""
+    monkeypatch.setattr(rename.teams, "member_of", lambda session: None)
+    closed = Session(session_id="s1", path=None, cwd=str(tmp_path / "shop"), title="x" * 70)
+    assert rename.refusal(closed) is None
+    assert rename.refusal(replace(closed, cli="codex")).startswith("Only Claude Code sessions can be renamed: Codex")
+    assert rename.refusal(replace(closed, status=Status.BACKGROUND)).startswith("A background session renames itself")
+    monkeypatch.setattr(rename.teams, "member_of", lambda session: ("team", "member"))
+    assert rename.refusal(closed) == "Team members keep their names: the team finds them by it."
+    assert rename.heading(closed) == f"Rename shop · “{'x' * 59}…”"
+    assert rename.enter_words(closed) == "rename it, in Claude Code's own list too"
+    running = replace(closed, exit=Exit.RUNNING)
+    assert rename.enter_words(running) == "copy /rename and go to its tab, to paste"
+    told = rename.open_told(running, "New  name")
+    assert told.clipboard == "/rename New name" and told.go_to is running and told.title == "Rename"
+    assert told.words.startswith("shop is open, so it renames itself")
+    assert rename.failed_note(closed, "no claude").words == "shop was not renamed: no claude"
+    assert rename.failed_note(closed, "x").severity == "error"
+    assert rename.renamed_note("Fresh").words == "Renamed to “Fresh”."
 
 
 async def until(pilot, check, tries=200):  # a loaded machine takes its time

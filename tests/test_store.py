@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -442,6 +443,18 @@ def test_a_reading_with_new_marks_is_what_the_next_poll_shows(fake_home, tmp_pat
     assert (marked.pinned, marked.hidden) == (polled.pinned, polled.hidden) == ({"one"}, {"two"})
     assert comparable(marked.view) == comparable(polled.view) != comparable(before.view)
     assert before.pinned == set()  # the reading it came from is left as it was
+
+
+def test_a_session_the_window_changed_itself_is_in_the_next_reading(fake_home, tmp_path, monkeypatch, quiet):
+    """r renamed a closed session: no poll reads a closed one again, so the window gives it (take)."""
+    shop(fake_home, tmp_path, monkeypatch)
+    dash = DashboardStore(clock=Clock())
+    closed = next(s for s in dash.poll().sessions.values() if s.exit is not Exit.RUNNING)
+    dash.take(replace(closed, title="Renamed"))
+    dash.take(replace(closed, session_id="not-listed", title="Unknown"))
+    snap = dash.poll()
+    assert snap.sessions[closed.session_id].title == "Renamed" and "not-listed" not in snap.sessions
+    assert dash.given == [] and dash.poll().sessions[closed.session_id].title == "Renamed"  # kept, not taken twice
 
 
 def test_the_dashboard_store_reads_as_often_as_the_dashboard(fake_home, tmp_path, monkeypatch, quiet):

@@ -471,6 +471,13 @@ class DashboardStore(Polled):
         self.acting: dict | None = None
         self.open_at_shutdown: set[str] = set()
         self.polls = 0
+        self.given: list[Session] = []  # sessions a front end changed itself (take): in the next reading
+
+    def take(self, session: Session) -> None:
+        """A session as the window read it again after changing it itself (r renamed a closed one, which no
+        poll reads again): the next reading has it in place of the one known; one not known is left out. From
+        any thread: the reading takes it on its own (a list's append and pop hold the GIL)."""
+        self.given.append(session)
 
     # --- what it reads ------------------------------------------------------------------------
 
@@ -533,6 +540,10 @@ class DashboardStore(Polled):
             self.due["others"] = self.clock() + OTHERS_SECONDS  # find_sessions has just read them
         elif self.is_due("others", OTHERS_SECONDS):
             self.read_others()
+        while self.given:
+            taken = self.given.pop(0)
+            if taken.session_id in self.sessions:
+                self.sessions[taken.session_id] = taken
         self.read_live(full=self.polls % FULL_EVERY == 0)  # the first poll asks `claude agents --json`
         self.polls += 1
         self.read_teams()

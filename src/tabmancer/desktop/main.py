@@ -68,11 +68,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, actions, bitart, clis, commands, engine, handoverwords, marks, search, teams
+from .. import (
+    __version__,
+    actions,
+    bitart,
+    clis,
+    commands,
+    engine,
+    handoverwords,
+    marks,
+    rename,
+    search,
+    teams,
+)
 from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
-from ..sessions import Session, Status, folder_key
+from ..sessions import Exit, Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
 from . import commandbar, frame, look, monitor, teamgraph
 from .board import Board
@@ -81,6 +93,7 @@ from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
 from .front import WindowFront
 from .monitor import MonitorWindow, sequences
+from .naming import NameDialog, Renamer
 from .opening import Opener
 from .rail import Rail
 from .table import Table, drawer_key
@@ -94,7 +107,7 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h"}
+        "j", "M", "h", "r"}
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
@@ -232,6 +245,10 @@ class MainWindow(QMainWindow):
         self.closing_timer.setSingleShot(True)
         self.closing_timer.timeout.connect(self.forget_closing)
         self.opener.closed.connect(self.closed_tabs)
+        self.renamer = Renamer(self)  # r on a closed session: /rename run in it on a thread
+        self.renamer.done.connect(self.renamed)
+        self.renamer.failed.connect(self.rename_failed)
+        self.naming: Session | None = None  # r: the session its dialog names
         self.monitors: dict[str, MonitorWindow] = {}  # M: each team's monitor opened from here
         self.popup: QMenu | None = None  # a card's or a row's menu, while it is shown
         self.leaving = False  # closing anyway: the handovers queued here dropped (CloseDialog), or the app quit
@@ -407,7 +424,7 @@ class MainWindow(QMainWindow):
                  "Space": self.toggle, "a": self.toggle_all, "e": self.expand, "E": self.fold_teams, "x": self.hide,
                  "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
                  "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key,
-                 "h": self.handover_key}
+                 "h": self.handover_key, "r": self.rename_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -481,6 +498,7 @@ class MainWindow(QMainWindow):
             if thread is not None:
                 thread.join(seconds)
         self.opener.settle(seconds)
+        self.renamer.settle(seconds)
         self.front.settle(seconds)
         for shown in self.monitors.values():
             shown.settle(seconds)  # a read of its own (Python's: there after the window is deleted too)
@@ -1175,6 +1193,52 @@ class MainWindow(QMainWindow):
             self.say("h hands a session over to a fresh one: pick one.")
             return
         self.engine.handover(session)
+
+    def rename_key(self) -> None:
+        """r: the picked session renamed, as the terminal dashboard's r does it and in its words (rename.py):
+        refused for another CLI, a team's member or a background session; else its name asked for."""
+        snap = self.snap
+        session = snap.sessions.get(self.picked_now()) if snap is not None else None
+        if session is None:
+            self.say("r renames a session: pick one.")
+            return
+        refused = rename.refusal(session)
+        if refused:
+            self.say_note(refused, 6, "warning")
+            return
+        self.naming = session
+        asked = NameDialog(self, rename.heading(session), session.title, rename.PLACEHOLDER,
+                           (("Enter", rename.enter_words(session)), ("Esc", "cancel")), self.accent,
+                           rename.OPEN_WORDS if session.exit is Exit.RUNNING else "")
+        asked.named.connect(self.rename_to)
+        asked.open()
+
+    def rename_to(self, name: str) -> None:
+        """The name given: an open session renames itself (renamed from outside, its next turn would write the
+        old name back), so /rename goes on the clipboard and its tab comes forward, to paste; a closed one is
+        renamed on a thread (Renamer). As the list has it now: it may have opened while the dialog stood."""
+        session, self.naming = self.naming, None
+        if session is None or name == session.title:
+            return
+        snap = self.snap
+        session = snap.sessions.get(session.session_id, session) if snap is not None else session
+        if session.exit is Exit.RUNNING:
+            told = rename.open_told(session, name)
+            QApplication.clipboard().setText(told.clipboard)
+            self.opener.go_to(session)
+            self.say_note(told.words, float(told.seconds or 4), told.severity)
+            return
+        self.renamer.rename(session, name)
+
+    def renamed(self, session: Session) -> None:
+        """Renamed and read again: said, and in the next reading (no poll reads a closed session again)."""
+        note = rename.renamed_note(session.title)
+        self.say_note(note.words, float(note.seconds or 4), note.severity)
+        self.store.take(session)
+        self.poll()
+
+    def rename_failed(self, note: actions.Note) -> None:
+        self.say_note(note.words, float(note.seconds or 4), note.severity)
 
     def next_waiting(self) -> None:
         """j: the next open session that needs you, else the next one waiting for you: picked in the list

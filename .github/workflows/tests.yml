@@ -53,7 +53,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            tests: tests/test_desktop_main.py tests/test_desktop_monitor.py tests/test_desktop_extra.py tests/test_store.py tests/test_desktop_teamgraph.py tests/test_desktop_conversation.py tests/test_desktop_teampanel.py tests/test_desktop_board.py tests/test_desktop_seam.py tests/test_desktop_table.py tests/test_desktop_opening.py tests/test_desktop_front.py tests/test_desktop_handover.py tests/test_desktop_teamhandover.py
+            tests: tests/test_desktop_main.py tests/test_desktop_monitor.py tests/test_desktop_extra.py tests/test_store.py tests/test_desktop_teamgraph.py tests/test_desktop_conversation.py tests/test_desktop_teampanel.py tests/test_desktop_board.py tests/test_desktop_seam.py tests/test_desktop_table.py tests/test_desktop_opening.py tests/test_desktop_front.py tests/test_desktop_handover.py tests/test_desktop_teamhandover.py tests/test_desktop_rename.py
           - os: ubuntu-latest
             tests: ""
     runs-on: ${{ matrix.os }}
