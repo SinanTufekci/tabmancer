@@ -862,13 +862,16 @@ def _pick(usage: dict | None, now: datetime | None, start: str) -> tuple[str, st
         return models[0], f"{name(models[0])} first ({UNREADABLE})"
 
 
+PICK_OR_WAIT = ": pick one or wait"  # where you choose (a dialog): the end of out_words
+
+
 def out_words(skipped: list[tuple[str, datetime]]) -> str:
     """'Neon and Hydrogen out until Nov 23 12:16: pick one or wait', short: a dialog's line holds
     some 80 characters. The time is when the first of them is back."""
     names = [name(m) for m, _ in skipped]
     back = min(b for _, b in skipped)
     who = " and ".join(names) if len(names) <= 2 else "all agy models"
-    return f"{who} out until {_when_back(back)}: pick one or wait"
+    return f"{who} out until {_when_back(back)}{PICK_OR_WAIT}"
 
 
 def resolve(model: str = "", usage: dict | None = None, now: datetime | None = None) -> tuple[str, str]:
@@ -893,6 +896,13 @@ def resolve(model: str = "", usage: dict | None = None, now: datetime | None = N
 
 def no_model(why: str) -> NoModel:
     return NoModel(f"no agy model now: {why}" if why else "no agy model now")
+
+
+def wait_words(why: NoModel) -> str:
+    """Why it would not open, where nothing is chosen (a session's preview): which models are out and
+    until when, and that nothing opens it until the quota is back. Never another model."""
+    said = str(why).removeprefix("no agy model now").removeprefix(": ").removesuffix(PICK_OR_WAIT)
+    return f"{said or 'no agy model now'}: nothing opens it until the quota is back"
 
 
 def model_flags(model: str, options: tuple[str, ...] | list[str] = (), session_id: str = "",

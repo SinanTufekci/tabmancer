@@ -126,7 +126,7 @@ def test_the_facts():
     assert found["Team"] == [("shop", f"bold {ACCENT}"), (" · api", TEXT)]
     assert found["CLI"] == [("Antigravity", CYAN)] and found["Git"] == [("2 changed · no upstream", AMBER)]
     assert found["Opens as"] == [("▶ auto", f"bold {ACCENT}")]
-    assert ("", [("every agy model is out", AMBER)]) in rows
+    assert ("", [("every agy model is out: nothing opens it until the quota is back", AMBER)]) in rows
     assert rows[-1] == ("", [("as shop: api, with its role and the team's messages let in", MUTED)])
     running = s(exit=Exit.RUNNING, status=Status.RUNNING, model="claude-opus-5-5", context=50_000,
                 started=datetime.now() - timedelta(hours=1))

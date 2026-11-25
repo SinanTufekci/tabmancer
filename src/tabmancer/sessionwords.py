@@ -244,7 +244,7 @@ def fact_rows(session: Session, *, member: tuple[str, str] | None, effort: str, 
         try:
             argv = replace(how, options=()).argv  # a member's flags are long: said in words below
         except agy.NoModel as why:  # agy's chain all out of quota: it would not open
-            rows.append(("", [(str(why), AMBER)]))
+            rows.append(("", [(agy.wait_words(why), AMBER)]))
         else:
             if how.mode is Mode.AUTO:  # the prompt is long; its start is enough here
                 argv = [*argv[:-1], clip(argv[-1], 28)]
@@ -339,8 +339,13 @@ def facts(session: Session, inputs: DetailInputs) -> list[Row]:
 def detail(session: Session, inputs: DetailInputs) -> DetailView:
     """A session's whole preview, as both fronts show it."""
     status, means = status_row(session)
-    enter = [("⏎ ", f"bold {inputs.accent}"),
-             (enter_words(session, inputs.launch, inputs.selected), inputs.accent)]
+    try:
+        enter = [("⏎ ", f"bold {inputs.accent}"),
+                 (enter_words(session, inputs.launch, inputs.selected), inputs.accent)]
+        if not inputs.selected and session.status is not Status.BACKGROUND and session.exit is not Exit.RUNNING:
+            inputs.launch().argv  # noqa: B018 - agy's chain all out of quota: Enter would open nothing
+    except agy.NoModel as why:
+        enter = [(agy.wait_words(why), AMBER)]
     said = said_rows(session, messages=inputs.messages, found=inputs.found, summary=inputs.summary,
                      summarizing=inputs.summarizing, summary_model=inputs.summary_model, room=inputs.room,
                      more=inputs.more, accent=inputs.accent)

@@ -95,3 +95,24 @@ def test_the_inputs_read_off_what_a_front_holds():
     assert facts_only.messages is None and facts_only.summary is None
     alone = sessionwords.read_inputs(s("o1"), **held)
     assert alone.member is None and alone.messages is None and alone.mode is Mode.RESUME and not alone.queued
+
+
+def test_with_agys_chain_all_out_the_preview_says_nothing_opens_it(monkeypatch):
+    from tabmancer import agy
+
+    why = "Neon and Hydrogen out until Nov 25 14:00: pick one or wait"
+
+    def out_of_quota(*a, **k):
+        raise agy.no_model(why)
+    monkeypatch.setattr(agy, "model_flags", out_of_quota)
+    said = "Neon and Hydrogen out until Nov 25 14:00: nothing opens it until the quota is back"
+    assert agy.wait_words(agy.no_model(why)) == said  # never another model: there, nothing is chosen
+    assert agy.wait_words(agy.no_model("")) == "no agy model now: nothing opens it until the quota is back"
+    gemini = s("g1", cli="agy")
+    inputs = sessionwords.DetailInputs(launch=lambda: Launch(title="t", cwd="C:/w", mode=Mode.RESUME,
+                                                             session_id="g1", cli="agy"), mode=Mode.RESUME)
+    view = sessionwords.detail(gemini, inputs)  # never raises: it says why
+    assert view.enter == [(said, AMBER)] and ("", [(said, AMBER)]) in view.facts
+    ticked = sessionwords.detail(gemini, sessionwords.DetailInputs(launch=inputs.launch, mode=Mode.RESUME,
+                                                                    selected={"g1"}))
+    assert ticked.enter[1][0] == "opens the 1 ticked session, each in a tab"  # what Enter does first
