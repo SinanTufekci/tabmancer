@@ -6,8 +6,8 @@ its team screen both call these; each is a Surface, what the keys ask of the win
 
 UI thread only. The first of two presses says what the second does; a second press counts within so
 many seconds of the first, by the clock it is given (a timer that forgot the first would forget a newer
-one too, when it went off after that one was made). Each surface keeps its own presses (a TeamKeys of its
-own)."""
+one too, when it went off after that one was made). Surfaces given the same presses share them: on the
+dashboard a team's row and its view do (EngineState.team_presses), so x on one and x on the other closes it."""
 
 from __future__ import annotations
 
@@ -100,9 +100,11 @@ class TeamKeys:
     """A surface's team keys, with its presses: the team x was pressed on once (closing), the team a cold
     start was asked for (cold), the member d was pressed on (removing). clock: seconds, time.monotonic."""
 
-    def __init__(self, surface: Surface, clock: Callable[[], float]) -> None:
+    def __init__(self, surface: Surface, clock: Callable[[], float],
+                 presses: dict[str, tuple[str, float]] | None = None) -> None:
         self.surface, self.clock = surface, clock
-        self.presses: dict[str, tuple[str, float]] = {}  # what was pressed once -> (on what, until when)
+        # what was pressed once -> (on what, until when); shared when given
+        self.presses: dict[str, tuple[str, float]] = presses if presses is not None else {}
 
     def again(self, what: str, on: str, seconds: float) -> bool:
         """A press of what on `on`: True when it is the second within seconds of the first (both are

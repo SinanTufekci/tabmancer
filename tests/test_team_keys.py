@@ -190,3 +190,20 @@ def test_a_second_press_counts_from_the_newest_first_one(fake_home, tmp_path):
     keys.remove(team, ui, None)
     surface.now = 28
     assert keys.remove(team, ui, None) is not None  # 5 s after d on ui, though 8 s after d on api
+
+
+def test_a_row_and_a_view_given_the_same_presses_share_them(fake_home, tmp_path):
+    """On the dashboard a team's row and its view hold their presses in one place (EngineState.team_presses):
+    x in the view and x on the row closes the team; without one given, each keeps its own."""
+    team, row, view = shop(tmp_path), Recorder(), Recorder()
+    presses: dict = {}
+    on_row = teamkeys.TeamKeys(row, clock=lambda: row.now, presses=presses)
+    in_view = teamkeys.TeamKeys(view, clock=lambda: row.now, presses=presses)
+    members = {"lead": opened("L"), "api": opened("A"), "ui": None}
+    in_view.close(team, members)
+    assert on_row.closing == "shop"
+    on_row.close(team, members)
+    assert row.calls == [("close_tabs", ["shop-lead", "shop-api"])] and in_view.closing is None
+    alone = teamkeys.TeamKeys(Recorder(), clock=lambda: 0.0)
+    alone.close(team, members)
+    assert alone.closing == "shop" and on_row.closing is None

@@ -625,6 +625,9 @@ class TeamScreen(Screen):
                     classes="hint")
 
     def on_mount(self) -> None:
+        shared = getattr(self.app, "team_presses", None)  # the dashboard's: x here, then x on the team's row
+        if isinstance(shared, dict):
+            self.team_keys.presses = shared
         self.graph = self.query_one(TeamGraph)
         self.show_head()
         self.set_interval(0.1, self.graph.refresh)

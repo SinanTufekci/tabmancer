@@ -309,6 +309,8 @@ class EngineState:
     # Teams whose lead wrote a handover not taken yet (Esc in its dialog): h shows it again, unwritten.
     kept_handovers: dict[str, tuple[Session, str, str, bool]] = field(default_factory=dict)
     team_seen: dict[str, set[tuple[str, str, str]]] = field(default_factory=dict)  # what each team said
+    # x, a cold s, d pressed once on a team, on its row or in its view (teamkeys.TeamKeys.presses): what on, until
+    team_presses: dict[str, tuple[str, float]] = field(default_factory=dict)
 
 
 FORWARDED = tuple(f.name for f in fields(EngineState))

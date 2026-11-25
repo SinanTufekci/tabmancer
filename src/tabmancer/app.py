@@ -709,7 +709,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.team_states: dict[str, teamtree.TeamState] = {}  # the teams with a member open, as last read
         self.team_flights: dict[str, list[tuple[teams.Message, float]]] = {}  # messages in flight, since when
         self.unfolded: set[str] = set()  # teams shown with their members under their row (e); else one row
-        self.row_keys = teamkeys.TeamKeys(RowSurface(self), clock=time.monotonic)  # a team row's keys and presses
+        # a team row's keys; their presses are the engine's, shared with the team's view (TeamScreen)
+        self.row_keys = teamkeys.TeamKeys(RowSurface(self), clock=time.monotonic, presses=self.engine.state.team_presses)
         self.blocks: list[tuple[teamtree.TeamState, list[tuple[str, Session]]]] = []  # the teams in the list
         self.member_rows: dict[str, tuple[str, str]] = {}  # their members' session ids -> (team, member)
         self.grouped = VM.Groups([], [], {})  # the list as groups() last grouped it (rowwords.Listing)
