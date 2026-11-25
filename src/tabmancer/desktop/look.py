@@ -106,6 +106,10 @@ def sheet(accent_colour: str) -> str:
     QTabBar#teams::tab:selected {{ color: {TEXT}; border-bottom: 2px solid {accent_colour}; }}
     QTabBar#teams::tab:hover {{ color: {TEXT}; }}
     QSplitter::handle {{ background: {BORDER}; }}
+    QFrame#lane {{ background: {SUNKEN}; border: 1px solid {FAINT}; border-radius: 8px; }}
+    QPushButton#view {{ color: {MUTED}; background: {PANEL}; border: 1px solid {BORDER}; padding: 3px 14px; }}
+    QPushButton#view:checked {{ color: {BLACK}; background: {accent_colour}; border-color: {accent_colour}; }}
+    QPushButton#view:disabled {{ color: {DIM}; }}
     QStatusBar {{ background: {SURFACE}; border-top: 1px solid {BORDER}; }}
     QStatusBar::item {{ border: none; }}
     QScrollArea, QTextBrowser {{ background: {SUNKEN}; border: none; }}
