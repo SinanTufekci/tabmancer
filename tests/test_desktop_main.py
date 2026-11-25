@@ -23,10 +23,10 @@ from PySide6.QtGui import QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
 
-from tabmancer import accounts, actor, agy, cli, demo, sessions, store, teambus, teams, usage
+from tabmancer import accounts, actor, agy, cli, commands, demo, sessions, store, teambus, teams, usage
 from tabmancer import viewmodel as VM
 from tabmancer.config import merge_json, read_json
-from tabmancer.desktop import frame, look, main, teamgraph, teampanel
+from tabmancer.desktop import commandbar, frame, look, main, teamgraph, teampanel
 from tabmancer.keys import KEYS
 from tabmancer.widgets import bar_text
 
@@ -121,7 +121,7 @@ def test_every_dashboard_key_is_in_the_menus(qapp, window):
             assert made.toolTip() == (words if key in main.HERE else f"{words}. {main.ELSEWHERE}")
             assert made.shortcuts()  # its key is named beside it, greyed or not
     assert {key for _group, keys in KEYS for key, _a, _w in keys} == set(shown.actions_by_key)
-    assert set(shown.keybar.keys) <= set(shown.actions_by_key)  # the key bar names the dashboard's keys
+    assert set(shown.keybar.keys) - {commandbar.KEY} <= set(shown.actions_by_key)  # the dashboard's keys, and the palette
     assert shown.actions_by_key["?"].shortcuts()[0].toString() == "?"
 
 
@@ -242,7 +242,8 @@ def test_the_team_panel_is_a_tab_beside_the_list_and_t_brings_it(qapp, window):
     assert not team.visibleRegion().isEmpty() and listed.visibleRegion().isEmpty()
     assert panel.graph.breaths.isActive()  # in front: its members breathe
     assert "T" not in shown.keybar.dim  # the key bar and the menus in step
-    assert shown.keybar.dim == {key for key in shown.keybar.keys if not shown.actions_by_key[key].isEnabled()}
+    assert shown.keybar.dim == {key for key in shown.keybar.keys
+                                if key != commandbar.KEY and not shown.actions_by_key[key].isEnabled()}
 
 
 def test_the_sessions_panel_is_the_board(qapp, window):
@@ -297,6 +298,73 @@ def test_views_says_how_much_moves(qapp, window):
     assert picks["off"].isChecked() and not picks["full"].isChecked()
     picks["full"].trigger()
     assert graph.mode == "full"
+
+
+def every_key(keys) -> list[tuple[str, str]]:
+    return [(key, words) for _group, entries in keys for key, _action, words in entries]
+
+
+def test_ctrl_k_lists_every_key_and_runs_the_menus_own_action(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    QTest.keyClick(shown, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
+    bar = shown.command_bar
+    assert bar.isVisible() and bar.line.text() == ""
+    assert [(c.key, c.said) for c in bar.shown] == every_key(KEYS)  # keys.py's, in its order, as its menus name them
+    assert bar.rows.count() == len(bar.shown) and not bar.grab().isNull()
+    assert {c.key for c in bar.shown if c.enabled} == main.HERE
+    ran = []
+    shown.actions_by_key["T"].triggered.connect(lambda *_: ran.append(1))
+    QTest.keyClicks(bar.line, "teams")
+    assert bar.picked().key == "T" and bar.note.text() == bar.picked().said
+    QTest.keyClick(bar.line, Qt.Key.Key_Return)
+    assert len(ran) == 1 and not bar.isVisible()  # the menu's own action ran (T: the Team panel)
+    assert not shown.docks["Team"].visibleRegion().isEmpty()
+    assert (commandbar.KEY, "commands") in main.KEY_BAR and commandbar.KEY not in shown.keybar.dim
+
+
+def test_a_greyed_command_says_why_and_does_nothing(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    shown.open_commands()
+    bar = shown.command_bar
+    QTest.keyClicks(bar.line, "hand")
+    assert bar.picked().key == "h" and not bar.picked().enabled  # Hand over first, greyed here
+    assert bar.note.text() == main.ELSEWHERE
+    ran = []
+    shown.actions_by_key["h"].triggered.connect(lambda *_: ran.append(1))
+    QTest.keyClick(bar.line, Qt.Key.Key_Return)
+    assert bar.isVisible() and ran == []
+    QTest.keyClicks(bar.line, "zzqqx")
+    assert bar.shown == [] and bar.note.text() == commandbar.NOTHING
+    QTest.keyClick(bar.line, Qt.Key.Key_Return)  # nothing picked: nothing happens
+    QTest.keyClick(bar.line, Qt.Key.Key_Escape)
+    assert not bar.isVisible()
+
+
+def test_a_session_or_a_team_by_name_picks_its_card(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    board, bar = shown.board, shown.command_bar
+    done = next(lane for lane in board.lanes if lane.key == "done")
+    assert done.folded and done.items
+    target = done.items[0]
+    title = next(view.title for view in shown.snap.view.sessions if view.id == target)
+    shown.open_commands()
+    QTest.keyClicks(bar.line, title)
+    assert bar.picked() == next(c for c in bar.shown if c.kind == "session" and c.target == target)
+    QTest.keyClick(bar.line, Qt.Key.Key_Return)
+    assert board.pick == target and board.views["done"].scroller.isVisible()  # DONE opened to show it
+    assert board.hasFocus()
+    team = shown.snap.view.teams[0]
+    shown.open_commands()
+    QTest.keyClicks(bar.line, f"team {team.name}")
+    QTest.keyClick(bar.line, Qt.Key.Key_Return)
+    assert board.pick == VM.TEAM_CARD + team.name
+    board.move(target)
+    member = next(m.session for m in team.members if m.session)
+    shown.run_command(commands.Command("session", "a member", target=member))
+    assert board.pick == VM.TEAM_CARD + team.name  # a member's session is on its team's card
 
 
 def test_a_closed_window_goes_with_its_last_name(qapp, world):

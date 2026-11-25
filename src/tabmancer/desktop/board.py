@@ -550,6 +550,28 @@ class Board(QWidget):
                 self.views[lane.key].show_card(key)
         self.picked.emit(key)
 
+    def card_of(self, key: str) -> str | None:
+        """The card a session is on: its own, or its team's; or a team's card (TEAM_CARD + its name)."""
+        if any(key in lane.items for lane in self.lanes):
+            return key
+        states = self.snap.team_states if self.snap is not None else {}
+        for name, state in states.items():
+            if any(session is not None and session.session_id == key for session in state.sessions.values()):
+                team = VM.TEAM_CARD + name
+                return team if any(team in lane.items for lane in self.lanes) else None
+        return None
+
+    def reveal(self, key: str) -> bool:
+        """A session's card (or its team's) picked and in view, its lane opened if it was folded."""
+        card = self.card_of(key)
+        if card is None:
+            return False
+        for lane in self.lanes:
+            if card in lane.items and lane.folded:
+                self.fold(lane.key, False)
+        self.move(card)
+        return True
+
     def click(self, key: str) -> None:
         self.setFocus()
         self.move(key)

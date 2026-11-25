@@ -10,7 +10,8 @@ It only watches. The team is read through the one-team store on a thread of its 
 seconds; nothing here claims the actor lock, opens, starts, sends or closes a session. Enter goes
 to a member's open tab, as in the terminal monitor, and so does a click on it in the picture (a
 right-click: its actions); what changes the team (s a d g h H x p, and D for the dashboard) is named
-in the menus and done in the terminal monitor for now.
+in the menus and done in the terminal monitor for now. Ctrl+K finds any of the monitor's commands by a
+few of its words, or a member by name (commandbar).
 """
 
 from __future__ import annotations
@@ -37,13 +38,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, agy, bitart, focus, teams, teamwords
+from .. import __version__, agy, bitart, commands, focus, teams, teamwords
 from ..commands import short
 from ..keys import MONITOR_KEYS
 from ..sessions import Exit, Status
 from ..store import Snapshot, TeamStore
 from ..tokens import human
-from . import frame, look, teamgraph
+from . import commandbar, frame, look, teamgraph
 from .conversation import Conversation
 from .frame import DEMO_ENV, LAYOUT_FILE, LAYOUT_VERSION, KeysDialog, made_up_world  # noqa: F401  (the first two: named here for the tests)
 from .widgets import (
@@ -67,7 +68,8 @@ HERE = {"← →", "Enter", "j", "Esc", "T", "?", "q"}
 MEMBER_KEYS = ("Enter", "p", "H", "d")  # what a right-click on a member offers: what acts on the picked one
 MENUS = {"Members": "&Members", "The team": "&Team", "Windows": "&Windows"}
 KEY_BAR = [("← →", "member"), ("Enter", "its tab"), ("j", "needs you"), ("Esc", "everyone"), ("T", "teams"),
-           ("?", "keys"), ("q", "quit")]
+           (commandbar.KEY, "commands"), ("?", "keys"), ("q", "quit")]
+PICK_FIRST = "Pick a member first: ← →, or its name here."  # a command on the picked member, nobody picked
 AGY_TONE = {"ok": look.CYAN, "low": look.AMBER, "out": look.RED, "unknown": look.MUTED}
 GROUND = {look.AMBER: "#221b0c", look.RED: "#2a0f0e"}  # a pill's patch under amber or red words
 
@@ -312,6 +314,14 @@ class MonitorWindow(QMainWindow):
         self.motion.changed.connect(self.motion_changed)
         self.motions = self.motion.group
         helping = bar.addMenu("&Help")
+        finding = QAction("Find a command…", self)
+        finding.setShortcut(QKeySequence(commandbar.KEY))
+        finding.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        finding.triggered.connect(self.open_commands)
+        helping.addAction(finding)
+        self.addAction(finding)
+        self.command_bar = commandbar.CommandBar(self, self.accent, "a command or a member…")
+        self.command_bar.chosen.connect(self.run_command)
         keys = QAction("All keys…", self)
         keys.triggered.connect(self.show_keys)
         helping.addAction(keys)
@@ -656,6 +666,23 @@ class MonitorWindow(QMainWindow):
         self.open_door()
         self.show_bit()
         self.poll()
+
+    def open_commands(self) -> None:
+        """Ctrl+K: the palette, over every key of the monitor (the ones done in the terminal monitor greyed,
+        saying so; Enter greyed while nobody is picked) and the team's members."""
+        entries = commands.commands(MONITOR_KEYS, HERE, elsewhere(self.team or "<team>"), needs_pick={"Enter"},
+                                    picked=self.picked is not None, pick_first=PICK_FIRST)
+        self.command_bar.offer(entries + commands.member_jumps(self.members()))
+
+    def run_command(self, command: commands.Command) -> None:
+        """What the palette picked: a key runs its menu action (← →: the next member); a member is picked."""
+        if command.kind == "member":
+            self.picked = command.target
+            self.refresh_pick()
+            return
+        made = [action for action in self.actions_by_key.get(command.key, []) if action.isEnabled()]
+        if made:
+            made[0].trigger()
 
     def show_keys(self) -> None:
         KeysDialog(self, "Keys · tabmancer monitor", MONITOR_KEYS, HERE, elsewhere(self.team or "<team>")).show()

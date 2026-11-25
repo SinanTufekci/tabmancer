@@ -26,7 +26,7 @@ from PySide6.QtWidgets import QApplication
 from tabmancer import actor, agy, cli, demo, teambus, teams
 from tabmancer import viewmodel as VM
 from tabmancer.config import merge_json, read_json
-from tabmancer.desktop import look, monitor, teamgraph, widgets
+from tabmancer.desktop import commandbar, look, monitor, teamgraph, widgets
 from tabmancer.keys import MONITOR_KEYS
 
 look.fonts_for_offscreen()
@@ -107,6 +107,36 @@ def test_the_window_shows_the_team(qapp, window):
     card, member = shown.cards["tests"], shown.snap.view.members[3]
     assert card.state.text() == member.label == "needs you"
     assert card.bar.share == member.context and member.context
+
+
+def test_ctrl_k_finds_the_monitors_keys_and_its_members(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    assert shown.picked is None
+    QTest.keyClick(shown, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
+    bar = shown.command_bar
+    assert bar.isVisible()
+    keys = [(key, words) for _group, entries in MONITOR_KEYS for key, _action, words in entries]
+    assert [(c.key, c.said) for c in bar.shown] == keys
+    QTest.keyClicks(bar.line, "Enter")
+    assert bar.picked().key == "Enter" and not bar.picked().enabled and bar.note.text() == monitor.PICK_FIRST
+    bar.line.clear()
+    QTest.keyClicks(bar.line, "api")
+    assert bar.picked().kind == "member" and bar.picked().target == "api"
+    QTest.keyClick(bar.line, Qt.Key.Key_Return)
+    assert shown.picked == "api" and not bar.isVisible()
+    shown.open_commands()
+    assert next(c for c in bar.shown if c.key == "Enter").enabled  # someone is picked now
+    ran = []
+    shown.actions_by_key["j"][0].triggered.connect(lambda *_: ran.append(1))
+    QTest.keyClicks(bar.line, "j")
+    QTest.keyClick(bar.line, Qt.Key.Key_Return)
+    assert len(ran) == 1  # the menu's own action
+    shown.open_commands()
+    QTest.keyClicks(bar.line, "next member")
+    QTest.keyClick(bar.line, Qt.Key.Key_Return)  # ← →: the next member
+    assert shown.picked is not None
+    assert (commandbar.KEY, "commands") in monitor.KEY_BAR
 
 
 def test_a_closed_monitor_goes_with_its_last_name(qapp, world):
@@ -205,7 +235,7 @@ def test_every_key_of_the_monitor_is_in_the_menus(qapp, window):
     enabled = {key for key, actions in shown.actions_by_key.items() if all(a.isEnabled() for a in actions)}
     assert enabled == monitor.HERE
     assert "tabmancer team watch shop" in shown.actions_by_key["s"][0].toolTip()  # where it is done
-    assert set(shown.keybar.keys) == monitor.HERE  # the key bar under the window: the keys that work here
+    assert set(shown.keybar.keys) == monitor.HERE | {commandbar.KEY}  # the keys that work here, and the palette
     assert [a.text() for a in shown.menuBar().actions()] == ["&Members", "&Team", "&Windows", "&View", "&Help"]
 
 

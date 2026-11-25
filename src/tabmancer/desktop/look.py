@@ -110,6 +110,10 @@ def sheet(accent_colour: str) -> str:
     QPushButton#view {{ color: {MUTED}; background: {PANEL}; border: 1px solid {BORDER}; padding: 3px 14px; }}
     QPushButton#view:checked {{ color: {BLACK}; background: {accent_colour}; border-color: {accent_colour}; }}
     QPushButton#view:disabled {{ color: {DIM}; }}
+    QFrame#commandbar {{ background: {SURFACE}; border: 1px solid {accent_colour}; }}
+    QLineEdit#commandline {{ background: {SUNKEN}; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 4px;
+                             padding: 6px 10px; selection-background-color: {accent_colour}; selection-color: {BLACK}; }}
+    QListWidget#commands {{ background: transparent; border: none; outline: none; }}
     QStatusBar {{ background: {SURFACE}; border-top: 1px solid {BORDER}; }}
     QStatusBar::item {{ border: none; }}
     QScrollArea, QTextBrowser {{ background: {SUNKEN}; border: none; }}

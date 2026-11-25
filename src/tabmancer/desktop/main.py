@@ -13,7 +13,8 @@ on a thread of its own every two seconds, and nothing here claims the actor lock
 limit or an account, opens, starts or closes a session. The panels fill in slice by slice; till
 then a key not done here is greyed in its menu and in the key bar, and done in the terminal
 dashboard (tabmancer). The Team panel (teampanel), a tab beside the list, shows each team's
-picture over its conversation; T brings it to the front.
+picture over its conversation; T brings it to the front. Ctrl+K finds any command by a few of its
+words (commandbar): every key as the menus name it, and a team or a session by name, to pick its card.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
@@ -41,15 +42,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, bitart, clis
+from .. import __version__, bitart, clis, commands
 from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
 from ..store import DashboardStore, DashSnapshot
-from . import frame, look, teamgraph
+from . import commandbar, frame, look, teamgraph
 from .board import Board
 from .frame import KeysDialog, made_up_world
-from .monitor import sequences, short
+from .monitor import sequences
 from .teampanel import TeamPanel
 from .widgets import KeyBar, bit_pixmap, text_label
 
@@ -63,7 +64,8 @@ HERE = {"?", "q", "T"}
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
 KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), ("c", "continue"), ("M", "monitor"),
-           ("V", "split"), ("/", "filter"), ("A", "accounts"), ("?", "all keys"), ("q", "quit")]
+           ("V", "split"), ("/", "filter"), ("A", "accounts"), (commandbar.KEY, "commands"), ("?", "all keys"),
+           ("q", "quit")]
 # The top bar's tones (viewmodel.usage_parts, account_parts) as colours.
 TONES = {"muted": look.MUTED, "text": look.TEXT, "empty": "#2a2a2a", "ok": look.GREEN, "low": look.AMBER,
          "out": look.RED}
@@ -74,7 +76,7 @@ SOON = {
 }
 VIEWS = (("board", "Board"), ("table", "Table"), ("live", "Live"))  # what the Sessions panel shows
 SHOWN_HERE = {"board"}
-BOARD_HINT = "↑ ↓ ← → pick a card · a click on DONE opens it"
+BOARD_HINT = f"↑ ↓ ← → pick a card · a click on DONE opens it · {commandbar.KEY} any command"
 
 
 def parts_html(parts: list[tuple[str, str]]) -> str:
@@ -161,7 +163,7 @@ class MainWindow(QMainWindow):
         self.resizeDocks([docks["Sessions"], docks["Bit"]], [700, 100], Qt.Orientation.Vertical)
         self.build_menus()
         self.keybar = KeyBar(KEY_BAR, "greyed: in the terminal dashboard for now (tabmancer)",
-                             dim={key for key, _ in KEY_BAR if key not in HERE})
+                             dim={key for key, _ in KEY_BAR if key not in HERE and key != commandbar.KEY})
         self.statusBar().addWidget(self.keybar, 1)
 
     def build_top(self) -> QWidget:
@@ -274,7 +276,7 @@ class MainWindow(QMainWindow):
             self.menus_by_group[group] = menu
             menu.setToolTipsVisible(True)
             for key, _action, words in keys:
-                made = QAction(short(words), self)
+                made = QAction(commands.short(words), self)
                 made.setShortcuts(sequences(key))
                 made.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
                 said = words if key in HERE else f"{words}. {ELSEWHERE}"
@@ -299,6 +301,14 @@ class MainWindow(QMainWindow):
         reset.triggered.connect(self.reset_layout)
         panels.addAction(reset)
         helping = bar.addMenu("&Help")
+        finding = QAction("Find a command…", self)
+        finding.setShortcut(QKeySequence(commandbar.KEY))
+        finding.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        finding.triggered.connect(self.open_commands)
+        helping.addAction(finding)
+        self.addAction(finding)
+        self.command_bar = commandbar.CommandBar(self, self.accent)
+        self.command_bar.chosen.connect(self.run_command)
         keys = QAction("All keys…", self)
         keys.triggered.connect(self.show_keys)
         helping.addAction(keys)
@@ -398,6 +408,30 @@ class MainWindow(QMainWindow):
 
     def show_keys(self) -> None:
         KeysDialog(self, "Keys · tabmancer", KEYS, HERE, ELSEWHERE).show()
+
+    def open_commands(self) -> None:
+        """Ctrl+K: the palette, over every key of the dashboard (the ones done in the terminal dashboard
+        greyed, saying so), the teams and the sessions in sight."""
+        entries = commands.commands(KEYS, HERE, ELSEWHERE)
+        sessions = {}
+        if self.snap is not None:
+            entries += commands.team_jumps(self.snap.view.teams)
+            entries += commands.session_jumps(view for view in self.snap.view.sessions if not view.hidden)
+            sessions = self.snap.sessions
+        self.command_bar.offer(entries, sessions)
+
+    def run_command(self, command: commands.Command) -> None:
+        """What the palette picked: a key runs its menu action; a team or a session picks its card."""
+        if command.kind == "key":
+            action = self.actions_by_key.get(command.key)
+            if action is not None and action.isEnabled():
+                action.trigger()
+            return
+        dock = self.docks["Sessions"]
+        dock.show()
+        dock.raise_()
+        self.board.reveal(VM.TEAM_CARD + command.target if command.kind == "team" else command.target)
+        self.board.setFocus()
 
     def motion_changed(self) -> None:
         """View ▸ Reduce motion picked: the Team panel moves as it says now."""
