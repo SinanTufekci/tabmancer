@@ -5,7 +5,8 @@ the buttons for what acts on it, what was said in it (said_rows: a member's mess
 filter's words were found, its summary, the first and last prompt, the last reply, the files edited)
 and its facts (fact_rows): sessionwords.detail, as the terminal's preview says it, its inputs read off
 the snapshot (sessionwords.read_inputs): its team and member, its effort, its folder's git, its tokens,
-its context cap, how it opens.
+its context cap, how it opens (as m in the window changed it: modes), and what Enter does with the
+sessions ticked in the window (ticked).
 
 A team's card: its head, goal and closed note as the terminal's preview says them (teamwords.team_detail,
 counting its members open as the list has them), who needs you, the team as a small live picture
@@ -18,6 +19,7 @@ the window does not do that key yet.
 
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from html import escape
 
 from PySide6.QtCore import Qt, Signal
@@ -26,6 +28,7 @@ from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QPushButton, QScrollA
 
 from .. import footer, picks, sessionwords, summarize, teams, teamwords
 from .. import viewmodel as VM
+from ..launch import Mode
 from ..sessions import Session
 from ..store import DashSnapshot
 from . import look
@@ -67,12 +70,15 @@ def member_ids(team_states: dict[str, teams.TeamState]) -> dict[str, tuple[str, 
 
 def detail_of(snap: DashSnapshot, session: Session, members: dict[str, tuple[str, str]], *, accent: str,
               default_cap: int, summaries: dict[str, dict],
-              found: tuple[str, int, int] | None) -> sessionwords.DetailView:
+              found: tuple[str, int, int] | None, modes: Mapping[str, Mode] | None = None,
+              selected: Collection[str] = frozenset()) -> sessionwords.DetailView:
     """A session's preview as the terminal's says it (sessionwords.detail), its inputs read off the
-    snapshot this window holds as the terminal reads them off its own state (app.detail_inputs)."""
+    snapshot this window holds as the terminal reads them off its own state (app.detail_inputs); modes:
+    how a session opens, where m changed it; selected: the sessions ticked, which Enter opens."""
     inputs = sessionwords.read_inputs(
         session, members=members, team_states=snap.team_states, git=snap.git, session_tokens=snap.session_tokens,
-        background=snap.background, armed=snap.armed, queued=snap.queued, modes={}, default_cap=default_cap,
+        background=snap.background, armed=snap.armed, queued=snap.queued, modes=dict(modes or {}),
+        selected=selected, default_cap=default_cap,
         accent=accent, summaries=summaries, found=found, room=ROOM, more=MORE)
     return sessionwords.detail(session, inputs)
 
@@ -89,6 +95,8 @@ class Drawer(QScrollArea):
         self.default_cap = picks.cap_tokens(picks.default_cap())  # as the terminal reads it, once
         self.summaries = summarize.load_cache()
         self.key: str | None = None  # the card shown: a session id, or VM.TEAM_CARD + a team's name
+        self.modes: Mapping[str, Mode] = {}  # how a session opens, where m changed it (the window's)
+        self.ticked: frozenset[str] = frozenset()  # the sessions ticked in the window: Enter opens them
         self.offered: list[tuple[str, str]] = []  # the buttons shown: (key, words)
         self.rows: tuple[list[sessionwords.Row], list[sessionwords.Row]] = ([], [])  # a session's: said, facts
         self.setWidgetResizable(True)
@@ -164,14 +172,14 @@ class Drawer(QScrollArea):
     def show_session(self, snap: DashSnapshot, session: Session, found: tuple[str, int, int] | None) -> None:
         members = member_ids(snap.team_states)
         view = detail_of(snap, session, members, accent=self.accent, default_cap=self.default_cap,
-                         summaries=self.summaries, found=found)
+                         summaries=self.summaries, found=found, modes=self.modes, selected=self.ticked)
         self.status.setText(cell_html(view.status) + look.span("   " + view.means, look.MUTED))
         member = members.get(session.session_id)
         whose = f"{member[0]} · {member[1]}" if member else session.project
         self.name.setText(look.span(whose, f"bold {self.accent}"))
         self.title.setText(look.styled(view.head, look.TEXT))
         self.enter.setText(cell_html(view.enter))  # agy out of quota: when it can open again, in amber
-        row = footer.row(snap.sessions.values(), None, session, 0, members)
+        row = footer.row(snap.sessions.values(), None, session, len(self.ticked), members)
         self.offer(self.offered_for(snap, row, pinned=session.session_id in snap.pinned, at_limit=VM.at_limit(session)))
         self.graph.hide()
         self.rows = (view.said, view.facts)

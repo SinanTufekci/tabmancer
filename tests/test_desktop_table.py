@@ -123,10 +123,16 @@ def test_the_cursor_skips_headings_and_a_teams_row_unfolds(qapp, shown_table):
     assert not any(key.startswith(rowwords.HEADING) for key in seen)
     shown.show_key(VM.TEAM_CARD + "shop")
     assert shown.pick == f"{rowwords.TEAM_ROW}shop"
-    QTest.keyClick(shown, Qt.Key.Key_Return)
+
+    def double_click() -> None:  # on its title (the ▸ is a click of its own), as the view says it
+        shown.doubleClicked.emit(shown.grid.index(shown.keys.index(f"{rowwords.TEAM_ROW}shop"), 2))
+
+    double_click()
     assert {"lead-1", "api-1", "ui-1"} <= set(shown.keys) and "shop" in shown.unfolded
     assert shown.pick == f"{rowwords.TEAM_ROW}shop"  # the pick stays on the team's row
-    QTest.keyClick(shown, Qt.Key.Key_Return)
+    double_click()
+    assert "api-1" not in shown.keys
+    QTest.keyClick(shown, Qt.Key.Key_Return)  # Enter is the window's (its Team panel tab): no fold here
     assert "api-1" not in shown.keys
     row = shown.keys.index(f"{rowwords.TEAM_ROW}shop")  # its ▸, clicked
     QTest.mouseClick(shown.viewport(), Qt.MouseButton.LeftButton,

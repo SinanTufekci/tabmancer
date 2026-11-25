@@ -15,7 +15,7 @@ so every window shows it.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
@@ -244,6 +244,16 @@ def still_opening(opening: dict[str, float], now: float) -> set[str]:
     return {sid for sid, when in opening.items() if now - when < OPENING_SECONDS}
 
 
+MODES = (Mode.RESUME, Mode.AUTO, Mode.FORK, Mode.NEW)  # what m goes round, in this order
+
+
+def next_mode(session: Session, now: Mode) -> Mode:
+    """m: how a closed session opens after `now` (MODES in turn; a fork only where its CLI forks)."""
+    cli = clis.CLIS.get(session.cli)
+    modes = [mode for mode in MODES if mode is not Mode.FORK or (cli and cli.can_fork)]
+    return modes[(modes.index(now) + 1) % len(modes)] if now in modes else modes[0]
+
+
 def open_elsewhere(launches: list[Launch], live: Callable[[], set[str]]) -> set[str]:
     """Which of these sessions to resume a Claude process has open right now. Two processes on one
     transcript would both write to it, so it is asked afresh: `live()` gives the ids open now, and is
@@ -335,6 +345,32 @@ def go_to_tab(session: Session) -> Note:
         return Note(f"Switched to {session.project}. Type your prompt there.", seconds=4)
     return Note(f"Could not find the tab of {session.project}. It may be open outside Windows Terminal, or its tab "
                 "has been renamed.", "warning", 8)
+
+
+NONE_WAITING = Note("No session is waiting for you.", seconds=3)
+
+
+@dataclass
+class Turn:
+    """j: the session to go to (None: none is waiting), and where the next j goes on from."""
+
+    session: Session | None
+    group: str = ""  # "needs" while some open session needs you, else "waiting"
+    turn: int = 0
+
+
+def next_waiting(sessions: Iterable[Session], group: str = "", turn: int = 0) -> Turn:
+    """j: the next open session that needs you (a question, a permission), one after another; when none
+    does, the next one waiting for you (its turn over). From the top of the ones that need you once
+    there are some. `group` and `turn`: where the last j left off (the last Turn's)."""
+    open_ones = [s for s in sessions if s.exit is Exit.RUNNING and viewmodel.state_of(s)[2] < 2]
+    needs = [s for s in open_ones if viewmodel.state_of(s)[2] == 0]
+    waiting = sorted(needs or open_ones, key=lambda s: (s.project.casefold(), s.session_id))
+    if not waiting:
+        return Turn(None, group, turn)
+    now = "needs" if needs else "waiting"
+    turn = turn if now == group else 0
+    return Turn(waiting[turn % len(waiting)], now, turn + 1)
 
 
 # --- a team's keys ----------------------------------------------------------------------------------

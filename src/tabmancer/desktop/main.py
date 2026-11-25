@@ -11,13 +11,16 @@ Live view, the open sessions by what each does (l, as in the terminal, and l aga
 pick is one across them: the row or card picked stays picked when the view changes.
 
 It watches, as a second dashboard does: the dashboard's store (store.DashboardStore) is read on a
-thread of its own every two seconds, and nothing here claims the actor lock, records a plan limit or
-an account, opens, starts or closes a session. Its keys tidy the list as the terminal's do: Space and
-a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the rail, the project), X shows
-the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and the sessions, Esc
-clears what the list is narrowed to. Pins and hides go to marks.json as every dashboard changes it
-(marks.change): what another one changed meanwhile stays, and each shows them at its next read; Bit
-says what a key did. The panels fill in slice by slice; till then a key not done here is greyed in its
+thread of its own every two seconds, and nothing here claims the actor lock or records a plan limit or
+an account; what happens by itself (a limit lifting) is the acting dashboard's. What a key asks for, it
+does as the terminal's keys do. Enter opens the ticked sessions, or the picked one, in new tabs, and
+brings an open one's tab to the front (a team's card: its Team panel tab); j goes to the next open
+session waiting for you, and m changes how the picked one opens (opening.py, each on a thread of its
+own). Space and a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the rail, the
+project), X shows the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and
+the sessions, Esc clears what the list is narrowed to. Pins and hides go to marks.json as every
+dashboard changes it (marks.change): what another one changed meanwhile stays, and each shows them at
+its next read; Bit says what a key did. The panels fill in slice by slice; till then a key not done here is greyed in its
 menu and in the key bar, and done in the terminal dashboard (tabmancer). The Team panel (teampanel), a tab beside the list, shows each team's
 picture over its conversation; T brings it to the front. Ctrl+K finds any command by a few of its
 words (commandbar): every key as the menus name it, and a team, a project or a session by name.
@@ -65,13 +68,14 @@ from .. import __version__, bitart, clis, commands, marks, search
 from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
-from ..sessions import Session, folder_key
+from ..sessions import Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
 from . import commandbar, frame, look, teamgraph
 from .board import Board
 from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
 from .monitor import sequences
+from .opening import Opener
 from .rail import Rail
 from .table import Table, drawer_key
 from .teampanel import TeamPanel
@@ -83,8 +87,11 @@ INFO_LEAST = 20  # characters the info line keeps before the accounts give way
 LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
-HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc"}
+HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
+        "j"}
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
+AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
+SEVERITY = {"warning": look.AMBER, "error": look.RED}  # how loud what Bit says is (actions.Note's)
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
 KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), ("c", "continue"), ("M", "monitor"),
@@ -97,7 +104,7 @@ PANELS = ("Sessions", "Preview", "Projects", "Bit", "Team")
 VIEWS = (("board", "Board"), ("table", "Table"), ("live", "Live"))  # what the Sessions panel shows
 HINTS = {
     "board": f"↑ ↓ ← → pick a card · 1 2 3 or a lane's heading narrows it · / finds · {commandbar.KEY} any command",
-    "table": f"↑ ↓ pick a row · Enter or a click on ▸ unfolds a team · 1 2 3 narrows · / finds · {commandbar.KEY} any command",
+    "table": f"↑ ↓ pick a row · Enter opens · e or a click on ▸ unfolds a team · 1 2 3 narrows · / finds · {commandbar.KEY} any command",
     "live": f"the open sessions by what each does · ↑ ↓ pick · l again goes back · / finds · {commandbar.KEY} any command",
 }
 VIEW_TIPS = {"board": "The sessions as cards, by what they want from you",
@@ -130,6 +137,12 @@ class Relay(QObject):
     indexed = Signal(object, bool)  # the conversations' search.Index (None: it failed), whether it read more
 
 
+class Told(QObject):
+    """What the demo's stand-ins say would have happened (demo.stand_ins' tell), from any thread."""
+
+    said = Signal(str)
+
+
 class FilterBox(QLineEdit):
     """The words the board is narrowed to (/): Esc clears them, Enter or ↓ goes back to the board."""
 
@@ -149,9 +162,10 @@ class FilterBox(QLineEdit):
 
 class MainWindow(QMainWindow):
     def __init__(self, *, store: Callable[[], DashboardStore] = watching_store, poll_ms: int = POLL_MS,
-                 start: bool = True, brand: str = "◆ tabmancer") -> None:
+                 start: bool = True, brand: str = "◆ tabmancer", demo: bool = False) -> None:
         super().__init__()
         self.store = store()
+        self.demo = demo  # over the made-up sessions: nothing opens, and Bit says what would have
         self.snap: DashSnapshot | None = None
         self.agy_first = False
         self.waiting = False
@@ -161,6 +175,9 @@ class MainWindow(QMainWindow):
         self.relay = Relay()
         self.relay.polled.connect(self.take)
         self.relay.indexed.connect(self.take_index)
+        self.opener = Opener(self, update=not demo)  # Enter, j and m: what they keep, and their threads
+        self.opener.said.connect(self.say_note)
+        self.opener.opened.connect(self.took_open)
         self.view = "board"  # what the Sessions panel shows (VIEWS)
         self.before_live = "board"  # the view l goes back to
         self.project = VM.ALL_PROJECTS  # what the board is narrowed to: a project (the rail),
@@ -181,6 +198,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("tabmancer")
         self.resize(1500, 950)
         self.build()
+        self.drawer.modes = self.table.modes = self.opener.modes  # m: what the preview and Open as say
         self.default_state = self.saveState(frame.LAYOUT_VERSION)
         known = frame.restore_layout(self, LAYOUT_KEY)
         frame.place_new(self, known, self.docks["Team"], [self.docks["Sessions"], self.docks["Preview"]],
@@ -193,6 +211,9 @@ class MainWindow(QMainWindow):
         self.said_timer = QTimer(self)
         self.said_timer.setSingleShot(True)
         self.said_timer.timeout.connect(self.show_bit)
+        self.after_open = QTimer(self)
+        self.after_open.setSingleShot(True)
+        self.after_open.timeout.connect(self.poll)
         self.tick()
         self.board.setFocus()  # the arrows pick a card from the start
         if start:
@@ -360,7 +381,8 @@ class MainWindow(QMainWindow):
         doing = {"?": self.show_keys, "q": self.close, "T": self.show_teams, "/": self.find_words,
                  "1": self.only_open, "2": self.only_waiting, "3": self.only_continue, "l": self.toggle_live,
                  "Space": self.toggle, "a": self.toggle_all, "e": self.expand, "E": self.fold_teams, "x": self.hide,
-                 "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back}
+                 "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
+                 "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -433,6 +455,7 @@ class MainWindow(QMainWindow):
         for thread in (self.reader, self.indexer):
             if thread is not None:
                 thread.join(seconds)
+        self.opener.settle(seconds)
 
     def take(self, store: DashboardStore, snap: DashSnapshot | None, first: bool, error: str) -> None:
         self.waiting = False
@@ -448,6 +471,9 @@ class MainWindow(QMainWindow):
         self.show_top()
         if not self.said_timer.isActive():
             self.show_bit()
+        came_up = self.opener.seen(snap.sessions)  # opened from here a while ago, and never showed open?
+        if came_up is not None:
+            self.say_note(came_up.words, came_up.seconds or 4, came_up.severity)
         self.refilter()
         self.team_panel.set(snap)
         if len(self.words.strip()) >= search.SHORTEST:
@@ -534,6 +560,7 @@ class MainWindow(QMainWindow):
         if key and len(words) >= search.SHORTEST and self.index is not None and key in self.said_in():
             found = self.index.snippet(key, words, width=2 * ROOM)
         why = {button: self.why_not(button) for button, _, _ in BUTTONS}
+        self.drawer.ticked = frozenset(self.selected)  # what its Enter opens
         self.drawer.set(self.snap, key or None, found, why)
 
     def why_not(self, key: str) -> str | None:
@@ -706,11 +733,19 @@ class MainWindow(QMainWindow):
         self.bit_line.setText(words)
         self.bit_line.setStyleSheet(f"color:{look.MUTED}; background:transparent;")
 
-    def say(self, words: str, seconds: float = 4) -> None:
+    def say(self, words: str, seconds: float = 4, colour: str = look.TEXT) -> None:
         """Bit says what a key just did for a while (longer for longer words), then who acts again."""
         self.bit_line.setText(words)
-        self.bit_line.setStyleSheet(f"color:{look.TEXT}; background:transparent;")
+        self.bit_line.setStyleSheet(f"color:{colour}; background:transparent;")
         self.said_timer.start(max(SAID_MS, int(seconds * 1000)))
+
+    def say_note(self, words: str, seconds: float, severity: str) -> None:
+        """What came of a key that reached past the window (opening.py), as loud as it is."""
+        self.say(words, seconds, SEVERITY.get(severity, look.TEXT))
+
+    def demo_told(self, words: str) -> None:
+        """The demo's word for what would have happened (Told)."""
+        self.say(words, 10)
 
     # --- the keys that tidy the list --------------------------------------------------------------
 
@@ -744,11 +779,15 @@ class MainWindow(QMainWindow):
     def flip(self, ids: set[str]) -> None:
         """These ticked, or unticked when they all were."""
         self.selected = self.selected - ids if ids <= self.selected else self.selected | ids
+        self.show_ticked()
+
+    def show_ticked(self) -> None:
         if self.view == "board":
             self.board.set_ticked(self.selected)
         else:
             self.table.set_ticked(self.selected)
         self.show_pills()
+        self.show_pick(self.picked_now())  # the drawer: what Enter opens now
 
     def toggle(self) -> None:
         """Space: the picked session ticked or unticked (a closed team's members as one), the pick on down."""
@@ -900,9 +939,13 @@ class MainWindow(QMainWindow):
     def pick_team(self, name: str) -> None:
         """A team on the rail: its card on the board (the filters cleared if they kept it out), and its tab
         in the Team panel, for when that one is brought to the front."""
+        self.team_tab(name)
+        self.run_command(commands.Command("team", name, target=name))
+
+    def team_tab(self, name: str) -> None:
+        """The team's tab picked in the Team panel."""
         if name in self.team_panel.names:
             self.team_panel.tabs.setCurrentIndex(self.team_panel.names.index(name))  # its pick_team
-        self.run_command(commands.Command("team", name, target=name))
 
     def motion_changed(self) -> None:
         """View ▸ Reduce motion picked: the Team panel, the rail's teams and the table move as it says now."""
@@ -916,6 +959,66 @@ class MainWindow(QMainWindow):
         dock.show()
         dock.raise_()
         self.team_panel.tabs.setFocus()
+
+    # --- the keys that reach past the window -------------------------------------------------------
+
+    def open_key(self) -> None:
+        """Enter: from the words' box or the rail, back to the sessions. Else the ticked sessions open, or
+        the picked one: an open one's tab comes to the front, and a team's card brings its Team panel tab
+        (as Enter on its row opens the team's view in the terminal)."""
+        if self.filter_box.hasFocus() or self.rail.projects.hasFocus():
+            self.back_to_board()
+            return
+        snap = self.snap
+        if snap is None:
+            return
+        team = self.picked_team()
+        if team is not None and not self.selected:
+            self.team_tab(team)
+            self.show_teams()
+            return
+        chosen = self.chosen()
+        if not chosen:
+            self.say("Pick a session first, or tick some with Space.")
+        elif not self.selected and chosen[0].status is Status.RUNNING:
+            self.opener.go_to(chosen[0])
+        else:
+            self.opener.open(chosen, snap)
+
+    def took_open(self, opened) -> None:
+        """What an Enter came to (actions.Opened): the ones opened, or open already, unticked; said (the
+        demo's tell says it there); with no terminal that opens tabs, the commands on the clipboard. Read
+        again soon: the new ones show open."""
+        self.selected -= opened.opened_ids | opened.skipped_ids
+        self.show_ticked()
+        if opened.leftover:
+            QApplication.clipboard().setText("\n".join(opened.leftover))
+        note = self.opener.took(opened)
+        if note is not None and not (self.demo and opened.opened):
+            self.say_note(note.words, note.seconds or 4, note.severity)
+        if opened.opened or opened.skipped:
+            self.after_open.start(AFTER_OPEN_MS)
+
+    def cycle_mode(self) -> None:
+        """m: how the picked session opens next (resume, auto-continue, fork, new), as its preview and the
+        Table's Open as column say it."""
+        snap = self.snap
+        session = snap.sessions.get(self.picked_now()) if snap is not None else None
+        if session is None or not self.opener.cycle(session):
+            self.say("m changes how a closed session opens: pick one.")
+            return
+        self.refilter()
+
+    def next_waiting(self) -> None:
+        """j: the next open session that needs you, else the next one waiting for you: picked in the list
+        (on the board, its team's card for a member) and its tab brought to the front."""
+        snap = self.snap
+        if snap is None:
+            return
+        session = self.opener.next_waiting(snap.sessions.values())
+        if session is not None and not self.reveal(session.session_id) and self.narrowed():
+            self.clear_filters()  # narrowed away: shown again
+            self.reveal(session.session_id)
 
     # --- one window -------------------------------------------------------------------------------
 
@@ -969,13 +1072,15 @@ def run(demo: bool = False, days: float = DAYS, include_all: bool = False) -> in
     `tabmancer --days N --all` (the last days; sessions started by tools too)."""
     look.fonts_for_offscreen()
     app = QApplication.instance() or QApplication(["tabmancer"])
-    with made_up_world(demo):
+    told = Told()  # the demo's stand-ins say what would have happened, from any thread
+    with made_up_world(demo, told.said.emit):
         window = None
         try:
             if knock():  # open already (the command twice): that window comes forward
                 return 0
             window = MainWindow(store=partial(watching_store, days, include_all),
-                                brand="◆ tabmancer demo" if demo else "◆ tabmancer")
+                                brand="◆ tabmancer demo" if demo else "◆ tabmancer", demo=demo)
+            told.said.connect(window.demo_told)
             window.show()
             code = app.exec()
             if window.isVisible():  # the app was told to quit, the window not closed: its layout is kept too

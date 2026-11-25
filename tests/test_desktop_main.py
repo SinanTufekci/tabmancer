@@ -27,11 +27,14 @@ from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
 
 from tabmancer import (
     accounts,
+    actions,
     actor,
     agy,
     cli,
     commands,
     demo,
+    focus,
+    launch,
     marks,
     rowwords,
     sessions,
@@ -43,9 +46,10 @@ from tabmancer import (
 from tabmancer import sessionwords as preview_words
 from tabmancer import viewmodel as VM
 from tabmancer.config import config_dir, merge_json, read_json
-from tabmancer.desktop import commandbar, drawer, frame, look, main, rail, teamgraph, teampanel
+from tabmancer.desktop import commandbar, drawer, frame, look, main, opening, rail, teamgraph, teampanel
 from tabmancer.desktop.table import COLUMN, PARTS
 from tabmancer.keys import KEYS
+from tabmancer.launch import Mode
 from tabmancer.search import matches
 from tabmancer.teamwords import colours, team_detail
 from tabmancer.tokens import human
@@ -307,7 +311,7 @@ def test_the_table_and_the_live_view_list_as_the_terminal_does_and_keep_the_pick
     team = shown.snap.view.teams[0].name
     shown.run_command(commands.Command("team", team, target=team))  # Ctrl+K's jump, in the table
     assert table.pick == rowwords.TEAM_ROW + team and drawer.key == VM.TEAM_CARD + team
-    QTest.keyClick(table, Qt.Key.Key_Return)
+    press(shown, "e")  # e unfolds it, as in the terminal (Enter: its Team panel tab)
     assert team in table.unfolded and table.keys.index(rowwords.TEAM_ROW + team) < len(table.keys) - 1
     QTest.keyClick(shown, Qt.Key.Key_1)  # 1 2 3 narrow the table too
     assert shown.card == "open" and table.shown == shown.shown()
@@ -700,7 +704,7 @@ def test_the_drawer_shows_a_teams_card_and_its_buttons_wait_for_the_window(qapp,
     for b in buttons:  # the window's own keys work; the rest wait till it does them
         here = b.property("key") in main.HERE
         assert b.isEnabled() is here and b.toolTip() == ("" if here else main.ELSEWHERE)
-    assert {b.property("key") for b in buttons if b.isEnabled()} == {"f", "x"}
+    assert {b.property("key") for b in buttons if b.isEnabled()} == {"Enter", "f", "x"}
     pressed = []
     side.act.connect(pressed.append)
     side.set(shown.snap, closed.session_id, None, {key: None for key, _, _ in drawer.BUTTONS})  # all done here
@@ -944,9 +948,144 @@ def test_esc_clears_the_words_then_the_card_then_the_project_then_closes(qapp, w
     assert not shown.isVisible()
 
 
+def recorded(monkeypatch, left=()):
+    """What the window asks of the world, kept: the tabs to open (launch.open_tabs; left: the commands
+    no terminal took) and the tabs to bring to the front (focus.focus_tab)."""
+    asked = {"opened": [], "focused": []}
+
+    def open_tabs(launches, window=None):
+        asked["opened"].append(list(launches))
+        return list(left)
+
+    def focus_tab(title):
+        asked["focused"].append(title)
+        return True
+
+    monkeypatch.setattr(launch, "open_tabs", open_tabs)
+    monkeypatch.setattr(focus, "focus_tab", focus_tab)
+    return asked
+
+
+def settled(qapp, shown):
+    shown.opener.settle()  # what Enter and j do runs on threads of its own
+    qapp.processEvents()
+
+
+def test_enter_opens_the_picked_one_once_as_m_says(qapp, window, monkeypatch):
+    asked = recorded(monkeypatch)
+    shown = window()
+    read(qapp, shown)
+    login = titled(shown.snap, "Fix the login redirect loop")
+    data = titled(shown.snap, "Speed up the nightly CSV import")
+    assert shown.board.reveal(login.session_id)
+    assert "resumes it in a new tab · m changes how" in shown.drawer.enter.text()
+    press(shown, "Enter")
+    settled(qapp, shown)
+    [launches] = asked["opened"]
+    assert [(one.session_id, one.mode) for one in launches] == [(login.session_id, Mode.RESUME)]
+    assert shown.bit_line.text() == f"Opened {launches[0].title} in a new tab." and shown.after_open.isActive()
+    press(shown, "Enter")  # still starting up: not opened twice
+    assert shown.bit_line.text() == opening.ALREADY.words and len(asked["opened"]) == 1
+    assert shown.board.reveal(data.session_id)
+    assert shown.opener.mode(data) is Mode.AUTO  # unanswered: it carries on by itself
+    press(shown, "m")
+    assert shown.opener.mode(data) is Mode.FORK
+    assert "forks it: a new session in a new tab" in shown.drawer.enter.text()
+    shown.set_view("table")
+    table = shown.table
+    assert table.pick == data.session_id
+    mode = table.grid.item(table.keys.index(data.session_id), COLUMN["mode"]).data(PARTS)
+    assert "".join(words for words, _ in mode) == "fork"  # the Open as column says it
+    press(shown, "Enter")
+    settled(qapp, shown)
+    assert [(one.session_id, one.mode) for one in asked["opened"][-1]] == [(data.session_id, Mode.FORK)]
+    open_one = next(s for s in shown.snap.sessions.values() if s.status is sessions.Status.RUNNING)
+    assert table.show_key(open_one.session_id)
+    press(shown, "m")
+    assert shown.bit_line.text().startswith("m changes how a closed session opens")
+    assert open_one.session_id not in shown.opener.modes
+
+
+def test_enter_opens_the_ticked_ones_goes_to_an_open_ones_tab_and_shows_a_teams_panel(qapp, window, monkeypatch):
+    asked = recorded(monkeypatch)
+    shown = window()
+    read(qapp, shown)
+    board = shown.board
+    login = titled(shown.snap, "Fix the login redirect loop").session_id
+    docs = titled(shown.snap, "Rewrite the getting-started guide").session_id
+    for one in (login, docs):
+        assert board.reveal(one)
+        press(shown, "Space")
+    assert shown.selected == {login, docs} and "opens the 2 ticked sessions" in shown.drawer.enter.text()
+    press(shown, "Enter")
+    settled(qapp, shown)
+    assert {one.session_id for one in asked["opened"][0]} == {login, docs} and shown.selected == set()
+    assert shown.bit_line.text() == "Opened 2 sessions in new tabs." and "ticked" not in shown.pills.text()
+    open_one = next(s for s in shown.snap.sessions.values()
+                    if s.status is sessions.Status.RUNNING and board.card_of(s.session_id) == s.session_id)
+    assert board.reveal(open_one.session_id)
+    press(shown, "Enter")
+    settled(qapp, shown)
+    assert asked["focused"] == [open_one.title]
+    assert shown.bit_line.text() == f"Switched to {open_one.project}. Type your prompt there."
+    team = shown.snap.view.teams[0].name
+    assert board.reveal(VM.TEAM_CARD + team)
+    press(shown, "Enter")  # a team's card: its Team panel tab, as Enter on its row opens its view there
+    panel = shown.team_panel
+    assert shown.docks["Team"].isVisible() and panel.names[panel.tabs.currentIndex()] == team
+    assert len(asked["opened"]) == 1 and len(asked["focused"]) == 1
+
+
+def test_j_goes_to_the_next_one_waiting_and_with_no_terminal_the_commands_go_to_the_clipboard(qapp, window,
+                                                                                           monkeypatch):
+    asked = recorded(monkeypatch, left=["claude --resume made-up"])
+    shown = window()
+    read(qapp, shown)
+    first = actions.next_waiting(shown.snap.sessions.values())
+    second = actions.next_waiting(shown.snap.sessions.values(), first.group, first.turn)
+    assert first.group == "needs" and first.session is not None and second.session is not None
+    press(shown, "j")
+    settled(qapp, shown)
+    assert asked["focused"] == [first.session.title]
+    assert shown.board.pick == shown.board.card_of(first.session.session_id)  # picked: its card, or its team's
+    press(shown, "j")
+    settled(qapp, shown)
+    assert asked["focused"] == [first.session.title, second.session.title]
+    login = titled(shown.snap, "Fix the login redirect loop").session_id
+    assert shown.board.reveal(login)
+    press(shown, "Enter")
+    settled(qapp, shown)
+    assert len(asked["opened"]) == 1 and QApplication.clipboard().text() == "claude --resume made-up"
+    assert shown.bit_line.text() == opening.NO_TERMINAL and not shown.after_open.isActive()
+
+
+def test_the_demo_window_says_what_would_have_opened(qapp, monkeypatch):
+    for name in frame.DEMO_ENV:  # made_up_world points these at its own home, and puts them back
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+    told = main.Told()
+    with frame.made_up_world(True, told.said.emit):
+        shown = main.MainWindow(start=False, demo=True)
+        told.said.connect(shown.demo_told)
+        try:
+            shown.show()
+            QTest.qWaitForWindowActive(shown, 3000)
+            read(qapp, shown)
+            assert shown.board.reveal(titled(shown.snap, "Fix the login redirect loop").session_id)
+            press(shown, "Enter")
+            settled(qapp, shown)
+            wait(qapp, lambda: "Nothing opens" in shown.bit_line.text())
+            qapp.processEvents()
+            assert shown.bit_line.text().startswith("Nothing opens in the demo. For real, a new tab would run: ")
+            assert not shown.opener.update  # no claude update over made-up sessions
+        finally:
+            shown.settle()
+            shown.close()
+
+
 def test_it_never_acts(qapp, window, world, monkeypatch):
-    """Read-only: no actor lock claimed, no plan limit or account recorded, agy never run, nothing
-    opened, sent or closed, whatever key is pressed."""
+    """No actor lock claimed, no plan limit or account recorded, agy never run, nothing sent or closed,
+    whatever key is pressed. What a key asks for past the window is done (Enter opens: the demo's
+    stand-in says what would have), and nothing more."""
     done = []
     for name in ("claim", "first_to", "release"):
         monkeypatch.setattr(actor, name, lambda *a, _name=name, **k: done.append(_name))
@@ -963,9 +1102,10 @@ def test_it_never_acts(qapp, window, world, monkeypatch):
                 continue
             for sequence in main.sequences(key):
                 QTest.keySequence(shown, sequence)
-    qapp.processEvents()
+    settled(qapp, shown)
     assert done == []
-    assert world == []  # the demo's stand-ins were asked to open, start, type or rename nothing
+    # the demo's stand-ins were asked to start, type or rename nothing; Enter's tabs alone
+    assert all(words.startswith("Nothing opens in the demo.") for words in world)
     assert shown.isVisible()
 
 

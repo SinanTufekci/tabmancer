@@ -10,7 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt
@@ -122,9 +122,10 @@ class KeysDialog(QDialog):
 
 
 @contextlib.contextmanager
-def made_up_world(demo: bool) -> Generator[None]:
+def made_up_world(demo: bool, tell: Callable[[str], None] | None = None) -> Generator[None]:
     """With demo, the made-up sessions and team of `tabmancer --demo`, in a folder of its own that
-    goes afterwards: nothing real is read, and what the demo put in place of the world is put back."""
+    goes afterwards: nothing real is read, and what the demo put in place of the world is put back.
+    tell: what the stand-ins say would have happened (a tab opening), from any thread."""
     if not demo:
         yield
         return
@@ -136,7 +137,7 @@ def made_up_world(demo: bool) -> Generator[None]:
     try:
         live = made_up.prepare(home)
         told: list[str] = []
-        for module, name, value in made_up.stand_ins(home, live, told.append):
+        for module, name, value in made_up.stand_ins(home, live, tell or told.append):
             kept.append((module, name, getattr(module, name)))
             setattr(module, name, value)
         yield

@@ -5,14 +5,15 @@ rowwords (one copy with the terminal's list); this draws them: each cell's parts
 of light and the red pulse as the window's motion allows.
 
 The pick is shared with the Board's: it goes out (picked) in the drawer's words, a session's id or a
-team's card (viewmodel.TEAM_CARD + its name). A team's row unfolds its members under it (Enter, a click
-on its ▸, a double-click; E every team), as in the terminal; the cursor never rests on a heading. A row
-ticked (Space, or a click on its [ ]) shows [x], as there."""
+team's card (viewmodel.TEAM_CARD + its name). A team's row unfolds its members under it (e, a click on
+its ▸, a double-click; E every team), as in the terminal, where Enter on it opens the team's view (in
+the window, its Team panel tab); the cursor never rests on a heading. A row ticked (Space, or a click
+on its [ ]) shows [x], as there; the Open as column says how m left it."""
 
 from __future__ import annotations
 
 import math
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import replace
 from functools import partial
 
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QStyle, QStyledIte
 
 from .. import picks, rowwords
 from .. import viewmodel as VM
+from ..launch import Mode
 from ..sessions import Session
 from ..store import DashSnapshot
 from . import look
@@ -120,6 +122,7 @@ class Table(QTreeView):
         self.live = False
         self.unfolded: set[str] = set()  # teams whose members are listed under them
         self.ticked: frozenset[str] = frozenset()  # the sessions ticked (Space), by id
+        self.modes: Mapping[str, Mode] = {}  # how a session opens, where m changed it (the window's)
         self.listing: rowwords.Listing | None = None
         self.keys: list[str] = []
         self.sessions: list[Session | None] = []
@@ -193,7 +196,7 @@ class Table(QTreeView):
             grouped, snap.sessions, snap.team_states, self.accent, self.width_now, model_shown=self.model_shown,
             live=self.live, unfolded=frozenset(self.unfolded), selected=self.ticked, pinned=snap.pinned,
             is_hidden=partial(in_hidden, snap.hidden), armed=snap.armed, queued=snap.queued, tokens=snap.session_tokens,
-            default_cap=picks.cap_tokens(picks.default_cap()), star=star)
+            default_cap=picks.cap_tokens(picks.default_cap()), modes=dict(self.modes), star=star)
 
     def show_rows(self) -> None:
         """The rows again: in place where they are the same rows, else made anew; the pick kept on its row,
@@ -350,13 +353,6 @@ class Table(QTreeView):
                 self.ticking.emit(drawer_key(index.data(KEY) or ""))
             else:
                 self.fold_at(index)  # the ▸ of an open team's row
-
-    def keyPressEvent(self, event) -> None:
-        key = event.key()
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.pick and self.pick.startswith(rowwords.TEAM_ROW):
-            self.fold(self.pick[len(rowwords.TEAM_ROW):])
-            return
-        super().keyPressEvent(event)
 
     # --- motion -----------------------------------------------------------------------------------
 

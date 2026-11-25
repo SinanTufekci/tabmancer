@@ -337,6 +337,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         focus,
         gitstate,
         handover,
+        launch,
         rename,
         report,
         router,
@@ -402,6 +403,8 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
     return [
         (sessions, "_agents_json", lambda include_finished=False: live),
         *dashboard,
+        (launch, "open_tabs", opened),  # the desktop window's, which looks them up when it opens
+        (launch, "run_in_background", refused("starts in the background")),
         (bgjobs, "_run", refused("is stopped or removed")),
         (focus, "focus_tab", lambda title: False),
         (focus, "close_tab", lambda title: False),
