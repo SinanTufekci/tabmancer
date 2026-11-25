@@ -26,7 +26,8 @@ from typing import Protocol
 
 from . import accounts, actions, actor, alerts, claudeupdate, store, toast, usage, wrapped
 from .actions import Note
-from .sessions import Exit, Session
+from .openings import Openings
+from .sessions import Session
 from .viewmodel import at_limit
 
 # --- when the front runs what: its timers (SCHEDULE) -------------------------------------------------
@@ -200,8 +201,7 @@ class EngineState:
     notes: dict[str, tuple[str, str]] = field(default_factory=dict)  # messages for members: id -> (name, message)
     told_crowded: set[str] = field(default_factory=set)  # sessions already said to be crowded
     told_idle: bool = False  # Bit pointed out idle background sessions
-    opening: dict[str, float] = field(default_factory=dict)  # session id -> when it was opened from here
-    came_up: set[str] = field(default_factory=set)  # opened from here and seen open since
+    openings: Openings = field(default_factory=Openings)  # opened from here: not again while starting, came up?
     full_poll_due: bool = False  # a full live poll is on its way: quick ones wait
     full_polls: int = 0  # full live polls come back so far
     armed: dict[str, datetime] = field(default_factory=dict)  # c: session id -> when it continues (its limit lifts)
@@ -330,7 +330,7 @@ class Engine:
         changed = {sid for sid, fresh in updates.items() if state.sessions.get(sid) != fresh}
         front.flash_changed(updates)
         state.sessions.update(updates)
-        state.came_up |= {sid for sid, s in updates.items() if s.exit is Exit.RUNNING and sid in state.opening}
+        state.openings.seen(updates)
         front.untick_open(updates)
         if state.notes:
             self.deliver()  # a member that waits for you now gets its message
@@ -360,7 +360,7 @@ class Engine:
     def came_up_check(self, ids: set[str]) -> None:
         """A while after they were opened: which of these never showed up open (Claude Code would not
         resume one, its folder gone, say; its tab says why)."""
-        event = alerts.not_up_event(ids, self.state.came_up, self.state.sessions)
+        event = alerts.not_up_event(ids, self.state.openings.came_up, self.state.sessions)
         if event is not None:
             self.tell(event)
 

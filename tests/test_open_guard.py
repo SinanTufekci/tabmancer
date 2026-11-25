@@ -93,5 +93,5 @@ async def test_a_session_that_comes_up_is_not_named(fake_home, opened, monkeypat
         monkeypatch.setattr(store, "_registry_sessions", lambda: [{"sessionId": "one", "pid": 1}])  # the poll's read
         app.poll_live(full=False)  # its pid file is there: it came up
         await pilot.pause(1.5)
-        assert "one" in app.came_up
+        assert "one" in app.openings.came_up
         assert not any("did not come up" in note for note in told(app))

@@ -14,7 +14,19 @@ from pathlib import Path
 
 import pytest
 
-from tabmancer import accounts, actions, actor, alerts, claudeupdate, engine, store, toast, usage, wrapped
+from tabmancer import (
+    accounts,
+    actions,
+    actor,
+    alerts,
+    claudeupdate,
+    engine,
+    openings,
+    store,
+    toast,
+    usage,
+    wrapped,
+)
 from tabmancer.sessions import Exit, Session, Status
 
 NOW = datetime(2026, 11, 25, 12, 0)
@@ -145,9 +157,9 @@ def test_bit_points_out_idle_background_sessions_once():
 
 def test_the_ones_that_never_came_up(claims):
     front = Front()
-    eng = made(front, opening={"up": 1.0, "nv": 1.0})
+    eng = made(front, openings=openings.Openings(opening={"up": 1.0, "nv": 1.0}))
     eng.live({"up": s("up", state="idle"), "nv": s("nv", exit=Exit.CLEAN, state="")}, False, set())
-    assert eng.state.came_up == {"up"}
+    assert eng.state.openings.came_up == {"up"}
     front.calls.clear()
     eng.came_up_check({"up", "nv"})
     assert front.calls[0][1].note.words == "nv did not come up: its tab says why."
@@ -192,7 +204,7 @@ def test_the_dashboards_state_is_the_engines():
 
     app = SessionPicker(days=14)
     assert engine.FORWARDED == ("acts", "sessions", "queued", "unasked", "notes", "told_crowded", "told_idle",
-                                "opening", "came_up", "full_poll_due", "full_polls", "armed", "armed_unsaved",
+                                "openings", "full_poll_due", "full_polls", "armed", "armed_unsaved",
                                 "told_limit", "actor_misses", "told_alone", "told_update", "updating_claude",
                                 "after_claude_update", "account", "signed_as", "told_agy_out", "team_seen")
     for name in engine.FORWARDED:

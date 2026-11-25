@@ -50,6 +50,7 @@ from . import (
     marks,
     newforms,
     newsessions,
+    openings,
     picks,
     rename,
     rowwords,
@@ -77,7 +78,6 @@ from .actions import (
     cold_note,
     handing_note,
     open_names,
-    still_opening,
     team_handover_problem,
 )
 from .actions import clip as _clip
@@ -191,7 +191,7 @@ NAMELESS = ("This dashboard could not read its own start time, so it only shows 
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
 FLASH_SECONDS = 1.6  # how long a row stays lit after its state changes
-CAME_UP_SECONDS = 45  # by then a session opened from here has shown up open, or it is said that it did not
+CAME_UP_SECONDS = openings.CAME_UP_SECONDS  # by then one opened from here shows open, or it is said that not
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
 COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon starts it (cold_note)
 KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
@@ -2117,7 +2117,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if session.status is Status.RUNNING:
                 self.go_to_tab(session)
                 return "going to its tab"
-            if session_id in still_opening(self.opening, time.monotonic()):
+            if session_id in self.openings.recent():
                 return "already opening"
             self.open_sessions([self.launch_for(session)])
             return "opening"
@@ -2345,7 +2345,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """Every member not open: a closed one resumed as itself, one never started new; the lead last."""
         sessions = {name: self.sessions.get(s.session_id, s) if s is not None else None
                     for name, s in state.sessions.items()}
-        start = actions.start_team(state.team, sessions, still_opening(self.opening, time.monotonic()))
+        start = actions.start_team(state.team, sessions, self.openings.recent())
         if not start.launches:
             self.notify(start.words, timeout=3)
             return
@@ -3201,13 +3201,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.go_to_tab(session)
                 return
             chosen = [session]
-        recent = still_opening(self.opening, time.monotonic())
-        chosen = [s for s in chosen if s.session_id not in recent]
+        chosen = self.openings.choose(chosen)  # not the ones opened a moment ago, still starting
         if not chosen:
-            self.notify("Already opening: it shows as open in a moment.", severity="warning")
+            self.say_note(openings.ALREADY)
             return
-        saved = teams.load()
-        self.open_sessions([self.launch_for(s, saved) for s in teams.lead_last(chosen, saved)])
+        self.open_sessions(self.openings.launches(chosen, self.mode, self.background_live))
 
     def open_sessions(self, launches: list[Launch], window: str | None = None, updated: bool = False) -> None:
         """Open sessions in new tabs beside the dashboard, which stays open. One that a Claude
@@ -3241,9 +3239,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if not opened.opened:
             return
         ids = opened.opened_ids
-        self.opening.update(dict.fromkeys(ids, time.monotonic()))
-        resumed = opened.resumed_ids
-        self.came_up -= resumed
+        resumed = self.openings.took(opened, look_later=False)  # looked for on this front's own timer
         self.set_timer(CAME_UP_SECONDS, lambda: self.check_came_up(resumed))
         self.selected -= ids
         for sid in ids & self.sessions.keys():
