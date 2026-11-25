@@ -300,6 +300,23 @@ def test_a_router_not_reached_gives_a_guess_without_asking_again(monkeypatch, pr
     ("add a racecar sprite to the demo", Pick("sonnet", "medium", "300k")),  # no "race" in "racecar"
     ("fix the race condition in the poller", Pick("opus", "high", "300k")),
     ("races between the two writers lose a save", Pick("opus", "high", "300k")),
+    # A question about something hard is a bug hunt; one about nothing hard stays small.
+    ("what is causing the memory leak in the worker pool", Pick("opus", "high", "300k")),
+    ("explain why the deadlock happens under load", Pick("opus", "high", "300k")),
+    ("where is the race condition in the bus", Pick("opus", "high", "300k")),
+    ("what is this file for", Pick("haiku", "low", "200k")),
+    ("explain the footer keys", Pick("haiku", "low", "200k")),
+    # A small edit across the codebase is routine work with room, not a small task.
+    ("rename the config module across the whole codebase", Pick("sonnet", "medium", "400k")),
+    ("bump the version", Pick("haiku", "low", "200k")),
+    # Hard work by other words, and Turkish ones as they are inflected.
+    ("investigate why the CI is red on ubuntu", Pick("opus", "high", "300k")),
+    ("optimize the slow query in the report page", Pick("opus", "high", "300k")),
+    ("find the root cause of the flaky monitor test", Pick("opus", "high", "300k")),
+    ("the bus loses a message now and then, intermittent", Pick("opus", "high", "300k")),
+    ("giriş ekranındaki hatayı ayıkla", Pick("opus", "high", "300k")),
+    ("liste ekranının performansını artır", Pick("opus", "high", "300k")),
+    ("oturum listesini incele ve sadeleştir", Pick("opus", "high", "300k")),
 ])
 def test_the_guess_goes_by_the_messages_words(message, pick):
     route = router.guess(message)

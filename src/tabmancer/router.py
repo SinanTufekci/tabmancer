@@ -62,10 +62,15 @@ RETRY = "\n\nYour last answer could not be read. Answer with exactly the two lin
 # Turkish), "debug" finding "debugging" too.
 HARD_WORDS = re.compile(
     r"\b(refactor|architect|redesign|debug|races?\b|race condition|deadlock|concurren|migrat|security|vulnerab|"
-    r"performance|memory leak|mimari|tasarla|hata ayıkla|yeniden yapılandır|güvenlik)", re.IGNORECASE)
-LIGHT_WORDS = re.compile(
-    r"\b(typo|rename|comment|readme|docstring|bump|look up|lookup|what is|what does|where is|explain|"
-    r"summari[sz]e|yazım hatası|yeniden adlandır|nedir|nerede|açıkla|özetle)", re.IGNORECASE)
+    r"performance|memory leak|investigat|optimi[sz]|root cause|flaky|intermittent|"
+    r"mimari|tasarla|hata ayıkla|ayıkla|yeniden yapılandır|güvenlik|performans|incele)", re.IGNORECASE)
+# Light work, of two kinds. A small edit is small whatever it names ("fix the typo in the race handler");
+# a question is small only about nothing hard ("what is causing the memory leak" is a bug hunt).
+EDIT_WORDS = re.compile(
+    r"\b(typo|rename|comment|readme|docstring|bump|yazım hatası|yeniden adlandır)", re.IGNORECASE)
+QUESTION_WORDS = re.compile(
+    r"\b(look up|lookup|what is|what does|where is|explain|summari[sz]e|nedir|nerede|açıkla|özetle)",
+    re.IGNORECASE)
 WIDE_WORDS = re.compile(r"\b(across|whole|entire|every file|all files|codebase|tüm|bütün)", re.IGNORECASE)
 SHORT_TASK = 25  # words: a light word in a message longer than this is part of more work
 LONG_TASK = 120  # words: a message this long spells out a detailed task
@@ -145,18 +150,23 @@ def read(answer: str) -> Route | None:
 
 def guess(message: str, reason: str = "") -> Route:
     """A pick from the message's own words, for when the router cannot be asked: the same message
-    always gets the same pick. A small or look-up task in a short message gets Haiku (first: "rename
-    the design doc" is small, whatever it names), work that is hard to get right (a refactor, a
-    redesign, a bug hunt) Opus, the rest Sonnet; a long message is a detailed task. Marked as a
-    guess, and why the router was not asked, so it is never taken for the router's own."""
+    always gets the same pick. A small edit in a short message gets Haiku (first: "rename the design
+    doc" is small, whatever it names), or Sonnet with room when it goes across the codebase; work
+    that is hard to get right (a refactor, a redesign, a bug hunt) Opus; a short question about
+    nothing hard Haiku ("what is causing the memory leak" is a bug hunt); the rest Sonnet, a long
+    message being a detailed task. Marked as a guess, and why the router was not asked, so it is
+    never taken for the router's own."""
     text = message.lower()
     words = len(text.split())
-    hard, light = HARD_WORDS.findall(text), LIGHT_WORDS.findall(text)
-    if light and words <= SHORT_TASK:
-        pick, about = Pick("haiku", "low", "200k"), f"'{light[0]}' is a small task"
+    hard, edit, question = HARD_WORDS.findall(text), EDIT_WORDS.findall(text), QUESTION_WORDS.findall(text)
+    wide = bool(WIDE_WORDS.search(text))
+    if edit and words <= SHORT_TASK:
+        pick, about = ((Pick("sonnet", "medium", "400k"), f"'{edit[0]}' across the code is routine work") if wide
+                       else (Pick("haiku", "low", "200k"), f"'{edit[0]}' is a small task"))
     elif hard:
-        wide = bool(WIDE_WORDS.search(text))
         pick, about = Pick("opus", "high", "400k" if wide else "300k"), f"'{hard[0]}' is work to get right"
+    elif question and words <= SHORT_TASK:
+        pick, about = Pick("haiku", "low", "200k"), f"'{question[0]}' is a small task"
     elif words > LONG_TASK:
         pick, about = Pick("sonnet", "high", "300k"), "a long, detailed task"
     else:
