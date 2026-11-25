@@ -166,8 +166,6 @@ SPLIT_FROM = (180, 40)
 # Said instead of "remembered" when config.json is there but could not be read: writing the one key
 # alone would have wiped the rest of it (merge_json refuses).
 NOT_SAVED = "Not saved: config.json could not be read, so it was left as it is."
-ACTS_ELSEWHERE = ("Another tabmancer dashboard continues sessions at their reset: c there sets which. This one "
-                  "only shows them (it takes over when that one closes).")
 PANE_LEAST, PANE_MOST = 56, 90  # the preview's width there: the window's less 132, within these
 PANE_TAKES = 132
 # The sidebar's marks, said once under its projects (two lines of the sidebar's width).
@@ -2405,15 +2403,14 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.open_handover(session, how if how in ("self", "transcript") else None)
             return "handing over" if how in ("self", "transcript") else "asking how"
         if action == "continue_at_reset":
-            if not at_limit(session) or session.status is Status.BACKGROUND:
-                return "not at a limit"
-            if not self.acts:
-                return "continued at its reset only by the dashboard that acts (actor.py): ask there"
+            refused = actions.arm_refusal(session, self.acts)
+            if refused is not None:
+                return refused
             self.armed.update(actions.arm([session]))
             self.save_armed()
             self.update_row(session)
             self.update_detail()
-            return f"continues at {lifts(self.armed[session_id])}"
+            return actions.armed_words(self.armed[session_id])
         raise KeyError(f"no action {action}")
 
     # --- teams in the list ----------------------------------------------------------------
@@ -3232,8 +3229,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if picked is None:
                 return
             answer, ids = picked
-            if answer in ("lift", "off") and not self.acts:
-                self.notify(ACTS_ELSEWHERE, severity="warning", timeout=10)
+            refused = actions.answer_refusal(answer, self.acts)
+            if refused is not None:
+                self.say_note(refused)
                 return
             choice = actions.continue_choice(answer, ids, stopped, self.armed, when)
             if choice is None:
@@ -3252,9 +3250,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.update_row(session)
             self.update_detail()
 
-        away = {s.session_id: self.held(s) for s in self.ran_elsewhere(stopped)}
         self.push_screen(LimitDialog(stopped, when, all(s.session_id in self.armed for s in stopped), plan, room,
-                                     away, self.org_words()), chosen)
+                                     limitwords.away(self.account, stopped), self.org_words()), chosen)
 
     def continue_these(self, stopped: list[Session], unasked: bool = False) -> None:
         """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt
@@ -3318,7 +3315,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             accounts.keep_limited(kept)
         self.told_limit &= at
         if self.sessions and self.acts and not self.armed.keys() <= at:
-            self.armed = {sid: moment for sid, moment in self.armed.items() if sid in at}
+            self.armed = actions.still_armed(self.armed, at)
             self.save_armed()
         if at != self.limited and self.screen_stack:  # not while the app shuts down: no screen then
             self.limited = at

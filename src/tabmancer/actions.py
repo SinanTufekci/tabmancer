@@ -550,6 +550,10 @@ ARMED_UNSAVED = Note("The sessions to continue at their reset could not be saved
                      "so it was left as it is. They still continue while this dashboard is open.", "warning", 15)
 NONE_STOPPED = Note("No session is stopped at a usage limit.", seconds=4)
 ARMED_OFF = Note("Sessions at a limit will not continue by themselves.", seconds=5)
+# Only the dashboard that acts (actor.py) continues sessions at their reset; one that watches says so.
+ACTS_ELSEWHERE = Note("Another tabmancer dashboard continues sessions at their reset: c there sets which. This one "
+                      "only shows them (it takes over when that one closes).", "warning", 10)
+ARM_ELSEWHERE = "continued at its reset only by the dashboard that acts (actor.py): ask there"
 
 
 def stopped_at_limit(sessions: dict[str, Session]) -> list[Session]:
@@ -577,6 +581,30 @@ def plan_words(limits: list, others: list[str]) -> tuple[str, bool]:
 def arm(these: list[Session]) -> dict[str, datetime]:
     """Each continues by itself when its limit lifts: at its reset, or now when it has none."""
     return {s.session_id: s.resets or datetime.now() for s in these}
+
+
+def arm_refusal(session: Session, acts: bool) -> str | None:
+    """Why one session cannot be set to continue at its reset (the act API's continue_at_reset), in a
+    few words: not at a limit (or working in the background), or this dashboard does not act. None: it can."""
+    if not viewmodel.at_limit(session) or session.status is Status.BACKGROUND:
+        return "not at a limit"
+    return None if acts else ARM_ELSEWHERE
+
+
+def armed_words(moment: datetime) -> str:
+    """'continues at 16:00': what the act API says once one is set to continue."""
+    return f"continues at {viewmodel.lifts(moment)}"
+
+
+def answer_refusal(answer: str, acts: bool) -> Note | None:
+    """The c dialog's answer refused: continuing when the limit lifts, or no longer by themselves, is set
+    only where the dashboard acts. Now and the handover go on anywhere."""
+    return ACTS_ELSEWHERE if answer in ("lift", "off") and not acts else None
+
+
+def still_armed(armed: dict[str, datetime], at: set[str]) -> dict[str, datetime]:
+    """The armed that are still stopped at a limit (at: their ids): one gone on meanwhile is forgotten."""
+    return {sid: moment for sid, moment in armed.items() if sid in at}
 
 
 @dataclass

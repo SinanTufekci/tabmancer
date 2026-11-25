@@ -6,6 +6,8 @@ puts them into rich Text, the desktop window into its own; both say the same."""
 
 from __future__ import annotations
 
+from . import accountwords
+from .accounts import Account
 from .actions import Note, clip
 from .palette import AMBER, MUTED, TEXT
 from .sessions import Session
@@ -69,6 +71,12 @@ def cost_parts(total: int) -> list[Part]:
             (f"{human(total)} tokens", f"bold {AMBER}" if total >= BIG_CONTEXT else f"bold {TEXT}"),
             ((" for the ticked ones, much of a 5-hour limit at once. Handed over, a session starts afresh "
               "with a short handover."), "")]
+
+
+def away(account: Account | None, stopped: list[Session]) -> dict[str, list[str]]:
+    """Those that ran on another organisation than account (signed in now), each with what its tool
+    calls read (accountwords.held): going on sends their conversation there."""
+    return {s.session_id: accountwords.held(s) for s in accountwords.ran_elsewhere(account, stopped)}
 
 
 def away_parts(ticked: list[str], away: dict[str, list[str]], where: str) -> list[Part]:

@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tabmancer import limitwords
+from tabmancer.accounts import Account
 from tabmancer.palette import AMBER, MUTED
 from tabmancer.sessions import Session
 
@@ -49,3 +50,11 @@ def test_where_going_on_sends_them():
     assert one == "One of the ticked ran on another organisation: its conversation goes to your personal account if it goes on."
     two = said(limitwords.away_parts(["a", "b"], away, "the Example Labs organisation"))
     assert two.startswith("2 of the ticked") and two.endswith("if they go on (Drive / Gmail content in them).")
+
+
+def test_which_ran_on_another_organisation():
+    me = Account("claude", "me@example.com", "Max 5x", "acc1", "orgP", "", "claude_max")
+    here, there, unknown = s("a", 1), s("b", 1), s("c", 1)
+    here.org, there.org, there.sensitive = "orgP", "orgB", ["Gmail"]
+    assert limitwords.away(me, [here, there, unknown]) == {"b": ["Gmail"]}
+    assert limitwords.away(None, [there]) == {}

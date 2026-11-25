@@ -404,6 +404,21 @@ def test_which_armed_sessions_are_due():
     assert actions.due(armed, sessions, reset + actions.LIMIT_MARGIN).lifted == [waiting, again]
 
 
+def test_who_sets_a_session_to_continue_at_its_reset():
+    reset = datetime.now() + timedelta(hours=2)
+    waiting = stopped("w", reset)
+    assert actions.arm_refusal(waiting, acts=True) is None
+    assert actions.arm_refusal(waiting, acts=False) == actions.ARM_ELSEWHERE  # only the dashboard that acts
+    assert actions.arm_refusal(one("b", state="busy", resets=reset), acts=True) == "not at a limit"
+    assert actions.arm_refusal(replace(waiting, status=Status.BACKGROUND), acts=True) == "not at a limit"
+    assert actions.armed_words(reset) == f"continues at {viewmodel.lifts(reset)}"
+    for answer, refused in (("now", None), ("handover", None), ("lift", actions.ACTS_ELSEWHERE),
+                            ("off", actions.ACTS_ELSEWHERE)):
+        assert actions.answer_refusal(answer, acts=False) is refused and actions.answer_refusal(answer, True) is None
+    assert actions.ACTS_ELSEWHERE.severity == "warning" and actions.ACTS_ELSEWHERE.seconds == 10
+    assert actions.still_armed({"w": reset, "gone": reset}, {"w", "x"}) == {"w": reset}
+
+
 def test_saving_the_sessions_to_continue_keeps_the_rest_of_config(monkeypatch):
     from tabmancer import config, store
 
