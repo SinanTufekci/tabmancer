@@ -4,11 +4,12 @@ Two looks at the sessions, a poll apart, come to events: one turned to need you 
 reply, one stopped at a usage limit, one whose model fell back by itself, one whose context grew
 crowded (once a session), and a team's new messages. Beside them: the ones a limit stopped (once a
 session), Claude Code signed in with another account, sessions opened a while ago that never came
-up, the messages waiting to be typed into a member's tab, and the daily `claude update`. Each event
+up, the messages waiting to be typed into a member's tab, the daily `claude update`; idle background
+sessions, the week's Wrapped, a newer tabmancer, a plan limit nearly full and agy's models out. Each event
 carries what to say (a note), what Bit does, whether the bell rings and whether it goes into the
 desktop toast; the terminal dashboard (app.py) shows them as it always did, and a desktop window can
-show the same. The words are returned as data, with a tone where Bit colours them ('amber',
-'accent', 'green')."""
+show the same. The words are returned as data, with a tone where Bit colours them ('amber', 'red',
+'green', 'accent', or 'plain': Bit's own)."""
 
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import claudeupdate, context, handover, typein, viewmodel
+from . import __version__, claudeupdate, context, handover, typein, updates, viewmodel, wrapped
 from .actions import Note, Told, came_up_missing, limit_say
 from .sessions import Exit, Session, Status
 from .tokens import duration, human
@@ -31,11 +32,17 @@ STOPPED = "stopped"          # Bit names the ones a usage limit stopped (once a 
 SIGNED_IN = "signed-in"      # Claude Code is signed in with another account now
 NOT_UP = "not-up"            # opened a while ago from here, never seen open
 TEAM_MESSAGE = "team-message"  # one member told another something
+IDLE = "idle"                # background sessions sit idle (once a dashboard)
+WRAPPED = "wrapped"          # the week is ready as a card (Friday from noon, once a week)
+NEWER = "newer"              # a newer tabmancer is out (once a version)
+LIMIT_NEAR = "limit-near"    # a plan limit at 85% or more (each reading)
+AGY_OUT = "agy-out"          # every agy model in the chain is out (once until it is back)
 
 
 @dataclass
 class Bit:
-    """What Bit does: celebrate or alert (words: the project), react with a mood, or say the words."""
+    """What Bit does: celebrate or alert (words: the project), react with a mood, worry (a limit nearly
+    full), or say the words."""
 
     how: str
     words: str
@@ -48,7 +55,8 @@ class Bit:
 class Event:
     """One thing to tell. note: the notification (None: none); bit: Bit's part; bell: rings the
     terminal's bell (where the dashboard shows the live list); toast: goes into the desktop note of the
-    sessions that turned; once_keys: the sessions it is said for, never again (crowded, stopped).
+    sessions that turned; desktop: a desktop note of its own, (title, body); once_keys: the sessions it
+    is said for, never again (crowded, stopped).
     A team's message carries its team and the message itself (it flies along the team's wires)."""
 
     kind: str
@@ -57,6 +65,7 @@ class Event:
     bit: Bit | None = None
     bell: bool = False
     toast: bool = False
+    desktop: tuple[str, str] | None = None
     once_keys: tuple[str, ...] = ()
     team: str = ""
     message: object = None
@@ -276,3 +285,54 @@ def update_notes(outcome: claudeupdate.Outcome, missing: list[str] | None, waite
 def updating_note(what: str) -> Note:
     """While claude update runs: what waits for it."""
     return Note(f"Claude Code is updating: {what} once it is done.", seconds=8)
+
+
+# --- Bit's other words: idle background sessions, the week, a newer tabmancer, the limits ---------
+
+
+def idle_event(idle: int) -> Event | None:
+    """Background sessions sitting idle (a count from a full poll): B tidies them up."""
+    if not idle:
+        return None
+    return Event(IDLE, bit=Bit("react", f"{idle} background session{'s sit' if idle > 1 else ' sits'} idle. B tidies up.",
+                               "idle", tone="plain", seconds=6))
+
+
+def wrapped_event(now: datetime | None = None) -> Event | None:
+    """On Fridays from noon, or the weekend after, once a week (wrapped.due): the week is ready (W).
+    The caller marks it told (wrapped.told)."""
+    if not wrapped.due(now):
+        return None
+    return Event(WRAPPED, note=Told("Claude Code Wrapped: your week as a card to share. W shows it.", seconds=15,
+                                    title="Your week"),
+                 bit=Bit("react", "Your week, wrapped! W shows it.", "lifted", tone="accent", seconds=10),
+                 desktop=("Your week, wrapped", "Claude Code Wrapped is ready: W in the dashboard shows it."))
+
+
+def newer_tabmancer(told: str | None) -> tuple[str, str] | None:
+    """A newer tabmancer on PyPI (updates.news: asked once a day at most) not told of yet: (version,
+    the command that upgrades to it). Blocking: run it off the screen's thread."""
+    found = updates.news()
+    return found if found and found[0] != told else None
+
+
+def newer_event(version: str, command: str) -> Event:
+    """A newer tabmancer, once in a note with the command that upgrades it, which Bit announces too."""
+    return Event(NEWER, note=Told(f"tabmancer {version} is out (you have {__version__}). To upgrade: {command}",
+                                  seconds=30, title="A newer tabmancer"),
+                 bit=Bit("say", f"tabmancer {version} is out!", tone="green", seconds=8))
+
+
+def usage_events(limits: list, bar: dict, told_agy_out: datetime | None) -> tuple[list[Event], datetime | None]:
+    """A plan reading's words (limits: usage.Limit; bar: agy's chain, agy.bar_view, {} without agy): a
+    limit at 85% or more, each reading; every agy model out, said once until it is back. And the
+    time it is back, as told now."""
+    out: list[Event] = []
+    full = [lim for lim in limits if lim.percent >= 85]
+    if full:
+        worst = max(full, key=lambda lim: lim.percent)
+        out.append(Event(LIMIT_NEAR, bit=Bit("worry", f"Careful: {worst.label} limit at {worst.percent}%", tone="red")))
+    back = bar.get("all_out")
+    if back is not None and back != told_agy_out:
+        out.append(Event(AGY_OUT, bit=Bit("say", bar["said"], seconds=12)))
+    return out, back

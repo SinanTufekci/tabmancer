@@ -33,7 +33,6 @@ from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
 from . import (
-    __version__,
     accounts,
     actions,
     actor,
@@ -62,7 +61,6 @@ from . import (
     teamwatch,
     toast,
     tokens,
-    updates,
     usage,
     workspaces,
     wrapped,
@@ -2129,14 +2127,14 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def tell_wrapped(self) -> None:
         """On Fridays from noon, or the weekend after, once a week: the week is ready (W)."""
-        if not wrapped.due():
+        event = alerts.wrapped_event()
+        if event is None:
             return
         wrapped.told()
-        self.mascot.react("lifted", "Your week, wrapped! W shows it.", self.accent(), seconds=10)
-        self.notify("Claude Code Wrapped: your week as a card to share. W shows it.", title="Your week",
-                    timeout=15)
-        if toast.enabled():
-            self.send_toast("Your week, wrapped", "Claude Code Wrapped is ready: W in the dashboard shows it.")
+        self.show_bit(event.bit)
+        self.say_note(event.note)
+        if event.desktop and toast.enabled():
+            self.send_toast(*event.desktop)
 
     # --- handing over -----------------------------------------------------------------
 
@@ -3086,8 +3084,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     @work(thread=True, exclusive=True, group="updates")
     def check_updates(self) -> None:
         """A newer tabmancer on PyPI (updates.news: asked once a day at most), told once."""
-        found = updates.news()
-        if found and found[0] != self.told_update:
+        found = alerts.newer_tabmancer(self.told_update)
+        if found:
             self.call_from_thread(self.tell_update, *found)
 
     @work(thread=True, exclusive=True, group="claude-update")
@@ -3118,22 +3116,16 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         a note with the command that upgrades it, which Bit announces too."""
         self.told_update = version
         self.topbar.put("brand", Text.assemble("◆ tabmancer", (f"  ↑ {version}", f"bold {GREEN}")))
-        self.notify(f"tabmancer {version} is out (you have {__version__}). To upgrade: {command}",
-                    title="A newer tabmancer", timeout=30)
-        self.mascot.say(f"tabmancer {version} is out!", GREEN, seconds=8)
+        self.tell(alerts.newer_event(version, command))
 
     def show_usage(self, limits: list[usage.Limit]) -> None:
         self.limits = limits
         bar = self.agy_bar
         self.topbar.show_usage(limits, bar.get("parts", []), agy_first=bar != {} and clis.main_cli() == "agy")
-        full = [lim for lim in limits if lim.percent >= 85]
-        if full:  # Bit mentions it once per reading
-            worst = max(full, key=lambda lim: lim.percent)
-            self.mascot.worry(f"Careful: {worst.label} limit at {worst.percent}%", RED)
-        back = bar.get("all_out")
-        if back is not None and back != self.told_agy_out:  # every agy model out: said once until it is back
-            self.mascot.say(bar["said"], AMBER, seconds=12)
-        self.told_agy_out = back
+        # A limit at 85% or more: Bit mentions it once per reading; every agy model out: once until it is back.
+        said, self.told_agy_out = alerts.usage_events(limits, bar, self.told_agy_out)
+        for event in said:
+            self.tell(event)
 
     @work(thread=True)
     def start_background(self, launch: Launch) -> None:
@@ -3659,10 +3651,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if full:
             idle = sum(bool(e.get("pid")) and background.state_of(e).lower() in background.IDLE
                        for e in self.background_live.values())
-            if idle and not self.told_idle:
+            if not self.told_idle and (event := alerts.idle_event(idle)) is not None:
                 self.told_idle = True
-                self.call_from_thread(self.mascot.react, "idle", f"{idle} background session{'s sit' if idle > 1 else ' sits'}"
-                                      " idle. B tidies up.", seconds=6)
+                self.call_from_thread(self.show_bit, event.bit)
         updates = store.fresh_sessions(known, live, full)
         self.call_from_thread(self.apply_live_updates, updates, full)
 
@@ -3758,16 +3749,19 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def show_bit(self, bit: alerts.Bit) -> None:
         """What Bit does for an event: the front end's part (alerts.Bit says what happened, how loud)."""
-        colour = {"amber": AMBER, "green": GREEN}.get(bit.tone) or self.accent()
+        tone = {} if bit.tone == "plain" else {
+            "colour": {"amber": AMBER, "green": GREEN, "red": RED}.get(bit.tone) or self.accent()}
         timing = {} if bit.seconds is None else {"seconds": bit.seconds}
         if bit.how == "celebrate":
             self.mascot.celebrate(bit.words)
         elif bit.how == "alert":
             self.mascot.alert(bit.words)
+        elif bit.how == "worry":
+            self.mascot.worry(bit.words, **tone)
         elif bit.how == "react":
-            self.mascot.react(bit.mood, bit.words, colour, **timing)
+            self.mascot.react(bit.mood, bit.words, **tone, **timing)
         else:
-            self.mascot.say(bit.words, colour, **timing)
+            self.mascot.say(bit.words, **tone, **timing)
 
     def resting_members(self) -> set[str]:
         """The sessions of the teams' members other than their leads: idle, they wait for the lead's

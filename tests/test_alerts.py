@@ -179,3 +179,51 @@ def test_run_claude_update_checks_the_flags_only_when_it_changed(monkeypatch):
     assert alerts.run_claude_update()[1] == ["--advisor"]
     monkeypatch.setattr(claudeupdate, "run", lambda: claudeupdate.Outcome(True, "2", "2"))
     assert alerts.run_claude_update()[1] is None
+
+
+def test_idle_background_sessions():
+    assert alerts.idle_event(0) is None
+    assert alerts.idle_event(1).bit == alerts.Bit("react", "1 background session sits idle. B tidies up.", "idle",
+                                                  tone="plain", seconds=6)
+    assert alerts.idle_event(3).bit.words == "3 background sessions sit idle. B tidies up."
+
+
+def test_the_week_wrapped_on_friday(monkeypatch):
+    from tabmancer import wrapped
+
+    monkeypatch.setattr(wrapped, "due", lambda now=None: False)
+    assert alerts.wrapped_event() is None
+    monkeypatch.setattr(wrapped, "due", lambda now=None: True)
+    event = alerts.wrapped_event()
+    assert event.kind == alerts.WRAPPED and event.note.title == "Your week" and event.note.seconds == 15
+    assert event.bit == alerts.Bit("react", "Your week, wrapped! W shows it.", "lifted", tone="accent", seconds=10)
+    assert event.desktop == ("Your week, wrapped", "Claude Code Wrapped is ready: W in the dashboard shows it.")
+
+
+def test_a_newer_tabmancer_told_once_a_version(monkeypatch):
+    from tabmancer import __version__, updates
+
+    monkeypatch.setattr(updates, "news", lambda *a, **k: ("9.0.0", "uv tool upgrade tabmancer"))
+    assert alerts.newer_tabmancer(None) == ("9.0.0", "uv tool upgrade tabmancer")
+    assert alerts.newer_tabmancer("9.0.0") is None
+    monkeypatch.setattr(updates, "news", lambda *a, **k: None)
+    assert alerts.newer_tabmancer(None) is None
+    event = alerts.newer_event("9.0.0", "uv tool upgrade tabmancer")
+    assert event.note == Told(f"tabmancer 9.0.0 is out (you have {__version__}). To upgrade: uv tool upgrade tabmancer",
+                              seconds=30, title="A newer tabmancer")
+    assert event.bit == alerts.Bit("say", "tabmancer 9.0.0 is out!", tone="green", seconds=8)
+
+
+def test_a_limit_nearly_full_and_agy_out():
+    from tabmancer.usage import Limit
+
+    back = datetime(2026, 11, 26, 9, 30)
+    bar = {"all_out": back, "said": "Every agy model is out until 09:30"}
+    said, told = alerts.usage_events([Limit("session", 70, None, ""), Limit("week", 91, None, ""),
+                                      Limit("week Fable", 88, None, "")], bar, None)
+    assert told == back and [e.kind for e in said] == [alerts.LIMIT_NEAR, alerts.AGY_OUT]
+    assert said[0].bit == alerts.Bit("worry", "Careful: week limit at 91%", tone="red")
+    assert said[1].bit == alerts.Bit("say", "Every agy model is out until 09:30", seconds=12)
+    assert alerts.usage_events([Limit("session", 85, None, "")], bar, back)[0][0].kind == alerts.LIMIT_NEAR
+    assert alerts.usage_events([Limit("session", 84, None, "")], bar, back) == ([], back)
+    assert alerts.usage_events([], {}, back) == ([], None)  # back: said again when out again
