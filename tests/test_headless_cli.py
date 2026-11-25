@@ -115,6 +115,10 @@ COMMANDS = {  # the command, and words its output must hold
     "cleanup older": (["cleanup", "--older", "7"], ["Would move", "add --yes"]),  # says, moves nothing
     "cleanup json": (["cleanup", "--json"], ['"session_id"']),
     "cleanup, no screen": (["cleanup"], ["sessions use", "--older DAYS"]),  # no Textual: the list
+    "wrapped": (["wrapped", "--out", "wrapped.png"], ["saved as wrapped.png"]),  # in the made-up home
+    "startup status": (["startup", "status"], ["Off"]),
+    "agy-plugin status": (["agy-plugin", "status"], ["not installed"]),
+    "mcp help": (["mcp", "--help"], ["--team", "--member"]),
 }
 
 
