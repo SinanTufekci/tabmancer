@@ -165,10 +165,12 @@ def test_no_command_without_textual_or_qt_says_how_to_get_the_window(home):
 
 
 WINDOWS = {  # what opens the terminal dashboard, and the desktop window it opens without Textual
-    "no command": ([], "WINDOW False '' False"),
-    "--demo": (["--demo"], "WINDOW False '' True"),  # tabmancer desktop --demo
-    "team watch": (["team", "watch", "shop"], "WINDOW True 'shop' False"),  # tabmancer desktop --monitor shop
-    "team watch, no team": (["team", "watch"], "WINDOW True '' False"),  # the window asks which
+    "no command": ([], "WINDOW False '' False 14 False"),
+    "--days --all": (["--days", "3", "--all"], "WINDOW False '' False 3.0 True"),  # listing as the terminal's
+    "--demo": (["--demo"], "WINDOW False '' True 14 False"),  # tabmancer desktop --demo
+    "--demo --days": (["--demo", "--days", "2"], "WINDOW False '' True 2.0 False"),
+    "team watch": (["team", "watch", "shop"], "WINDOW True 'shop' False 14 False"),  # desktop --monitor shop
+    "team watch, no team": (["team", "watch"], "WINDOW True '' False 14 False"),  # the window asks which
 }
 
 
@@ -179,7 +181,8 @@ def test_without_textual_the_desktop_window_opens_instead(home, name):
     command, said = WINDOWS[name]
     stand_in = ("from tabmancer import cli, desktop\n"
                 "desktop.available = lambda: True\n"
-                "cli.desktop_window = lambda monitor, name, demo=False: print('WINDOW', monitor, repr(name), demo) or 0\n")
+                "cli.desktop_window = lambda monitor, name, demo=False, days=14, include_all=False: "
+                "print('WINDOW', monitor, repr(name), demo, days, include_all) or 0\n")
     done = run(home, *command, tail=stand_in + CLI)
     assert "the test " not in done.stderr, done.stderr[-3000:]
     assert done.returncode == 0 and "LOADED []" in done.stderr, done.stderr[-3000:]

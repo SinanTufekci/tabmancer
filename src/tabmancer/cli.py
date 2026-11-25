@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> None:
                           default="summary", help="one slide, not the card that sums it up")
     wrapping.add_argument("--gif", action="store_true", help="a GIF, its numbers counting up, not a still PNG")
     wrapping.add_argument("--names", action="store_true", help="the top project's name on the tools slide")
-    windowing = sub.add_parser("desktop", help="tabmancer in a desktop window (the desktop extra: "
+    windowing = sub.add_parser("desktop", parents=[filters], help="tabmancer in a desktop window (the desktop extra: "
                                                'pip install "tabmancer[desktop]"): the dashboard, which '
                                                "only watches for now, or a team's monitor")
     windowing.add_argument("--monitor", action="store_true",
@@ -177,7 +177,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.command:
             parser.error("--demo opens the dashboard: leave out the command")
         if not has_textual():
-            sys.exit(without_textual(demo=True))  # `tabmancer desktop --demo`, or how to get it
+            sys.exit(without_textual(demo=True, days=args.days, include_all=args.all))  # `desktop --demo`
         from .demo import run
 
         run(args.days)
@@ -240,7 +240,8 @@ def main(argv: list[str] | None = None) -> None:
         elif args.action == "run":
             sys.exit(team_run(args.team, args.rest))
     elif args.command == "desktop":
-        sys.exit(m_opens(args.m_opens) if args.m_opens else desktop_window(args.monitor, args.team, args.made_up))
+        sys.exit(m_opens(args.m_opens) if args.m_opens else desktop_window(
+            args.monitor, args.team, args.made_up, args.days, args.all))
     elif args.command == "mcp":
         from . import mcpserver
 
@@ -261,7 +262,7 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"The terminal dashboard is not installed (no Textual), so {PROG} live cannot run here. "
                       f"The dashboard is a desktop window: {PROG} desktop.", file=sys.stderr)
                 sys.exit(1)
-            sys.exit(without_textual(parser))  # a core install: the window, or how to get it
+            sys.exit(without_textual(parser, days=args.days, include_all=args.all))  # the window, or how to get it
         from . import sixel
 
         sixel.probe()  # whether Bit can be drawn in real pixels: asked before Textual reads the keys
@@ -533,14 +534,15 @@ def has_textual() -> bool:
 
 
 def without_textual(parser: argparse.ArgumentParser | None = None, demo: bool = False,
-                    team: str | None = None) -> int:
+                    team: str | None = None, days: float = 14, include_all: bool = False) -> int:
     """Where the terminal dashboard is not installed (no Textual): the desktop window if Qt is there
     (the dashboard, over the made-up sessions with demo, or a team's monitor with team: "" asks which),
-    the way `tabmancer desktop` opens it; else how to add it, and with parser what the commands are."""
+    the way `tabmancer desktop` opens it; else how to add it, and with parser what the commands are.
+    days and include_all: --days and --all, which the dashboard's window lists by as the terminal's did."""
     from . import desktop
 
     if desktop.available():
-        return desktop_window(team is not None, team or "", demo)
+        return desktop_window(team is not None, team or "", demo, days, include_all)
     what = "A team's monitor" if team is not None else "The demo" if demo else "The dashboard"
     print(f"{what} is a desktop window, which needs Qt: {CORE_INSTALL}")
     if parser is not None:
@@ -548,10 +550,12 @@ def without_textual(parser: argparse.ArgumentParser | None = None, demo: bool = 
     return 0
 
 
-def desktop_window(monitor: bool, name: str, demo: bool = False) -> int:
-    """`tabmancer desktop`: the dashboard in a Qt window, from the desktop extra; with --monitor [team],
-    a team's monitor. Without Qt it says how to add it; the terminal dashboard and monitor (team
-    watch) are there either way."""
+def desktop_window(monitor: bool, name: str, demo: bool = False, days: float = 14,
+                   include_all: bool = False) -> int:
+    """`tabmancer desktop`: the dashboard in a Qt window, from the desktop extra, listing the sessions
+    of the last days (--days) and with include_all those tools started too (--all); with --monitor
+    [team], a team's monitor. Without Qt it says how to add it; the terminal dashboard and monitor
+    (team watch) are there either way."""
     from . import desktop
 
     if not desktop.available():
@@ -561,7 +565,7 @@ def desktop_window(monitor: bool, name: str, demo: bool = False) -> int:
     if not monitor and not name:
         from .desktop.main import run as run_dashboard
 
-        return run_dashboard(demo=demo)
+        return run_dashboard(demo=demo, days=days, include_all=include_all)
     if not monitor:  # a team named, not --monitor
         print(f"A team's monitor: {PROG} desktop --monitor {name}", file=sys.stderr)
         from .teamwatch import monitor_choice

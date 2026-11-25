@@ -145,18 +145,19 @@ def test_desktop_opens_the_dashboards_window(monkeypatch, capsys):
     monkeypatch.setattr(desktop, "available", lambda: True)
     opened = []
     window = types.ModuleType("tabmancer.desktop.main")
-    window.run = lambda demo=False: opened.append(demo) or 0
+    window.run = lambda demo=False, days=14, include_all=False: opened.append((demo, days, include_all)) or 0
     monkeypatch.setitem(sys.modules, "tabmancer.desktop.main", window)
-    for argv in (["desktop"], ["desktop", "--demo"]):
+    for argv in (["desktop"], ["desktop", "--demo"], ["desktop", "--days", "3", "--all"]):
         with pytest.raises(SystemExit) as out:
             cli.main(argv)
         assert out.value.code == 0
-    assert opened == [False, True]
+    shown = [(False, 14, False), (True, 14, False), (False, 3.0, True)]  # --days and --all as the terminal's
+    assert opened == shown
     with pytest.raises(SystemExit) as out:
         cli.main(["desktop", "shop"])  # a team, without --monitor
     assert out.value.code == 2
     assert "desktop --monitor shop" in capsys.readouterr().err
-    assert opened == [False, True]
+    assert opened == shown
 
 
 def test_desktop_monitor_of_no_team_says_so_before_any_window(monkeypatch, capsys):
