@@ -38,7 +38,6 @@ from tabmancer import (
     launch,
     shutdowns,
 )
-from tabmancer import viewmodel as VM
 from tabmancer.desktop import frame, front, look, main, opening
 from tabmancer.desktop.handover import HandoverDialog
 from tabmancer.sessions import Session
@@ -159,18 +158,6 @@ def test_h_asks_then_the_handover_is_written_on_a_thread_and_the_fresh_session_o
     assert shown.bit_line.text() == handoverwords.handed_note(session).words  # Bit's words wait their turn
     assert shown.front.waiting[-1][0] == f"{session.project}: handed over"
     shown.front.settle()
-
-
-def test_h_on_a_team_is_the_terminals_for_now(qapp, window):
-    shown = window()
-    read(qapp, shown)
-    team = next(iter(shown.snap.team_states))
-    assert shown.board.reveal(VM.TEAM_CARD + team)
-    QTest.keyClick(shown, Qt.Key.Key_H)
-    assert shown.bit_line.text() == f"h on a team hands the whole team over. {main.ELSEWHERE}"
-    assert not shown.findChildren(HandoverDialog)
-    assert shown.why_not("h") == main.ELSEWHERE  # its card's button greyed, and a session's not
-    assert shown.board.reveal(closed_one(shown).session_id) and shown.why_not("h") is None
 
 
 def test_a_handover_that_fails_is_said_and_its_claim_given_back(qapp, window, monkeypatch):

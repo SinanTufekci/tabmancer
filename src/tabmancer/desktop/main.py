@@ -94,7 +94,6 @@ ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
         "j", "M", "h"}
-NOT_ON_TEAMS = {"h"}  # done here on a session, on a team's card in the terminal for now (a whole team's handover)
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
@@ -599,7 +598,7 @@ class MainWindow(QMainWindow):
     def why_not(self, key: str) -> str | None:
         """None when this window does the key on what is picked; else why its button is greyed."""
         action = self.actions_by_key.get(key)
-        if action is None or not action.isEnabled() or (key in NOT_ON_TEAMS and self.picked_team() is not None):
+        if action is None or not action.isEnabled():
             return ELSEWHERE
         return None
 
@@ -979,8 +978,7 @@ class MainWindow(QMainWindow):
         snap = self.snap
         if snap is None:
             return
-        sessions = {name: snap.sessions.get(s.session_id, s) if s is not None else None
-                    for name, s in state.sessions.items()}
+        sessions = self.members_now(state)
         note = actions.closing_note(state.team, sessions)
         if note is None:
             self.say("No member is open.", 3)
@@ -992,6 +990,12 @@ class MainWindow(QMainWindow):
             return
         self.forget_closing()
         self.opener.close_team(actions.open_names(state.team, sessions))
+
+    def members_now(self, state: teams.TeamState) -> dict[str, Session | None]:
+        """A team's members, each with its session as the last reading has it (one never started: None)."""
+        snap = self.snap
+        sessions = snap.sessions if snap is not None else {}
+        return {name: sessions.get(s.session_id, s) if s is not None else None for name, s in state.sessions.items()}
 
     def forget_closing(self) -> None:
         self.closing_timer.stop()
@@ -1150,13 +1154,18 @@ class MainWindow(QMainWindow):
     def handover_key(self) -> None:
         """h: the picked session handed over to a fresh one that starts from a full handover, as the terminal
         dashboard's h does it (Engine.handover: the checks, the dialog, a busy one queued till it finishes,
-        the handover written on a thread). h again on one queued from here: not after all. A whole team's
-        handover is the terminal dashboard's for now."""
+        the handover written on a thread). h again on one queued from here: not after all. On a team: the
+        whole team, twice (Engine.team_handover: its lead writes the handover and the line-up on a thread,
+        the team handover dialog shows them, Ctrl+S there starts the new generation); a handover written
+        and not taken yet is shown again."""
         snap = self.snap
         if snap is None:
             return
-        if self.picked_team() is not None:
-            self.say(f"h on a team hands the whole team over. {ELSEWHERE}", 6)
+        team = self.picked_team()
+        if team is not None:
+            state = snap.team_states.get(team)
+            if state is not None:
+                self.engine.team_handover(state.team, self.members_now(state))
             return
         session = snap.sessions.get(self.picked_now())
         if session is None:

@@ -4,7 +4,10 @@ needs you, is done, fell back to another model, is crowded) and what the window'
 lit after a change, a tick gone from one that turned out open); this says it and draws it, the window's
 way. h goes through the same engine (Engine.handover): its dialog asks how (desktop/handover.py), the
 handover is written on a thread of its own and comes back by a Signal (Engine.handover_ready), and the
-fresh session opens as the engine opens one (Engine.open).
+fresh session opens as the engine opens one (Engine.open). h twice on a team the same way: its lead writes
+the handover on a thread (Engine.team_handover), its dialog shows it with the line-up (desktop/teamhandover.py),
+and the new generation opens as the terminal's opens (teamkeys.TeamKeys.open_team: claude --bg members on a
+thread, then the tabs).
 
 The window never acts: its Engine's state.acts stays False and nothing here claims the actor lock, so
 what happens by itself (a desktop note for the sessions that turned, continuing at a limit's reset,
@@ -23,18 +26,19 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
-from .. import actions, actor, alerts, claudeupdate, handover, launch, picks, rowwords, teams
+from .. import actions, actor, alerts, claudeupdate, handover, launch, picks, rowwords, teamkeys, teams
 from .. import viewmodel as VM
 from ..launch import Launch
 from ..sessions import Session
 from ..store import DashSnapshot
 from . import look, opening
 from .handover import HandoverDialog
+from .teamhandover import TeamHandoverDialog
 
 if TYPE_CHECKING:
     from .main import MainWindow
@@ -63,6 +67,9 @@ class WindowFront(QObject):
     failed = Signal(str)  # a handover that was not written or not closed: why
     asked = Signal(object)  # a handover's thread asks how its session is now (Asked)
     updated = Signal(object, object)  # claude update done: its claudeupdate.Outcome, the flags it no longer lists
+    team_handed = Signal(object, object, str, str, bool)  # a team's handover written: team, lead, handover, line-up, suggested
+    noted = Signal(object)  # a thread's actions.Note, said on the window's thread
+    started = Signal(object)  # a team's background members started: the tabs to open now (Launches)
 
     def __init__(self, window: MainWindow, update: bool = True) -> None:
         super().__init__(window)
@@ -74,6 +81,9 @@ class WindowFront(QObject):
         self.failed.connect(self.handover_failed)
         self.asked.connect(self.answer)
         self.updated.connect(self.claude_updated)
+        self.team_handed.connect(self.team_handover_ready)
+        self.noted.connect(self.say_note)
+        self.started.connect(self.open_sessions)
 
     def window(self) -> MainWindow:
         return self.parent()  # type: ignore[return-value]
@@ -215,6 +225,62 @@ class WindowFront(QObject):
 
     def handover_failed(self, words: str) -> None:
         self.window().say_note(words, FAILED_SECONDS, "error")
+
+    # --- h twice on a team ----------------------------------------------------------------------------
+
+    def hand_over_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
+        """The whole team handed over on a thread of its own (actions.write_team_handover: its members'
+        tabs closed, its lead resumed once to write the handover and the line-up, minutes); back by a
+        Signal, Engine.team_handover_ready shows them (ask_team_start)."""
+        self.start(self.write_team, team, members)
+
+    def write_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
+        try:
+            handed = actions.write_team_handover(team, members, self.now, actions.close_tabs)
+        except actions.ActionError as error:
+            self.emit("failed", error.words)
+            return
+        if handed is not None:  # None: no lead session (Engine.team_handover said so before)
+            self.emit("team_handed", team, handed.lead, handed.written, handed.lineup, handed.suggested)
+
+    def team_handover_ready(self, team: teams.Team, lead: Session, written: str, lineup: str, suggested: bool) -> None:
+        self.window().engine.team_handover_ready(team, lead, written, lineup, suggested)
+
+    def ask_team_start(self, team: teams.Team, written: str, lineup: str, suggested: bool,
+                       then: Callable[[tuple[str, str] | None], None]) -> None:
+        """The team handover dialog, over the window; then with (the line-up, the cap), or None."""
+        window = self.window()
+        TeamHandoverDialog(window, team, written, lineup, suggested, then, window.accent).open()
+
+    def adopt_team(self, team: teams.Team) -> None:
+        """The team as saved now: read again (the store reads the teams with the sessions)."""
+        self.window().poll()
+
+    def open_team(self, team: teams.Team, launches: list[Launch]) -> None:
+        """A team's sessions, as the terminal's open them (teamkeys.TeamKeys.open_team, one copy): its
+        members in the background first where it runs them there, then the tabs; one opened a moment
+        ago not again. What the team keys ask of a dashboard besides, the window answers below."""
+        teamkeys.TeamKeys(cast("teamkeys.Dashboard", self)).open_team(team, launches)
+
+    def say(self, note: actions.Note) -> None:
+        self.say_note(note)
+
+    def open_sessions(self, launches: list[Launch]) -> None:
+        self.window().engine.open(launches)
+
+    def after_update(self, what: str, then: Callable[[], None]) -> bool:
+        return self.window().engine.after_update(what, then)
+
+    def start_in_background(self, team: teams.Team, launches: list[Launch], then: list[Launch]) -> None:
+        """claude --bg for each on a thread of its own (a few seconds each), then the tabs: the lead
+        finds its members up."""
+        self.start(self.run_in_background, team, launches, then)
+
+    def run_in_background(self, team: teams.Team, launches: list[Launch], then: list[Launch]) -> None:
+        for note in actions.start_in_background(team, launches, launch.run_in_background):
+            self.emit("noted", note)
+        if then:
+            self.emit("started", then)
 
     # --- opening (the fresh session's tab) ---------------------------------------------------------
 
