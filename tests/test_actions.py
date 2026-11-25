@@ -6,10 +6,12 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import replace
+from datetime import datetime, timedelta
 
 import pytest
 
-from tabmancer import actions, clis, handover, summarize, teams
+from tabmancer import actions, actor, clis, handover, summarize, teams, typein, usage, viewmodel, wrapped
+from tabmancer.launch import Mode, continue_prompt
 from tabmancer.sessions import Exit, Session, Status
 
 
@@ -341,3 +343,183 @@ def test_a_team_closed():
     assert actions.closed_note(["shop-api"], lambda names: ("Could not close shop-api.", "warning")) == actions.Note(
         "Could not close shop-api.", "warning", 8)
     assert actions.closed_note(["shop-api"], lambda names: ("Closed 1.", "information")).seconds == 4
+
+
+# --- slice 6: usage limits (c) and the queued handover (h) -------------------------------------------
+
+def stopped(sid="s", resets=None, **kw) -> Session:
+    """Closed at a usage limit."""
+    return Session(session_id=sid, path=None, cwd=f"C:/work/{sid}", exit=Exit.CLEAN, status=Status.LIMIT,
+                   resets=resets or datetime(2026, 11, 23, 16, 0), **kw)
+
+
+def test_what_c_continues_and_when():
+    early, late = datetime.now() - timedelta(minutes=5), datetime.now() + timedelta(hours=2)
+    closed, waiting = stopped("x", early), one("y", resets=late)
+    behind = one("z", resets=early, status=Status.BACKGROUND)  # at the limit, but in the background
+    assert viewmodel.at_limit(waiting) and viewmodel.at_limit(behind)  # open and idle since: it waits for the limit
+    assert actions.stopped_at_limit({"x": closed, "y": waiting, "z": behind, "a": one()}) == [closed, waiting]
+    assert actions.continue_when([closed, waiting]) == "now"
+    assert actions.continue_when([waiting]) == f"at {late:%H:%M}"
+
+    limits = [usage.Limit("session", 40, None, ""), usage.Limit("week", 70, None, ""), usage.Limit("week Fable", 9,
+                                                                                                    None, "")]
+    assert actions.plan_words(limits, ["b@x has room"]) == ("Your plan now: session 40% · week 70%\nb@x has room",
+                                                            True)
+    assert actions.plan_words([usage.Limit("session", 100, None, "")], []) == ("Your plan now: session 100%", False)
+    assert actions.plan_words([], []) == ("", False)
+
+
+def test_the_c_dialogs_answers():
+    a, b = stopped("a"), stopped("b", datetime(2026, 11, 23, 18, 0))
+    armed = {"a": datetime(2026, 11, 23, 16, 0), "other": datetime(2026, 11, 24, 9, 0)}
+
+    now = actions.continue_choice("now", ["a"], [a, b], armed, "now")
+    assert (now.armed, now.go_on, now.hand_over, now.note, now.rows) == ({"other": armed["other"]}, [a], [], None,
+                                                                          False)
+    handed = actions.continue_choice("handover", ["a", "b"], [a, b], armed, "now")
+    assert (handed.go_on, handed.hand_over, handed.armed) == ([], [a, b], {"other": armed["other"]})
+
+    lift = actions.continue_choice("lift", ["a", "b"], [a, b], armed, "at 16:00")
+    assert lift.armed == {"a": a.resets, "b": b.resets} and lift.rows  # the lot, as chosen: the rest no longer
+    assert lift.note == actions.Note("2 sessions continue at 16:00, when the limit lifts. Leave the dashboard open.",
+                                     seconds=8)
+    assert actions.continue_choice("lift", ["b"], [a, b], {}, "now").note.words.startswith("1 session continues now,")
+
+    off = actions.continue_choice("off", [], [a, b], armed, "now")
+    assert off.armed == {} and off.rows and off.note.words == "Sessions at a limit will not continue by themselves."
+    assert actions.continue_choice("later", ["a"], [a, b], armed, "now") is None
+
+
+def test_which_armed_sessions_are_due():
+    reset = datetime(2026, 11, 23, 16, 0)
+    waiting, gone_on, again = stopped("w", reset), one("g", state="busy", resets=reset), stopped("n", reset)
+    sessions = {"w": waiting, "g": gone_on, "n": again}
+    armed = {"w": reset, "g": reset, "n": reset + timedelta(hours=3), "lost": reset}
+
+    assert actions.due(armed, sessions, reset).gone == []  # not before the margin is past
+    due = actions.due(armed, sessions, reset + actions.LIMIT_MARGIN)
+    assert due.gone == ["w", "g", "lost"] and due.lifted == [waiting]  # one gone on by hand is left alone
+    again.signed_in_again = True  # /login with another account: now, not at its reset
+    assert actions.due(armed, sessions, reset + actions.LIMIT_MARGIN).lifted == [waiting, again]
+
+
+def test_saving_the_sessions_to_continue_keeps_the_rest_of_config(monkeypatch):
+    from tabmancer import config, store
+
+    config.write_json("config.json", {"theme": "dusk"})
+    assert actions.save_armed({"a": datetime(2026, 11, 23, 16, 0)})
+    assert config.read_json("config.json") == {"theme": "dusk", "continue_at_reset": {"a": "2026-11-23T16:00:00"}}
+    assert store.read_armed() == {"a": datetime(2026, 11, 23, 16, 0)}
+    (config.config_dir() / "config.json").write_text("{not json", encoding="utf-8")
+    assert not actions.save_armed({})  # left as it is
+    assert (config.config_dir() / "config.json").read_text(encoding="utf-8") == "{not json"
+
+
+def test_how_stopped_sessions_go_on(monkeypatch):
+    closed, ready, busy = stopped("c"), one("r", resets=datetime.now()), one("b", state="busy", resets=datetime.now())
+    launches, still_open = actions.continue_launches([closed, ready, busy], lambda s: actions.launch_for(s, Mode.RESUME))
+    assert [launch.session_id for launch in launches] == ["c"] and still_open == [ready, busy]
+    assert launches[0].mode is Mode.AUTO and launches[0].prompt == continue_prompt(Status.LIMIT)
+
+    typed, noted = [], []
+    monkeypatch.setattr(typein, "type_into", lambda sid, text: typed.append((sid, text)) or True)
+    monkeypatch.setattr(wrapped, "note_opened", noted.extend)
+    done = actions.type_continue(still_open, len(launches))
+    assert typed == [("r", continue_prompt(Status.LIMIT))]  # a working one is not typed into
+    assert noted == [("r", "limit")] and done.back == 2
+    assert done.missed == actions.Note("Could not write in the tab of shop: type “continue” there yourself.",
+                                       "warning", 15)
+    assert actions.back_words(done.back) == "2 back at work"
+
+
+def test_what_a_limit_check_finds_and_bit_says(monkeypatch):
+    soon = datetime.now() + timedelta(hours=1)
+    mine, theirs, free = stopped("mine", soon), stopped("theirs", soon), one("free")
+    sessions = {"mine": mine, "theirs": theirs, "free": free}
+    kept, at = actions.limited_now(sessions, {"theirs": "acct-b"}, "acct-a", "acct-a", lambda a, b: a == b)
+    assert kept == {"mine": "acct-a", "theirs": "acct-b"} and at == {"mine", "theirs"}
+    assert theirs.signed_in_again and not mine.signed_in_again  # stopped on another account than this one
+
+    told = {"theirs"}
+    assert actions.newly_stopped(sessions, at, told, {}) == [mine]
+    assert actions.newly_stopped(sessions, at, told, {"mine": soon}) == []  # to continue by itself: not told
+
+    said = actions.limit_say([mine], lambda when: "")
+    assert said == actions.Say(f"mine: limit until {soon:%H:%M}. c continues then", "", 10)
+    assert actions.limit_say([mine], lambda when: "b@x has room").seconds == 12
+    assert actions.limit_say([theirs], lambda when: "") == actions.Say("theirs: signed in again. c continues now",
+                                                                       "lifted")
+    lifted = stopped("old", datetime.now() - timedelta(minutes=1))
+    assert actions.limit_say([lifted], lambda when: "").words == "old: the limit has lifted. c continues now"
+
+
+@pytest.fixture
+def processes(monkeypatch):
+    """Fake processes: pid -> (start time, command line); this one is pid 10."""
+    table = {10: ("100", "tabmancer"), 20: ("200", "tabmancer monitor")}
+    monkeypatch.setattr(actor, "process", lambda pid: table.get(pid))
+    monkeypatch.setattr(actor, "_mine", {"pid": 10, "started": "100", "command": "tabmancer"})
+    return table
+
+
+def test_a_queued_handover_is_seen_only_while_its_window_runs(processes):
+    from tabmancer import config
+
+    assert actions.save_queued({})  # nothing anywhere: no file written
+    assert not (config.config_dir() / actions.QUEUE).exists() and actions.read_queued() == {}
+    assert actions.save_queued({"a": "self"})
+    assert actions.read_queued() == {"a": "self"}
+
+    other = {"pid": 20, "started": "200", "command": "tabmancer monitor"}
+    saved = config.read_json(actions.QUEUE)
+    config.write_json(actions.QUEUE, {**saved, "b": {"how": "transcript", "by": other}})
+    assert actions.read_queued() == {"a": "self", "b": "transcript"}
+    assert actions.save_queued({"c": "self"})  # this window's own replaced, the other window's kept
+    assert actions.read_queued() == {"b": "transcript", "c": "self"}
+
+    processes[20] = ("999", "tabmancer monitor")  # the same pid, started again since: another process
+    assert actions.read_queued() == {"c": "self"}
+    processes[20] = ("200", "notepad")  # the same pid and start time, another command line
+    assert actions.read_queued() == {"c": "self"}
+    del processes[20]
+    assert actions.save_queued({"c": "self"}) and set(config.read_json(actions.QUEUE)) == {"c"}  # its entry gone
+
+    processes[10] = ("101", "tabmancer")  # this window's pid, now someone else's: nothing of it stands
+    assert actions.read_queued() == {}
+
+
+def test_a_queue_file_that_is_not_a_queue(processes):
+    from tabmancer import config
+
+    for junk in ([1, 2], {"a": "self"}, {"a": {"how": "self"}}, {"a": {"how": 3, "by": actor.me()}}):
+        config.write_json(actions.QUEUE, junk)
+        assert actions.read_queued() == {}
+    (config.config_dir() / actions.QUEUE).write_text("{half", encoding="utf-8")
+    assert actions.read_queued() == {} and actions.save_queued({"a": "self"})
+    assert actions.read_queued() == {"a": "self"}
+
+
+def test_what_h_says_on_a_working_session_and_when_it_finishes():
+    working = one(state="busy")
+    assert actions.busy(working) and not actions.finished(working)
+    assert actions.finished(one()) and actions.finished(replace(working, exit=Exit.CLEAN))
+    assert not actions.busy(one())
+    note = actions.queued_note(working, "self")
+    assert (note.words, note.seconds, note.title) == (
+        "shop is working: it is handed over as soon as it finishes (it writes its handover). h again cancels.", 10,
+        "Handing over shop")
+    assert f"(Claude ({handover.MODEL}) writes the handover)" in actions.queued_note(working, "transcript").words
+    assert actions.unqueued_note(working) == actions.Note("shop will not be handed over when it finishes.", seconds=5)
+
+    claims = []
+    first = actions.queued_finished("a", one(), False, lambda what: claims.append(what) or True)
+    assert first.hand_over and claims == ["handover-a"]
+    assert (first.note.words, first.note.seconds, first.note.title) == (
+        "shop finished: handing it over now.", 10, "Handing over shop")
+    second = actions.queued_finished("a", one(), False, lambda what: False)
+    assert not second.hand_over and second.note.words == "shop finished: another tabmancer window hands it over."
+    closed = actions.queued_finished("a", replace(working, exit=Exit.CLEAN), True, lambda what: True)
+    assert not closed.hand_over and closed.note.severity == "warning" and closed.note.words == (
+        "shop closed before it finished: not handed over from here.")
+    assert actions.queued_finished("a", replace(working, exit=Exit.CLEAN), False, lambda what: True).hand_over

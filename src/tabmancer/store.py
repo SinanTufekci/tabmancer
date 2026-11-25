@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from datetime import time as clock_time
 
-from . import accounts, actor, agy, clis, gitstate, marks, teams, tokens, usage
+from . import accounts, actions, actor, agy, clis, gitstate, marks, teams, tokens, usage
 from . import viewmodel as VM
 from .config import read_json
 from .sessions import (
@@ -523,6 +523,6 @@ class DashboardStore(Polled):
         hidden = {sid for sid, s in self.sessions.items() if self.marks.is_hidden(s)}
         pinned = set(self.marks.pinned)
         view = VM.build(self.sessions, hidden=hidden, pinned=pinned, git=self.git, team_states=self.team_states,
-                        tokens=self.tokens, limits=self.limits, armed=self.armed, queued={})
+                        tokens=self.tokens, limits=self.limits, armed=self.armed, queued=actions.read_queued())
         return DashSnapshot(view.at, view, dict(self.sessions), dict(self.team_states), hidden, pinned, self.report,
                             list(self.accounts), set(self.shared_emails), dict(self.agy_bar), self.acting)

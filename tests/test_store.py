@@ -376,8 +376,11 @@ async def test_the_dashboard_store_and_the_terminal_dashboard_show_the_same(fake
         end = clock.monotonic() + 20
         while clock.monotonic() < end and not (app.token_report is not None and app.full_polls):
             await pilot.pause(0.05)
+        app.queued["one"] = "self"  # h on a busy one: the store reads it from the queue file
+        app.save_queued()
         tui = comparable(app.view())
     assert {"lead-1", "api-1", "ui-1", "one", "two"} <= {s["id"] for s in tui["sessions"]}
+    assert next(s for s in tui["sessions"] if s["id"] == "one")["queued"] == "self"
     assert tui["teams"] and tui["cards"]["open"]  # the live poll landed: not two empty views alike
     snap = DashboardStore().poll()
     assert comparable(snap.view) == tui

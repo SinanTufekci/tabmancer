@@ -14,7 +14,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -69,8 +69,8 @@ from . import (
     wrapped,
 )
 from . import viewmodel as VM
-from .actions import clip as _clip
 from .actions import (
+    LIMIT_MARGIN,  # noqa: F401  (app.LIMIT_MARGIN, as before)
     close_tabs,
     closing_note,
     cold_note,
@@ -79,12 +79,13 @@ from .actions import (
     still_opening,
     team_handover_problem,
 )
+from .actions import clip as _clip
 from .clisettings import CliSettings
 from .config import merge_json, read_json
 from .dialogs import frame, title
 from .handoverview import HandoverDialog, fill
 from .keysview import KEYS, KeysScreen
-from .launch import Launch, Mode, continue_prompt, default_mode, open_tabs, run_in_background, terminal_kind
+from .launch import Launch, Mode, default_mode, open_tabs, run_in_background, terminal_kind
 from .mascot import Mascot, way_of
 from .safework import work
 from .sessions import (
@@ -228,7 +229,6 @@ KEY_GROUPS = {action: group for group, rows in KEYS for _, action, _ in rows if 
 CARDS = {"open": ("1", "card-open", "OPEN NOW"), "waiting": ("2", "card-waiting", "NEED YOU"),
          "continue": ("3", "card-continue", "TO CONTINUE")}
 EXPAND_LINES = 4
-LIMIT_MARGIN = timedelta(minutes=1)  # continue this long after a limit lifts, to be sure it has
 
 
 at_limit, lifts, limit_help, ago = VM.at_limit, VM.lifts, VM.limit_help, VM.ago
@@ -2207,7 +2207,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             return
         if session.session_id in self.queued:  # h again: not after all
             del self.queued[session.session_id]
-            self.notify(f"{session.project} will not be handed over when it finishes.", timeout=5)
+            self.save_queued()
+            note = actions.unqueued_note(session)
+            self.notify(note.words, timeout=note.seconds)
             self.update_row(session)
             return
         if how is not None:
@@ -2217,12 +2219,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def start_handover(self, session: Session, how: str) -> None:
         """Hand it over now, or once it finishes if it is working."""
-        writer = "it writes its handover" if how == "self" else f"Claude ({handover.MODEL}) writes the handover"
+        writer = actions.writer_words(how)
         now = self.sessions.get(session.session_id, session)
-        if now.exit is Exit.RUNNING and now.live_state not in handover.IDLE:
+        if actions.busy(now):
             self.queued[session.session_id] = how
-            self.notify(f"{session.project} is working: it is handed over as soon as it finishes ({writer}). "
-                        "h again cancels.", title=f"Handing over {session.project}", timeout=10)
+            self.save_queued()
+            note = actions.queued_note(session, how)
+            self.notify(note.words, title=note.title, timeout=note.seconds)
             self.update_row(now)
             return
         # As the list has it now, not as it was when h was pressed: it may have opened or closed
@@ -2595,7 +2598,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 return "not at a limit"
             if not self.acts:
                 return "continued at its reset only by the dashboard that acts (actor.py): ask there"
-            self.armed[session_id] = session.resets or datetime.now()
+            self.armed.update(actions.arm([session]))
             self.save_armed()
             self.update_row(session)
             self.update_detail()
@@ -3468,19 +3471,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def action_continue_at_reset(self) -> None:
         """c: the sessions stopped at a usage limit continue now (after you have signed in with another
         account), or by themselves when the limit lifts, or no longer by themselves."""
-        stopped = [s for s in self.sessions.values() if at_limit(s) and s.status is not Status.BACKGROUND]
+        stopped = actions.stopped_at_limit(self.sessions)
         if not stopped:
-            self.notify("No session is stopped at a usage limit.", timeout=4)
+            self.notify(actions.NONE_STOPPED.words, timeout=actions.NONE_STOPPED.seconds)
             return
-        soon = min(VM.free_at(s) or datetime.now() for s in stopped)
-        when = "now" if soon <= datetime.now() else f"at {lifts(soon)}"
-        # The plan as last read (/usage, every few minutes): room on it means the limit no longer stands
-        # in the way (another account, or it lifted), and continuing now comes first.
-        session_limit = next((limit for limit in self.limits if limit.label == "session"), None)
-        plan = ("Your plan now: " + " · ".join(f"{limit.label} {limit.percent}%" for limit in self.limits
-                                                 if limit.label in ("session", "week"))) if self.limits else ""
-        plan = "\n".join([*([plan] if plan else []), *self.other_accounts_words()])
-        room = session_limit is not None and session_limit.percent < 95
+        when = actions.continue_when(stopped)
+        plan, room = actions.plan_words(self.limits, self.other_accounts_words())
 
         def chosen(picked: tuple[str, list[str]] | None) -> None:
             if picked is None:
@@ -3489,26 +3485,19 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if answer in ("lift", "off") and not self.acts:
                 self.notify(ACTS_ELSEWHERE, severity="warning", timeout=10)
                 return
-            these = [s for s in stopped if s.session_id in ids]
-            if answer in ("now", "handover"):
-                self.armed = {sid: moment for sid, moment in self.armed.items() if sid not in ids}
-                self.save_armed()
-                if answer == "now":
-                    self.continue_these(these)
-                else:  # from the transcript: the old context is not sent again on the new account
-                    for session in these:
-                        self.open_handover(session, how="transcript")
+            choice = actions.continue_choice(answer, ids, stopped, self.armed, when)
+            if choice is None:
                 return
-            if answer == "lift":
-                self.armed = {s.session_id: s.resets or datetime.now() for s in these}
-                self.notify(f"{len(these)} {'session continues' if len(these) == 1 else 'sessions continue'} "
-                            f"{when}, when the limit lifts. Leave the dashboard open.", timeout=8)
-            elif answer == "off":
-                self.armed.clear()
-                self.notify("Sessions at a limit will not continue by themselves.", timeout=5)
-            else:
-                return
+            self.armed = choice.armed
+            if choice.note is not None:
+                self.notify(choice.note.words, timeout=choice.note.seconds)
             self.save_armed()
+            if choice.go_on:
+                self.continue_these(choice.go_on)
+            for session in choice.hand_over:
+                self.open_handover(session, how="transcript")
+            if not choice.rows:
+                return
             for session in stopped:
                 self.update_row(session)
             self.update_detail()
@@ -3520,15 +3509,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def continue_these(self, stopped: list[Session], unasked: bool = False) -> None:
         """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt
         typed into its own tab. unasked: by itself, the limit lifted (open_unasked)."""
-        closed = [replace(self.launch_for(s), mode=Mode.AUTO, prompt=continue_prompt(Status.LIMIT))
-                  for s in stopped if s.exit is not Exit.RUNNING]
+        closed, still_open = actions.continue_launches(stopped, self.launch_for)
         if closed:
             (self.open_unasked if unasked else self.open_sessions)(closed)
-        still_open = [s for s in stopped if s.exit is Exit.RUNNING]
         if still_open:
             self.continue_open(still_open, len(closed))
         else:
-            self.mascot.react("back", f"{len(closed)} back at work", self.accent())
+            self.mascot.react("back", actions.back_words(len(closed)), self.accent())
 
     def load_armed(self) -> None:
         """The sessions to continue at their reset, as saved: the dashboard that acts saves them as it
@@ -3540,68 +3527,45 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         and a dashboard that watches continue nothing, and their copy is the saved one, read again."""
         if not self.acts:
             return
-        saved = merge_json("config.json",
-                           continue_at_reset={sid: moment.isoformat() for sid, moment in self.armed.items()})
+        saved = actions.save_armed(self.armed)
         if not saved and not self.armed_unsaved:  # said once, not at each continue_due
-            self.notify("The sessions to continue at their reset could not be saved: config.json could not be "
-                        "read, so it was left as it is. They still continue while this dashboard is open.",
-                        severity="warning", timeout=15)
+            note = actions.ARMED_UNSAVED
+            self.notify(note.words, severity=note.severity, timeout=note.seconds)
         self.armed_unsaved = not saved
 
     def continue_due(self) -> None:
         """Continue the sessions whose limit has lifted: a closed one in a new tab, an open one with
         the prompt typed into its own tab, which is never closed. One gone on by hand meanwhile is
         left alone."""
-        now = datetime.now()
-        # Signed in again in it (/login, another account): it goes on now, not when the limit lifts.
-        due = [sid for sid, moment in self.armed.items()
-               if moment + LIMIT_MARGIN <= now or getattr(self.sessions.get(sid), "signed_in_again", False)]
-        if not due:
+        due = actions.due(self.armed, self.sessions, datetime.now())
+        if not due.gone:
             return
-        lifted = []
-        for sid in due:
+        for sid in due.gone:
             del self.armed[sid]
-            session = self.sessions.get(sid)
-            if session is not None and at_limit(session):
-                lifted.append(session)
         self.save_armed()
-        if lifted:
-            self.continue_these(lifted, unasked=True)
+        if due.lifted:
+            self.continue_these(due.lifted, unasked=True)
 
     @work(thread=True, group="limits")
     def continue_open(self, still_open: list[Session], opened: int) -> None:
         """The continue prompt goes into each one's tab, as if you typed it. Its tab is never closed:
         one that will not take the prompt is left as it is, and Bit says which."""
-        prompt = continue_prompt(Status.LIMIT)
-        missed = [s for s in still_open
-                  if not (s.live_state in handover.IDLE and typein.type_into(s.session_id, prompt))]
-        back = opened + len(still_open) - len(missed)
-        wrapped.note_opened([(s.session_id, "limit") for s in still_open if s not in missed])  # for the card
-        if back:
-            self.call_from_thread(self.mascot.react, "back", f"{back} back at work", self.accent())
-        if missed:
-            names = ", ".join(dict.fromkeys(s.project for s in missed))
-            self.call_from_thread(self.notify, f"Could not write in the tab of {names}: type “continue” there "
-                                  "yourself.", severity="warning", timeout=15)
+        done = actions.type_continue(still_open, opened)
+        if done.back:
+            self.call_from_thread(self.mascot.react, "back", actions.back_words(done.back), self.accent())
+        if done.missed is not None:
+            self.call_from_thread(self.notify, done.missed.words, severity=done.missed.severity,
+                                  timeout=done.missed.seconds)
 
     def check_limits(self) -> None:
         """Forget the sessions gone on from a limit; once per session, Bit says which ones a
         usage limit stopped and that c continues them."""
         # On which account each stopped: signed in with another since, it can go on (signed_in_again).
         # Each one's account by its key (an email when kept before keys were, read as the same account).
-        limited, current = accounts.limited_on(), self.account
-        kept = {}
-        for session in self.sessions.values():
-            if not at_limit(session):
-                continue
-            stopped_on = limited.get(session.session_id) or self.signed_as
-            if stopped_on:
-                kept[session.session_id] = stopped_on
-            if stopped_on and current is not None and not accounts.same(stopped_on, current):
-                session.signed_in_again = True
+        kept, at = actions.limited_now(self.sessions, accounts.limited_on(), self.signed_as, self.account,
+                                       accounts.same)
         if self.sessions and self.acts:
             accounts.keep_limited(kept)
-        at = {s.session_id for s in self.sessions.values() if at_limit(s)}
         self.told_limit &= at
         if self.sessions and self.acts and not self.armed.keys() <= at:
             self.armed = {sid: moment for sid, moment in self.armed.items() if sid in at}
@@ -3609,21 +3573,19 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if at != self.limited and self.screen_stack:  # not while the app shuts down: no screen then
             self.limited = at
             self.refresh_bindings()  # c is in the footer only while there is something to continue
-        stopped = [self.sessions[sid] for sid in at - self.told_limit - self.armed.keys()
-                   if self.sessions[sid].status is not Status.BACKGROUND]
+        stopped = actions.newly_stopped(self.sessions, at, self.told_limit, self.armed)
         if not stopped:
             return
         self.told_limit.update(s.session_id for s in stopped)
-        names = ", ".join(sorted({s.project for s in stopped})[:3])
-        soon = min((VM.free_at(s) for s in stopped if VM.free_at(s)), default=None)
-        if soon and soon > datetime.now():
-            _, others = self.other_accounts_note(soon)
-            self.mascot.say(f"{names}: limit until {lifts(soon)}. {others or 'c continues then'}", AMBER,
-                            seconds=12 if others else 10)
-        elif any(s.signed_in_again for s in stopped):
-            self.mascot.react("lifted", f"{names}: signed in again. c continues now", AMBER, seconds=10)
+        said = actions.limit_say(stopped, lambda soon: self.other_accounts_note(soon)[1])
+        if said.mood:
+            self.mascot.react(said.mood, said.words, AMBER, seconds=said.seconds)
         else:
-            self.mascot.react("lifted", f"{names}: the limit has lifted. c continues now", AMBER, seconds=10)
+            self.mascot.say(said.words, AMBER, seconds=said.seconds)
+
+    def save_queued(self) -> None:
+        """This window's queued handovers, saved for the other windows to show (actions.read_queued)."""
+        actions.save_queued(self.queued)
 
     # --- hiding and pinning -----------------------------------------------------------
 
@@ -3753,19 +3715,14 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         store.rest(updates.values(), self.resting_members())  # a member done for now waits for its lead, not for you
         turned: list[Session] = []  # were working and now wait for you, or stopped at a limit
         for sid, fresh in updates.items():
-            if sid in self.queued and (fresh.exit is not Exit.RUNNING or fresh.live_state in handover.IDLE):
+            if sid in self.queued and actions.finished(fresh):
                 how = self.queued.pop(sid)  # it finished: the handover asked for with h
-                if self.watch is not None and fresh.exit is not Exit.RUNNING:
-                    # A monitor hands over only what is still open as it finishes: closed in its tab
-                    # meanwhile (from the dashboard, say), it was taken care of there.
-                    self.notify(f"{fresh.project} closed before it finished: not handed over from here.",
-                                severity="warning", timeout=10)
+                self.save_queued()
+                done = actions.queued_finished(sid, fresh, self.watch is not None, actor.first_to)
+                self.notify(done.note.words, severity=done.note.severity, timeout=done.note.seconds,
+                            title=done.note.title)
+                if not done.hand_over:
                     continue
-                if not actor.first_to(f"handover-{sid}"):  # queued in another dashboard or monitor too
-                    self.notify(f"{fresh.project} finished: another tabmancer window hands it over.", timeout=8)
-                    continue
-                self.notify(f"{fresh.project} finished: handing it over now.", title=f"Handing over {fresh.project}",
-                            timeout=10)
                 self.unasked.add(sid)  # its fresh session opens by itself: in the dashboard's window
                 self.hand_over(fresh, how)
                 continue

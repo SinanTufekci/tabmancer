@@ -8,15 +8,32 @@ knows (the open sessions, how a session stands now) comes in as an argument.
 
 Slice 1: the handover of one session (h). Slice 2: a whole team's (h twice on a team). Slice 3:
 opening sessions (Enter, o) and going to an open one's tab. Slice 4: a team's keys (start, add,
-remove, goal, close) on its row and in its view.
+remove, goal, close) on its row and in its view. Slice 6: continuing sessions stopped at a usage limit
+(c, and by themselves when it lifts) and the handover queued on a working session (h), kept in a file
+so every window shows it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 
-from . import clis, context, focus, handover, picks, summarize, teambus, teams, viewmodel, wrapped
+from . import (
+    actor,
+    clis,
+    context,
+    focus,
+    handover,
+    picks,
+    summarize,
+    teambus,
+    teams,
+    typein,
+    viewmodel,
+    wrapped,
+)
+from .config import merge_json, read_json, write_json
 from .launch import Launch, Mode, continue_prompt, run_in_background
 from .sessions import Exit, Session, Status
 from .tokens import human
@@ -524,3 +541,271 @@ def tell_lead(team: teams.Team, sessions: dict[str, Session | None], note: str, 
         return Told(f"{done} Sent the update to {team.lead.name} over the team bus.", seconds=8, title="Told the lead")
     return Told(f"{done} A note for the lead is on the clipboard: paste it into its tab (Ctrl+V, Enter).",
                 seconds=12, title="Tell the lead", clipboard=note, go_to=lead)
+
+
+# --- usage limits (c) ---------------------------------------------------------------------------------
+
+LIMIT_MARGIN = timedelta(minutes=1)  # continue this long after a limit lifts, to be sure it has
+ARMED_UNSAVED = Note("The sessions to continue at their reset could not be saved: config.json could not be read, "
+                     "so it was left as it is. They still continue while this dashboard is open.", "warning", 15)
+NONE_STOPPED = Note("No session is stopped at a usage limit.", seconds=4)
+ARMED_OFF = Note("Sessions at a limit will not continue by themselves.", seconds=5)
+
+
+def stopped_at_limit(sessions: dict[str, Session]) -> list[Session]:
+    """The sessions c can continue: stopped at a usage limit, and not working in the background."""
+    return [s for s in sessions.values() if viewmodel.at_limit(s) and s.status is not Status.BACKGROUND]
+
+
+def continue_when(stopped: list[Session]) -> str:
+    """When the first of them can go on: 'now', or 'at 16:00'."""
+    soon = min(viewmodel.free_at(s) or datetime.now() for s in stopped)
+    return "now" if soon <= datetime.now() else f"at {viewmodel.lifts(soon)}"
+
+
+def plan_words(limits: list, others: list[str]) -> tuple[str, bool]:
+    """The plan as last read (/usage, every few minutes) and the other accounts, for the c dialog, and
+    whether there is room on it: room means the limit no longer stands in the way (another account, or
+    it lifted), and continuing now comes first."""
+    session_limit = next((limit for limit in limits if limit.label == "session"), None)
+    plan = ("Your plan now: " + " · ".join(f"{limit.label} {limit.percent}%" for limit in limits
+                                             if limit.label in ("session", "week"))) if limits else ""
+    plan = "\n".join([*([plan] if plan else []), *others])
+    return plan, session_limit is not None and session_limit.percent < 95
+
+
+def arm(these: list[Session]) -> dict[str, datetime]:
+    """Each continues by itself when its limit lifts: at its reset, or now when it has none."""
+    return {s.session_id: s.resets or datetime.now() for s in these}
+
+
+@dataclass
+class Choice:
+    """What the c dialog's answer comes to: the sessions to continue at their reset from now on, the
+    ones to continue now and the ones to hand over now, the note to show, and whether their rows change."""
+
+    armed: dict[str, datetime]
+    go_on: list[Session]
+    hand_over: list[Session]
+    note: Note | None = None
+    rows: bool = False
+
+
+def continue_choice(answer: str, ids: list[str], stopped: list[Session], armed: dict[str, datetime],
+                    when: str) -> Choice | None:
+    """The c dialog's answer: now, handover (from the transcript: the old context is not sent again on
+    the new account), lift (by themselves when the limit lifts) or off. None for anything else. Lift and
+    off are for the dashboard that acts alone (the front end checks)."""
+    these = [s for s in stopped if s.session_id in ids]
+    if answer in ("now", "handover"):
+        left = {sid: moment for sid, moment in armed.items() if sid not in ids}
+        return Choice(left, these if answer == "now" else [], these if answer == "handover" else [])
+    if answer == "lift":
+        words = (f"{len(these)} {'session continues' if len(these) == 1 else 'sessions continue'} {when}, when the "
+                 "limit lifts. Leave the dashboard open.")
+        return Choice(arm(these), [], [], Note(words, seconds=8), rows=True)
+    if answer == "off":
+        return Choice({}, [], [], ARMED_OFF, rows=True)
+    return None
+
+
+def save_armed(armed: dict[str, datetime]) -> bool:
+    """The sessions to continue at their reset, saved in config.json (store.read_armed reads them), so a
+    dashboard that watches shows them. False when config.json could not be read: it is left as it is."""
+    return merge_json("config.json", continue_at_reset={sid: moment.isoformat() for sid, moment in armed.items()})
+
+
+@dataclass
+class Due:
+    """Of the sessions to continue at their reset: those whose time has come (no longer to continue
+    later), and of them the ones still stopped at the limit (one gone on by hand meanwhile is not)."""
+
+    gone: list[str]
+    lifted: list[Session]
+
+
+def due(armed: dict[str, datetime], sessions: dict[str, Session], now: datetime) -> Due:
+    """Due once the limit lifted (LIMIT_MARGIN after its reset), or at once when signed in again in it
+    (/login, another account)."""
+    gone = [sid for sid, moment in armed.items()
+            if moment + LIMIT_MARGIN <= now or getattr(sessions.get(sid), "signed_in_again", False)]
+    lifted = [sessions[sid] for sid in gone if sid in sessions and viewmodel.at_limit(sessions[sid])]
+    return Due(gone, lifted)
+
+
+def continue_launches(stopped: list[Session],
+                      launch_for: Callable[[Session], Launch]) -> tuple[list[Launch], list[Session]]:
+    """How each goes on where it stopped: a closed one opens in a new tab with the continue prompt (the
+    launches), an open one gets the prompt typed into its own tab (the sessions, for type_continue)."""
+    closed = [replace(launch_for(s), mode=Mode.AUTO, prompt=continue_prompt(Status.LIMIT))
+              for s in stopped if s.exit is not Exit.RUNNING]
+    return closed, [s for s in stopped if s.exit is Exit.RUNNING]
+
+
+def back_words(back: int) -> str:
+    return f"{back} back at work"
+
+
+@dataclass
+class Continued:
+    """How many went on (opened ones too), and what to say of the open ones that would not take the prompt."""
+
+    back: int
+    missed: Note | None = None
+
+
+def type_continue(still_open: list[Session], opened: int) -> Continued:
+    """The continue prompt goes into each one's tab, as if you typed it, when it waits. Its tab is never
+    closed: one that will not take the prompt is left as it is. Blocks: not on a screen's thread."""
+    prompt = continue_prompt(Status.LIMIT)
+    missed = [s for s in still_open
+              if not (s.live_state in handover.IDLE and typein.type_into(s.session_id, prompt))]
+    wrapped.note_opened([(s.session_id, "limit") for s in still_open if s not in missed])  # for the card
+    note = None
+    if missed:
+        names = ", ".join(dict.fromkeys(s.project for s in missed))
+        note = Note(f"Could not write in the tab of {names}: type “continue” there yourself.", "warning", 15)
+    return Continued(opened + len(still_open) - len(missed), note)
+
+
+def limited_now(sessions: dict[str, Session], limited: dict[str, str], signed_as: str | None,
+                current: object, same: Callable[[str, object], bool]) -> tuple[dict[str, str], set[str]]:
+    """On which account each session at a limit stopped (limited: as kept before; else the one signed in
+    now), and the ones at a limit. One signed in with another account since can go on: its
+    signed_in_again is set here."""
+    kept = {}
+    for session in sessions.values():
+        if not viewmodel.at_limit(session):
+            continue
+        stopped_on = limited.get(session.session_id) or signed_as
+        if stopped_on:
+            kept[session.session_id] = stopped_on
+        if stopped_on and current is not None and not same(stopped_on, current):
+            session.signed_in_again = True
+    return kept, {s.session_id for s in sessions.values() if viewmodel.at_limit(s)}
+
+
+def newly_stopped(sessions: dict[str, Session], at: set[str], told: set[str],
+                  armed: dict[str, datetime]) -> list[Session]:
+    """The ones at a limit not told of yet, nor to continue by themselves, and not in the background."""
+    return [sessions[sid] for sid in at - told - armed.keys() if sessions[sid].status is not Status.BACKGROUND]
+
+
+@dataclass
+class Say:
+    """Bit's words: said plainly when mood is '', else Bit reacts so (mascot.react)."""
+
+    words: str
+    mood: str = ""
+    seconds: float = 10
+
+
+def limit_say(stopped: list[Session], others_for: Callable[[datetime], str]) -> Say:
+    """Once per session, what Bit says of the ones a usage limit stopped: until when, and that c
+    continues them (or what the other accounts offer: others_for(when it lifts))."""
+    names = ", ".join(sorted({s.project for s in stopped})[:3])
+    soon = min((viewmodel.free_at(s) for s in stopped if viewmodel.free_at(s)), default=None)
+    if soon and soon > datetime.now():
+        others = others_for(soon)
+        return Say(f"{names}: limit until {viewmodel.lifts(soon)}. {others or 'c continues then'}",
+                   seconds=12 if others else 10)
+    if any(s.signed_in_again for s in stopped):
+        return Say(f"{names}: signed in again. c continues now", "lifted")
+    return Say(f"{names}: the limit has lifted. c continues now", "lifted")
+
+
+# --- the handover queued on a working session (h) -------------------------------------------------
+
+QUEUE = "handover-queue.json"  # {session id: {"how": ..., "by": actor.me() of the window that queued it}}
+
+
+def busy(session: Session) -> bool:
+    """Working: h hands it over once it finishes, not now."""
+    return session.exit is Exit.RUNNING and session.live_state not in handover.IDLE
+
+
+def finished(session: Session) -> bool:
+    """A queued one is handed over now: closed, or waiting."""
+    return session.exit is not Exit.RUNNING or session.live_state in handover.IDLE
+
+
+def writer_words(how: str) -> str:
+    return "it writes its handover" if how == "self" else f"Claude ({handover.MODEL}) writes the handover"
+
+
+def queued_note(session: Session, how: str) -> Told:
+    return Told(f"{session.project} is working: it is handed over as soon as it finishes ({writer_words(how)}). "
+                "h again cancels.", seconds=10, title=f"Handing over {session.project}")
+
+
+def unqueued_note(session: Session) -> Note:
+    return Note(f"{session.project} will not be handed over when it finishes.", seconds=5)
+
+
+def _writer(record: object) -> tuple | None:
+    if not isinstance(record, dict):
+        return None
+    return record.get("pid"), record.get("started"), record.get("command")
+
+
+def read_queued() -> dict[str, str]:
+    """The handovers queued in every tabmancer window: session id -> how. Only the windows still open
+    queue anything: one that closed or crashed (its process gone, or its pid now another process's:
+    actor.running checks the start time and command line too) left nothing queued."""
+    saved = read_json(QUEUE)
+    if not isinstance(saved, dict):
+        return {}
+    alive: dict[tuple, bool] = {}
+    found = {}
+    for sid, entry in saved.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("how"), str):
+            continue
+        writer = _writer(entry.get("by"))
+        if writer is None:
+            continue
+        if writer not in alive:
+            alive[writer] = actor.running(entry["by"])
+        if alive[writer]:
+            found[sid] = entry["how"]
+    return found
+
+
+def save_queued(mine: dict[str, str]) -> bool:
+    """This window's queued handovers, saved beside the other open windows' (theirs are kept, a closed
+    one's go). False when the file could not be written."""
+    saved = read_json(QUEUE)
+    entries = {}
+    for sid, entry in (saved.items() if isinstance(saved, dict) else ()):
+        if isinstance(entry, dict) and not actor.is_me(entry.get("by")) and actor.running(entry.get("by")):
+            entries[sid] = entry
+    if not entries and not mine and saved in (None, {}):
+        return True  # nothing queued anywhere, and nothing to clear
+    me = actor.me()
+    entries.update({sid: {"how": how, "by": me} for sid, how in mine.items()})
+    try:
+        write_json(QUEUE, entries, indent=2)
+    except OSError:
+        return False
+    return True
+
+
+@dataclass
+class Finished:
+    """A queued session finished: what to say, and whether this window hands it over now."""
+
+    note: Told
+    hand_over: bool
+
+
+def queued_finished(sid: str, session: Session, monitor: bool, claim: Callable[[str], bool]) -> Finished:
+    """It finished: handed over by one window only (claim: actor.first_to, the first to ask). A monitor
+    hands over only what is still open as it finishes: closed in its tab meanwhile (from the dashboard,
+    say), it was taken care of there."""
+    if monitor and session.exit is not Exit.RUNNING:
+        return Finished(Told(f"{session.project} closed before it finished: not handed over from here.", "warning",
+                             10), False)
+    if not claim(f"handover-{sid}"):  # queued in another dashboard or monitor too
+        return Finished(Told(f"{session.project} finished: another tabmancer window hands it over.", seconds=8),
+                        False)
+    return Finished(Told(f"{session.project} finished: handing it over now.", seconds=10,
+                         title=f"Handing over {session.project}"), True)
