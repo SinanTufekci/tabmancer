@@ -18,14 +18,14 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Label, Static
 
-from . import agy, teams, teamtree, teamwatch
+from . import agy, teams, teamtree, teamwatch, teamwords
 from . import viewmodel as VM
 from .keys import MONITOR_KEYS  # the list itself; tests import it from here too
 from .keysview import KeysScreen
 from .safework import work
 from .sessions import Session, folder_key
 from .teamview import LineDialog, TeamGraph, TeamScreen, TeamsDialog
-from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, keys_in
+from .theme import MUTED, TEXT, keys_in
 from .tokens import human
 
 WIDE = 180  # columns from which every member shows in a table beside the conversation
@@ -38,91 +38,34 @@ def tone_style(tone: str) -> str:
     return TONE.get(tone, "")
 
 
-def _percent_style(percent: float) -> str:
-    return f"bold {RED}" if percent >= 85 else AMBER if percent >= 60 else TEXT
+_percent_style = teamwords.percent_style
+_model_of = teamwords.model_of
+_facts = teamwords.facts  # what the picked member's first line and the table say of it, as (words, style)
 
 
-def quota_line(limits: list, agy_view: dict, with_agy: bool, now: datetime | None = None) -> Text:
-    """The plan limits as the dashboard read them last ('session 42% · week 18%') and, for a team
-    with agy members, where agy's chain stands ('Neon out till Tue 09:02 · Hydrogen 31%'). A quota read longer ago than agy.STALE says so instead: it tells nothing of now."""
-    now = now or datetime.now()
+def styled(parts: list[teamwords.Part]) -> Text:
+    """Parts (teamwords) as rich Text, each with its style."""
     out = Text()
-    for i, limit in enumerate(limits):
-        out.append(" · " if i else "Claude ", style=MUTED)
-        out.append(f"{limit.label} {limit.percent}%", style=_percent_style(limit.percent))
-    if not with_agy or not agy_view:
-        return out
-    if out:
-        out.append("   ")
-    read_at = agy_view.get("read_at")
-    if read_at is None:
-        return out.append("agy quota not read", style=MUTED)
-    if now - read_at > agy.STALE:
-        return out.append(f"agy quota read {read_at:%H:%M}", style=MUTED)
-    out.append("agy ", style=MUTED)
-    for i, standing in enumerate(agy_view.get("chain") or []):
-        if i:
-            out.append(" · ", style=MUTED)
-        name, left, back = standing.get("name") or standing.get("model", "?"), standing.get("left"), standing.get("back")
-        if back is not None:
-            when = f"{back:%H:%M}" if back.date() == now.date() else f"{back:%a %H:%M}"
-            out.append(f"{name} out till {when}", style=RED)
-        elif left is None:
-            out.append(f"{name} ?", style=MUTED)
-        else:
-            out.append(f"{name} {left:.0f}%", style=_percent_style(100 - left))
+    for words, style in parts:
+        out.append(words, style=style)
     return out
 
 
+def quota_line(limits: list, agy_view: dict, with_agy: bool, now: datetime | None = None) -> Text:
+    """The plan limits and agy's chain (teamwords.quota_parts) as rich Text."""
+    return styled(teamwords.quota_parts(limits, agy_view, with_agy, now))
+
+
 def needs_line(view: VM.TeamView, palette: dict[str, str]) -> Text | None:
-    """'NEEDS YOU  lead: waiting for an answer · dash: done   j picks them in turn'; None when
-    nobody waits for you."""
-    waiting = [m for m in view.members if m.needs_you]
-    if not waiting:
+    """Who needs you (teamwords.needs_parts) as rich Text, its first words the line's own style (all of
+    it bold); None when nobody waits for you."""
+    parts = teamwords.needs_parts(view, palette, tone_style)
+    if parts is None:
         return None
-    out = Text("NEEDS YOU  ", style=f"bold {RED}")
-    for i, member in enumerate(waiting):
-        if i:
-            out.append(" · ", style=MUTED)
-        out.append(member.name, style=f"bold {palette.get(member.name, TEXT)}")
-        out.append(f": {member.label}", style=tone_style(member.tone))
-    return out.append("   j picks them in turn", style=MUTED)
-
-
-def _model_of(member: VM.MemberView) -> str:
-    """'claude · opus 5.5 · high', 'agy · Neon (High)': as the team view and the desktop monitor say it."""
-    return f"{member.cli} · {VM.model_words(member)}"
-
-
-def _facts(member: VM.MemberView) -> list[tuple[str, str]]:
-    """What the picked member's first line and the table say of it, as (words, style)."""
-    out: list[tuple[str, str]] = [(_model_of(member), CYAN if member.cli != "claude" else MUTED)]
-    if member.fell_back:
-        out.append((f"fell back: {member.fell_back}", AMBER))
-    if member.context is not None:
-        out.append((f"context {member.context:.0%}", _percent_style(member.context * 100)))
-    if member.tokens:
-        out.append((f"{human(member.tokens)} tokens", MUTED))
-    if member.bus is not None and member.state != "not-started":
-        since = member.bus.get("since")
-        if member.bus.get("listening"):
-            out.append((f"bus: listening since {since:%H:%M}" if since else "bus: listening", GREEN))
-        elif member.bus.get("runner"):
-            out.append(("bus: runner alive", MUTED))
-        else:
-            out.append(("bus: not listening", AMBER))
-    if member.unread:
-        out.append((f"{member.unread} unread", AMBER))
-    if member.git:
-        git = member.git
-        words = git.get("branch") or "git"
-        words += f" +{git['changed']}" if git.get("changed") else ""
-        words += f" ↑{git['ahead']}" if git.get("ahead") else ""
-        out.append((words, MUTED))
-    if member.quota and member.quota.get("back") is not None:
-        out.append((f"out of quota till {member.quota['back']:%H:%M}", RED))
-    if member.model_note:
-        out.append((member.model_note, MUTED))
+    (words, style), *rest = parts
+    out = Text(words, style=style)
+    for words, style in rest:
+        out.append(words, style=style)
     return out
 
 

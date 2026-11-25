@@ -54,10 +54,10 @@ from .teamforms import (  # noqa: F401  (re-exported)
     JoinTeam,
     TellTeam,
 )
-from .theme import AMBER, BLUE, CYAN, DEFAULT_THEME, GREEN, MUTED, ORANGE, RED, TEXT, THEMES, keys, mix
+from .teamwords import PALETTE, colours  # noqa: F401  (PALETTE re-exported)
+from .theme import AMBER, BLUE, CYAN, DEFAULT_THEME, GREEN, MUTED, RED, TEXT, THEMES, keys, mix
 from .tokens import human
 
-PALETTE = [CYAN, GREEN, AMBER, ORANGE, "#c678dd", "#61afef", "#e5c07b", "#56b6c2"]
 FLIGHT_SECONDS = 1.8  # how long a message takes to fly from card to card
 CARD_H = 4  # a card's rows: its border, the name and what it does, its context and tokens, its border
 CARD_LEAST, CARD_MOST = 24, 36  # cards grow with the room between these widths
@@ -66,16 +66,6 @@ METER = 5  # cells of a card's context meter
 WIRE = "#3a3a3a"
 STAR = "·✢✶✻✽✻✶✢"
 LOG_LINES = 200
-
-
-def colours(team: teams.Team, accent: str) -> dict[str, str]:
-    """The lead in the theme's accent, the others in the palette's colours; peers, all of them."""
-    out = {teams.YOU: TEXT, teams.TABMANCER: MUTED}
-    if team.lead is not None:
-        out[team.lead.name] = accent
-    others = [m for m in team.members if not m.lead]
-    out.update({m.name: PALETTE[i % len(PALETTE)] for i, m in enumerate(others)})
-    return out
 
 
 def card_model(session: Session | None, pick, cli: str = "claude") -> tuple[str, bool]:
