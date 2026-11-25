@@ -558,7 +558,7 @@ class TeamScreen(Screen):
         super().__init__()
         self.team, self.accent = team, accent
         self.seen: set[tuple[str, str, str]] | None = None
-        self.closing = False  # x pressed once: a second press closes every open member
+        self.closing: str | None = None  # x pressed once on this team: a second press closes every open member
         self.removing: str | None = None  # d pressed once on this member: a second press takes it off
         self.messages: list[teams.Message] = []
         self.sessions: dict[str, Session | None] = {}
@@ -740,12 +740,12 @@ class TeamScreen(Screen):
         if note is None:
             self.notify("No member is open.", timeout=3)
             return
-        if not self.closing:
-            self.closing = True
+        if self.closing != self.team.name:  # keyed by name, as on the team's row in the list
+            self.closing = self.team.name
             self.notify(note, timeout=6)
-            self.set_timer(6, lambda: setattr(self, "closing", False))
+            self.set_timer(6, lambda: setattr(self, "closing", None))
             return
-        self.closing = False
+        self.closing = None
         self.close_members(open_names(self.team, self.sessions))
 
     @work(thread=True, group="team-close")
