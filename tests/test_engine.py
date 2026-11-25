@@ -286,11 +286,17 @@ def test_the_saved_armed_shown_only_where_it_watches():
     assert eng.state.armed == {"l1": LIFTS} and front.names() == ["armed_changed"]
 
 
+def goes_on(front: Front):
+    """Engine.continue_these, recorded as the front's (test_continue_path tests it)."""
+    return lambda stopped, unasked=False: front.calls.append(("continue_these", stopped, unasked))
+
+
 def test_due_once_the_limit_lifted_by_the_clock(kept):
     clock = [NOW]
     front = Front()
     eng = engine.Engine(front, clock=lambda: clock[0], state=engine.EngineState(
         acts=True, sessions={"l1": lim("l1"), "w": s("w")}, armed={"l1": LIFTS, "w": LIFTS}))
+    eng.continue_these = goes_on(front)
     eng.due()
     assert front.calls == [] and kept["armed"] == []
     clock[0] = LIFTS + actions.LIMIT_MARGIN
@@ -316,6 +322,7 @@ def test_the_c_dialogs_answers(kept):
     assert front.calls == [("say_note", actions.ACTS_ELSEWHERE)]
     front = Front()
     eng = made(front, acts=True, armed={"l1": LIFTS})
+    eng.continue_these = goes_on(front)
     assert not eng.choose("handover", ["l1"], stopped, "at 13:00")
     assert not eng.choose("now", ["l2"], stopped, "at 13:00")
     assert eng.choose("lift", ["l1", "l2"], stopped, "at 13:00")

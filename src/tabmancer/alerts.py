@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from . import __version__, claudeupdate, context, handover, typein, updates, viewmodel, wrapped
-from .actions import Note, Told, came_up_missing, limit_say
+from .actions import Note, Told, back_words, came_up_missing, limit_say
 from .sessions import Exit, Session, Status
 from .tokens import duration, human
 
@@ -37,6 +37,7 @@ WRAPPED = "wrapped"          # the week is ready as a card (Friday from noon, on
 NEWER = "newer"              # a newer tabmancer is out (once a version)
 LIMIT_NEAR = "limit-near"    # a plan limit at 85% or more (each reading)
 AGY_OUT = "agy-out"          # every agy model in the chain is out (once until it is back)
+BACK = "back"                # sessions stopped at a limit went on (c, or the limit lifted)
 
 
 @dataclass
@@ -172,6 +173,12 @@ def stopped_event(stopped: list[Session], others_for: Callable[[datetime], str],
     said = limit_say(stopped, others_for, now)
     return Event(STOPPED, bit=Bit("react" if said.mood else "say", said.words, said.mood, seconds=said.seconds),
                  once_keys=tuple(s.session_id for s in stopped))
+
+
+def back_event(back: int) -> Event:
+    """Sessions stopped at a limit went on (opened, or the prompt typed into their tab): Bit says how
+    many are back at work, in the dashboard's own colour."""
+    return Event(BACK, bit=Bit("react", back_words(back), "back", "accent"))
 
 
 def signed_in_event(free: int, who: str) -> Event:

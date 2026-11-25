@@ -2867,14 +2867,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def continue_these(self, stopped: list[Session], unasked: bool = False) -> None:
         """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt
-        typed into its own tab. unasked: by itself, the limit lifted (open_unasked)."""
-        closed, still_open = actions.continue_launches(stopped, self.launch_for)
-        if closed:
-            (self.open_unasked if unasked else self.open_sessions)(closed)
-        if still_open:
-            self.continue_open(still_open, len(closed))
-        else:
-            self.mascot.react("back", actions.back_words(len(closed)), self.accent())
+        typed into its own tab. unasked: by itself, the limit lifted (open_unasked). Engine.continue_these."""
+        self.engine.continue_these(stopped, unasked)
 
     def load_armed(self) -> None:
         """The sessions to continue at their reset, as saved: the dashboard that acts saves them as it
@@ -2895,13 +2889,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     @work(thread=True, group="limits")
     def continue_open(self, still_open: list[Session], opened: int) -> None:
         """The continue prompt goes into each one's tab, as if you typed it. Its tab is never closed:
-        one that will not take the prompt is left as it is, and Bit says which."""
-        done = actions.type_continue(still_open, opened)
-        if done.back:
-            self.call_from_thread(self.mascot.react, "back", actions.back_words(done.back), self.accent())
-        if done.missed is not None:
-            self.call_from_thread(self.notify, done.missed.words, severity=done.missed.severity,
-                                  timeout=done.missed.seconds)
+        one that will not take the prompt is left as it is, and Bit says which (Engine.continued)."""
+        self.call_from_thread(self.engine.continued, actions.type_continue(still_open, opened))
 
     def check_limits(self) -> None:
         """Forget the sessions gone on from a limit; once per session, Bit says which ones a

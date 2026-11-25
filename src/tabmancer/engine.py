@@ -143,9 +143,19 @@ class Front(Protocol):
         """The sessions to continue at their reset changed (a dashboard that watches): their rows."""
         ...
 
-    def continue_these(self, stopped: list[Session], unasked: bool = False) -> None:
-        """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt typed
-        into its own tab. unasked: by itself, the limit lifted."""
+    def launch_for(self, session: Session) -> Launch:
+        """How a closed session opens (actions.launch_for): as its m says, a member as that member, one in
+        the background attached to."""
+        ...
+
+    def open_unasked(self, launches: list[Launch]) -> None:
+        """Tabs no key asked for just now (a limit lifted): the dashboard's window, the keys left where
+        they were; then Engine.open."""
+        ...
+
+    def continue_open(self, still_open: list[Session], opened: int) -> None:
+        """The continue prompt typed into each one's tab off the UI thread (actions.type_continue), the
+        outcome back to Engine.continued."""
         ...
 
     def open_handover(self, session: Session | None, how: str | None = None) -> None:
@@ -442,6 +452,30 @@ class Engine:
 
     # --- usage limits: the sessions stopped at one, and those to continue when it lifts (c) ----------
 
+    def continue_these(self, stopped: list[Session], unasked: bool = False) -> None:
+        """Each goes on where it stopped: a closed one in a new tab with the continue prompt, an open one
+        with the prompt typed into its own tab (off the UI thread: Engine.continued says how it went).
+        unasked: by itself, the limit lifted (Front.open_unasked); else as a key opens (open)."""
+        front = self.front
+        closed, still_open = actions.continue_launches(stopped, front.launch_for)
+        if closed:
+            if unasked:
+                front.open_unasked(closed)
+            else:
+                self.open(closed)
+        if still_open:
+            front.continue_open(still_open, len(closed))
+        else:
+            self.tell(alerts.back_event(len(closed)))
+
+    def continued(self, done: actions.Continued) -> None:
+        """The continue prompt typed, or not: Bit says how many are back (the opened ones too), a note
+        names the tabs that would not take it."""
+        if done.back:
+            self.tell(alerts.back_event(done.back))
+        if done.missed is not None:
+            self.front.say_note(done.missed)
+
     def limits(self) -> None:
         """Forget the sessions gone on from a limit; once per session, Bit says which ones a usage limit
         stopped and that c continues them. On which account each stopped is kept (by the one that acts):
@@ -500,7 +534,7 @@ class Engine:
             del self.state.armed[sid]
         self.save_armed()
         if due.lifted:
-            self.front.continue_these(due.lifted, True)
+            self.continue_these(due.lifted, True)
 
     def arm(self, session: Session) -> str | None:
         """One session to continue at its reset (the act API's continue_at_reset): why not, in a few words,
@@ -528,7 +562,7 @@ class Engine:
             front.say_note(choice.note)
         self.save_armed()
         if choice.go_on:
-            front.continue_these(choice.go_on, False)
+            self.continue_these(choice.go_on, False)
         for session in choice.hand_over:
             front.open_handover(session, "transcript")
         return choice.rows
