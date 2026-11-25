@@ -6,8 +6,9 @@ one the window does not do is greyed and says why (where it is done for now, or 
 jump goes to a team, a session or a team's member by name. find() ranks them all for the words typed: the
 key itself, then names that start with the words, then a word in them that does (a jump's kind counts:
 "team shop"), then the words anywhere in the name, then in what a key does or a jump's project, then their
-letters in order; a session also by its folder and prompts, as the list's / finds it (search.matches). It
-imports neither Textual nor Qt.
+letters in order; a session also by its folder and prompts, as the list's / finds it (search.matches). At
+an equal rank a jump comes first: "sho" more likely means the team shop than the keys that show something,
+and the key itself, typed as it is, still comes before any name. It imports neither Textual nor Qt.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from .sessions import Session
     from .viewmodel import MemberView, SessionView, TeamView
 
-KINDS = ("key", "team", "session", "member")  # their order at an equal rank
+KINDS = ("team", "session", "member", "key")  # their order at an equal rank: a name typed is usually meant
 MOST = 60  # what the palette lists at most
 
 
@@ -110,7 +111,7 @@ def in_order(letters: str, words: str) -> bool:
 
 
 def find(entries: list[Command], typed: str, sessions: dict[str, Session] | None = None) -> list[Command]:
-    """The commands and jumps the words name, the best first (then keys, teams, sessions, members, each
+    """The commands and jumps the words name, the best first (then teams, sessions, members, keys, each
     in its own order); nothing typed: every key, in keys.py's order. A session also by its folder and
     prompts (search.matches), after what its name gives."""
     needle = search.fold(typed.strip())

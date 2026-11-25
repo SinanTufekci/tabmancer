@@ -72,6 +72,9 @@ def test_teams_sessions_and_members_are_jumps_found_by_name_or_where_they_are():
     assert commands.find(entries, "shop")[0] == commands.Command("team", "shop", "Add Stripe checkout",
                                                                  group="shop", target="shop")
     assert commands.find(entries, "team sh")[0].target == "shop"  # its kind is a word of it too
+    found = commands.find(entries, "sho")  # the team and the keys that "Show ..." all start with it
+    assert found[0].target == "shop" and found[1].kind == "key" and found[1].words.startswith("Show")
+    assert commands.find(entries + [commands.Command("team", "T")], "T")[0].key == "T"  # the key as typed first
     assert [c.target for c in commands.find(entries, "api-serv")] == ["s1"]  # by its project
     by_prompt = commands.find(entries, "handshake", sessions)  # by what was asked in it, as / finds it
     assert [c.target for c in by_prompt if c.kind == "session"] == ["s2"]
