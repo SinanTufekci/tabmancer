@@ -84,6 +84,18 @@ from .actions import clip as _clip
 from .clisettings import CliSettings
 from .config import merge_json, read_json
 from .dialogs import frame, title
+from .engine import (  # the timers' schedule (engine.SCHEDULE)
+    ACCOUNTS_SECONDS,
+    ACTOR_SECONDS,
+    DUE_SECONDS,
+    GIT_SECONDS,
+    LIVE_REFRESH_SECONDS,
+    TOKENS_SECONDS,
+    UPDATES_SECONDS,
+    USAGE_SECONDS,
+    WRAPPED_AFTER,
+    WRAPPED_SECONDS,
+)
 from .handoverview import HandoverDialog
 from .keysview import KEYS, KeysScreen
 from .launch import Launch, Mode, default_mode, open_tabs, run_in_background, terminal_kind
@@ -180,19 +192,11 @@ def badge(style: str) -> str:
     if not style.startswith("bold "):
         return style
     return f"{style} on {mix('#000000', style.split()[-1], BADGE)}"
-LIVE_REFRESH_SECONDS = 2  # quick poll of the pid files
 FULL_POLL_EVERY = 8        # every 8th poll asks `claude agents --json` (background sessions too)
 SPIN_SECONDS = 0.08
 TIMER_THREADS = 64  # Windows: a thread for every timer at once, the team view's and dialogs' too
-USAGE_SECONDS = 300  # plan limits change slowly; `claude -p /usage` is cheap but not free
-TOKENS_SECONDS = 60  # token counts: only what transcripts gained since the last count is read
-ACCOUNTS_SECONDS = 5  # who the CLIs are signed in as: /login in any session switches it
-ACTOR_SECONDS = 10  # a dashboard that only watches looks this often whether the one that acts is gone
 NAMELESS = ("This dashboard could not read its own start time, so it only shows sessions: it does not "
             "continue them at their reset, send desktop notes or run updates. Another tabmancer dashboard can.")
-UPDATES_SECONDS = 6 * 3600  # a dashboard left open for days hears of a new tabmancer (PyPI: once a day)
-GIT_SECONDS = 60  # where each project's folder stands in git (git status: local, no network)
-WRAPPED_AFTER, WRAPPED_SECONDS = 8, 600  # Friday's word on the week: after Bit's hello, then looked for again
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
 FLASH_SECONDS = 1.6  # how long a row stays lit after its state changes
@@ -679,8 +683,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         # actor lock (actor.py), once however many dashboards and monitors are open. Taken in on_mount;
         # a dashboard without it watches like a monitor, and takes it over when its holder is gone.
         self.actor_timers: list[Timer] = []  # what acting runs on a timer: stopped if the lock is lost
-        self.actor_misses = 0  # looks in a row that found no lock it could read (tick_actor)
-        self.told_alone = False  # a monitor said no dashboard is open
         # The Windows Terminal window sessions open in, by name (--tabs-window), when tabmancer's own
         # launcher named it: the dashboard's own, which a monitor is told too. "" when not known.
         self.tabs_window = tabs_window
@@ -826,8 +828,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.show_mascot(way_of(saved.get("mascot") if isinstance(saved, dict) else None))
         self.split_on = not (isinstance(saved, dict) and saved.get("split") == "off")
         self.fit_split()
-        if self.watch is None:  # a monitor never acts, nor asks for the lock
-            self.acts = actor.claim()
+        self.engine.mount()  # a monitor never acts, nor asks for the lock
         self.set_interval(ACTOR_SECONDS, self.tick_actor)
         if not self.acts:
             claudeupdate.leave_to_dashboard()  # the one that acts runs it: two at once would race
@@ -866,7 +867,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if claudeupdate.due():  # today's claude update, before any session opens
             self.updating_claude = True
             self.update_claude()
-        self.actor_timers.append(self.set_interval(10, self.continue_due))
+        self.actor_timers.append(self.set_interval(DUE_SECONDS, self.continue_due))
 
     def start_wrapped(self) -> None:
         self.actor_timers.append(self.set_timer(WRAPPED_AFTER, self.tell_wrapped))
@@ -893,39 +894,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         then), and the sessions to continue as that one saved them. The one that acts: whether it
         still holds the lock; it steps back when a readable lock names another process, or after two
         looks in a row that found none it could read (a file held open a moment is no reason). A
-        monitor: whether any dashboard acts at all."""
-        if self.watch is not None:
-            self.call_from_thread(self.say_alone, not actor.running(actor.holder()))
-            return
-        if self.acts:
-            held = actor.holder()
-            if actor.is_me(held) or (held is None and actor.claim()):
-                self.actor_misses = 0
-                return
-            self.actor_misses += 1
-            if held is not None or self.actor_misses >= 2:
-                self.call_from_thread(self.lost_actor, held or {})
-            return
-        if actor.claim():
-            self.call_from_thread(self.took_over)
-            return
-        self.call_from_thread(self.show_armed, store.read_armed())
-
-    def took_over(self) -> None:
-        if self.acts:
-            return
-        self.acts = True
-        self.actor_misses = 0
-        self.start_acting()
-        self.start_wrapped()
-        self.notify("The tabmancer dashboard that did what happens by itself closed: this one does now.",
-                    timeout=8)
-
-    def lost_actor(self, held: dict) -> None:
-        """Another took the lock over (it judged this one gone): only one may act."""
-        if self.acts:
-            self.stop_acting()
-            self.say_who_acts(held)
+        monitor: whether any dashboard acts at all (engine.look, then Engine.seen)."""
+        self.call_from_thread(self.engine.seen, engine.look(self.watch is not None, self.acts))
 
     def show_armed(self, armed: dict[str, datetime]) -> None:
         """A dashboard that watches: the sessions to continue at their reset, as the one that acts saved them."""
@@ -937,17 +907,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 if at_limit(session):
                     self.update_row(session)
 
-    def say_alone(self, alone: bool) -> None:
-        """A monitor with no dashboard open says so, once each time: nothing continues sessions at their
-        reset or sends desktop notes until one is."""
-        if alone and not self.told_alone:
-            self.notify("No tabmancer dashboard is open: until one is, nothing continues sessions when their "
-                        "limit lifts and no desktop notes come.", severity="warning", timeout=15)
-        self.told_alone = alone
-
     def on_unmount(self) -> None:
-        if self.acts:
-            actor.release()
+        self.engine.unmount()
 
     def name_tab(self, name: str) -> None:
         """The terminal tab's title."""

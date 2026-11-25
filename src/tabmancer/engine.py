@@ -25,7 +25,49 @@ from datetime import datetime
 from typing import Protocol
 
 from . import accounts, actions, actor, alerts, store
+from .actions import Note
 from .sessions import Exit, Session
+
+# --- when the front runs what: its timers (SCHEDULE) -------------------------------------------------
+
+LIVE_REFRESH_SECONDS = 2  # quick poll of the pid files
+USAGE_SECONDS = 300  # plan limits change slowly; `claude -p /usage` is cheap but not free
+TOKENS_SECONDS = 60  # token counts: only what transcripts gained since the last count is read
+ACCOUNTS_SECONDS = 5  # who the CLIs are signed in as: /login in any session switches it
+ACTOR_SECONDS = 10  # a dashboard that only watches looks this often whether the one that acts is gone
+GIT_SECONDS = 60  # where each project's folder stands in git (git status: local, no network)
+UPDATES_SECONDS = 6 * 3600  # a dashboard left open for days hears of a new tabmancer (PyPI: once a day)
+DUE_SECONDS = 10  # the sessions to continue at their reset: whether their limit has lifted
+WRAPPED_AFTER, WRAPPED_SECONDS = 8, 600  # Friday's word on the week: after Bit's hello, then looked for again
+
+
+@dataclass(frozen=True)
+class Every:
+    """One of the front's timers: what it runs, how often, and whether only while it acts (those stop
+    when the lock is lost and start when it is taken over). first: a first run this soon, then every
+    seconds."""
+
+    name: str  # the terminal dashboard's method it runs
+    seconds: float
+    acting: bool = False
+    first: float | None = None
+
+
+SCHEDULE = (
+    Every("tick_actor", ACTOR_SECONDS),  # look(), off the UI thread, then Engine.seen
+    Every("refresh_usage", USAGE_SECONDS),
+    Every("refresh_tokens", TOKENS_SECONDS),
+    Every("show_accounts", ACCOUNTS_SECONDS),
+    Every("refresh_git", GIT_SECONDS),
+    Every("poll_tick", LIVE_REFRESH_SECONDS),  # the live poll, its results to Engine.live
+    Every("check_updates", UPDATES_SECONDS, acting=True),
+    Every("continue_due", DUE_SECONDS, acting=True),  # Engine.due
+    Every("tell_wrapped", WRAPPED_SECONDS, acting=True, first=WRAPPED_AFTER),
+)
+
+ALONE = Note("No tabmancer dashboard is open: until one is, nothing continues sessions when their limit lifts "
+             "and no desktop notes come.", "warning", 15)
+TOOK_OVER = Note("The tabmancer dashboard that did what happens by itself closed: this one does now.", seconds=8)
 
 
 class Front(Protocol):
@@ -109,6 +151,22 @@ class Front(Protocol):
         """Hand it over as asked (how: "self", "transcript", or None to ask how)."""
         ...
 
+    def start_acting(self) -> None:
+        """It holds the actor lock now: its acting timers (SCHEDULE) start, what is due at its start runs."""
+        ...
+
+    def start_wrapped(self) -> None:
+        """Taken over: Wrapped's timers too (the first load starts them otherwise)."""
+        ...
+
+    def stop_acting(self) -> None:
+        """The lock is lost: its acting timers stop, and it no longer acts (acts False)."""
+        ...
+
+    def say_who_acts(self, held: dict | None = None) -> None:
+        """Which dashboard acts (held: its lock), and that this one watches."""
+        ...
+
 
 @dataclass
 class EngineState:
@@ -129,9 +187,42 @@ class EngineState:
     armed: dict[str, datetime] = field(default_factory=dict)  # c: session id -> when it continues (its limit lifts)
     armed_unsaved: bool = False  # the sessions to continue could not be saved, and that was said
     told_limit: set[str] = field(default_factory=set)  # sessions Bit has said are stopped at a limit
+    actor_misses: int = 0  # looks in a row that found no lock it could read (seen)
+    told_alone: bool = False  # a monitor said no dashboard is open
 
 
 FORWARDED = tuple(f.name for f in fields(EngineState))
+
+
+# --- one acts: the actor lock (actor.py) ---------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Look:
+    """What a look at the actor lock found (look), for Engine.seen. kind: "monitor" (alone: no
+    dashboard acts), "acting" (held: the lock as read; kept: it is still this one's), "took" (it was
+    free, and this one holds it now) or "watching" (armed: the sessions to continue, as saved)."""
+
+    kind: str
+    alone: bool = False
+    held: dict | None = None
+    kept: bool = False
+    armed: dict[str, datetime] = field(default_factory=dict)
+
+
+def look(monitor: bool, acts: bool) -> Look:
+    """The actor lock, looked at off the UI thread (reading another process can take a moment: `ps` on
+    macOS). It keeps no state: the engine's is not touched here. Only actor.claim writes, the lock's own
+    atomic step (claimed where the lock is free, as before), so that the process check stays off the UI
+    thread too."""
+    if monitor:
+        return Look("monitor", alone=not actor.running(actor.holder()))
+    if acts:
+        held = actor.holder()
+        return Look("acting", held=held, kept=actor.is_me(held) or (held is None and actor.claim()))
+    if actor.claim():
+        return Look("took")
+    return Look("watching", armed=store.read_armed())
 
 
 class Engine:
@@ -317,3 +408,54 @@ class Engine:
         for session in choice.hand_over:
             front.open_handover(session, "transcript")
         return choice.rows
+
+    # --- one acts: the actor lock --------------------------------------------------------------------
+
+    def mount(self) -> None:
+        """At its start: a dashboard takes the lock when it is free; a monitor never acts, nor asks."""
+        if not self.front.monitoring():
+            self.state.acts = actor.claim()
+
+    def seen(self, look: Look) -> None:
+        """What a look at the lock found (every ACTOR_SECONDS). The one that acts: it steps back when a
+        readable lock names another process, or after two looks in a row that found none it could read
+        (a file held open a moment is no reason). One that watches: it takes over when the one that
+        acted is gone, else shows the sessions to continue as that one saved them. A monitor: says once
+        each time that no dashboard is open."""
+        state = self.state
+        if look.kind == "monitor":
+            if look.alone and not state.told_alone:
+                self.front.say_note(ALONE)
+            state.told_alone = look.alone
+        elif look.kind == "acting":
+            if look.kept:
+                state.actor_misses = 0
+                return
+            state.actor_misses += 1
+            if look.held is not None or state.actor_misses >= 2:
+                self.lost(look.held or {})
+        elif look.kind == "took":
+            self.took_over()
+        else:
+            self.show_armed(look.armed)
+
+    def took_over(self) -> None:
+        """The one that acted is gone and this one holds the lock now: it acts."""
+        if self.state.acts:
+            return
+        self.state.acts = True
+        self.state.actor_misses = 0
+        self.front.start_acting()
+        self.front.start_wrapped()
+        self.front.say_note(TOOK_OVER)
+
+    def lost(self, held: dict) -> None:
+        """Another took the lock over (it judged this one gone): only one may act."""
+        if self.state.acts:
+            self.front.stop_acting()
+            self.front.say_who_acts(held)
+
+    def unmount(self) -> None:
+        """At its end: the lock goes, for another to take."""
+        if self.state.acts:
+            actor.release()

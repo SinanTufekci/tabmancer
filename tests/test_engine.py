@@ -193,7 +193,7 @@ def test_the_dashboards_state_is_the_engines():
     app = SessionPicker(days=14)
     assert engine.FORWARDED == ("acts", "sessions", "queued", "unasked", "notes", "told_crowded", "told_idle",
                                 "opening", "came_up", "full_poll_due", "full_polls", "armed", "armed_unsaved",
-                                "told_limit")
+                                "told_limit", "actor_misses", "told_alone")
     for name in engine.FORWARDED:
         value = object()
         setattr(app, name, value)
@@ -311,3 +311,118 @@ def test_the_c_dialogs_answers(kept):
     assert front.calls[0][1:] == (stopped[0], "transcript") and front.calls[1][1:] == ([stopped[1]], False)
     assert front.calls[2][1].words == "2 sessions continue at 13:00, when the limit lifts. Leave the dashboard open."
     assert eng.state.armed == {"l1": LIFTS, "l2": NOW + timedelta(hours=2)} and len(kept["armed"]) == 3
+
+
+# --- one acts: the actor lock, and the front's timers (E3) ---------------------------------------------
+
+OTHER = {"pid": 42}
+
+
+def test_a_look_at_the_lock_keeps_no_state(monkeypatch):
+    calls = []
+    lock = {"holder": None, "claim": True, "running": True}
+    monkeypatch.setattr(actor, "holder", lambda: lock["holder"])
+    monkeypatch.setattr(actor, "claim", lambda: calls.append("claim") or lock["claim"])
+    monkeypatch.setattr(actor, "is_me", lambda held: held == "me")
+    monkeypatch.setattr(actor, "running", lambda held: lock["running"])
+    monkeypatch.setattr(engine.store, "read_armed", lambda: {"l1": LIFTS})
+    assert engine.look(True, False) == engine.Look("monitor", alone=False) and calls == []  # a monitor never claims
+    lock["holder"] = "me"
+    assert engine.look(False, True) == engine.Look("acting", held="me", kept=True) and calls == []
+    lock["holder"] = None
+    assert engine.look(False, True).kept and calls == ["claim"]  # none to read: taken again
+    assert engine.look(False, False) == engine.Look("took")
+    lock["claim"] = False
+    assert engine.look(False, False) == engine.Look("watching", armed={"l1": LIFTS})
+    assert list(inspect.signature(engine.look).parameters) == ["monitor", "acts"]  # no engine, no state
+
+
+def test_the_one_that_acts_steps_back_after_two_unreadable_looks_or_anothers_lock():
+    front = Front()
+    eng = made(front, acts=True)
+    eng.seen(engine.Look("acting", held=None))
+    assert eng.state.acts and eng.state.actor_misses == 1 and front.calls == []
+    eng.seen(engine.Look("acting", held=None, kept=True))
+    assert eng.state.actor_misses == 0
+    eng.seen(engine.Look("acting", held=None))
+    eng.seen(engine.Look("acting", held=None))
+    assert front.calls == [("stop_acting",), ("say_who_acts", {})]
+    front.calls.clear()
+    eng = made(front, acts=True)
+    eng.seen(engine.Look("acting", held=OTHER))
+    assert front.calls == [("stop_acting",), ("say_who_acts", OTHER)]  # another's: at once
+
+
+def test_one_that_watches_takes_over_once_or_shows_the_saved_armed():
+    front = Front()
+    eng = made(front)
+    eng.seen(engine.Look("watching", armed={"l1": LIFTS}))
+    assert front.calls == [("armed_changed",)] and eng.state.armed == {"l1": LIFTS} and not eng.state.acts
+    front.calls.clear()
+    eng.state.actor_misses = 1
+    eng.seen(engine.Look("took"))
+    eng.seen(engine.Look("took"))
+    assert front.calls == [("start_acting",), ("start_wrapped",), ("say_note", engine.TOOK_OVER)]
+    assert eng.state.acts and eng.state.actor_misses == 0
+
+
+def test_a_monitor_says_once_each_time_that_no_dashboard_is_open():
+    front = Front(monitor=True)
+    eng = made(front)
+    for alone in (True, True, False, True):
+        eng.seen(engine.Look("monitor", alone=alone))
+    assert front.calls == [("say_note", engine.ALONE)] * 2 and eng.state.told_alone
+
+
+def test_only_a_dashboard_takes_the_lock_and_only_the_one_that_acts_lets_it_go(monkeypatch):
+    done = []
+    monkeypatch.setattr(actor, "claim", lambda: done.append("claim") or True)
+    monkeypatch.setattr(actor, "release", lambda: done.append("release"))
+    monitor = made(Front(monitor=True))
+    monitor.mount()
+    monitor.unmount()
+    assert done == [] and not monitor.state.acts
+    dashboard = made(Front())
+    dashboard.mount()
+    dashboard.unmount()
+    assert done == ["claim", "release"] and dashboard.state.acts
+
+
+async def test_the_dashboards_timers_are_the_schedule(fake_home, monkeypatch):
+    """engine.SCHEDULE is what the terminal dashboard runs: each timer at its seconds, the acting ones
+    only while it acts."""
+    from tabmancer import claudeupdate, wrapped
+    from tabmancer.app import SessionPicker
+
+    started: list[tuple[str, float, str]] = []
+    for kind in ("set_interval", "set_timer"):
+        real = getattr(SessionPicker, kind)
+
+        def timed(self, seconds, callback=None, *a, kind=kind, real=real, **k):
+            started.append((kind, seconds, getattr(callback, "__name__", "")))
+            return real(self, seconds, callback, *a, **k)
+        monkeypatch.setattr(SessionPicker, kind, timed)
+    for name in ("poll_tick", "tick_actor", "refresh_usage", "refresh_tokens", "show_accounts", "refresh_git",
+                 "check_updates", "continue_due", "tell_wrapped", "update_claude"):
+        def quiet(self, *a, **k):
+            return None
+        quiet.__name__ = name
+        monkeypatch.setattr(SessionPicker, name, quiet)
+    monkeypatch.setattr(claudeupdate, "due", lambda *a, **k: False)
+    monkeypatch.setattr(wrapped, "due", lambda now=None: False)
+    monkeypatch.setattr(actor, "release", lambda: None)
+    for acts in (True, False):
+        started.clear()
+        monkeypatch.setattr(actor, "claim", lambda acts=acts: acts)
+        app = SessionPicker(days=14)
+        async with app.run_test(size=(120, 30)) as pilot:
+            for _ in range(8):
+                await pilot.pause(0.05)
+            assert app.acts is acts
+            for every in engine.SCHEDULE:
+                runs = every.acting <= acts
+                assert (("set_interval", every.seconds, every.name) in started) is runs, every
+                if every.first is not None:
+                    assert (("set_timer", every.first, every.name) in started) is runs, every
+            assert len(app.actor_timers) == (sum(1 + (e.first is not None) for e in engine.SCHEDULE if e.acting)
+                                             if acts else 0)
