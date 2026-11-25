@@ -773,3 +773,80 @@ def kept_row(keys: list[str], current: str | None, row: int, keep_place: bool) -
 def back_step(search_open: bool, card: str | None) -> str:
     """Esc: the words' filter cleared ("search"), else a card's ("card"), else "quit"."""
     return "search" if search_open else "card" if card else "quit"
+
+
+# --- the board's lanes (the desktop window's Board) ------------------------------------------------
+
+# A lane for each card, by its rule (counted_by), and one for the rest: (key, title, tone, what it
+# holds, said under its title while it is empty). An open session that needs you is in NEED YOU only.
+LANES = (("waiting", CARDS["waiting"][1], "your-turn!", "waiting for an answer"),
+         ("open", CARDS["open"][1], "working", "at work or idle"),
+         ("continue", CARDS["continue"][1], "to-continue!", "cut off or unanswered"),
+         ("done", "DONE", "done", "closed, nothing left to do"))
+TEAM_CARD = "team:"  # a team's one card on the board: TEAM_CARD + its name
+
+
+@dataclass
+class Lane:
+    """One of the board's lanes. items: its cards in order, a session's by its id and a team's by
+    TEAM_CARD + its name; count: the sessions in it by their own state, a team's members each in
+    their own (NEED YOU's and TO CONTINUE's are the cards' numbers); words: what they are, as on the
+    card (the projects; the open ones by what they do); away: those of them on a team's card in
+    another lane, by team; folded: shown as a strip with its count."""
+
+    key: str
+    title: str
+    tone: str
+    caption: str
+    items: list[str] = field(default_factory=list)
+    count: int = 0
+    words: list[str] = field(default_factory=list)
+    away: dict[str, int] = field(default_factory=dict)
+    folded: bool = False
+
+
+def lane_of(session: Session) -> str:
+    """Its lane: needs you (card 2's rule), else open (card 1's), else to continue (card 3's), else done."""
+    for card in ("waiting", "open", "continue"):
+        if counted_by(session, card):
+            return card
+    return "done"
+
+
+def board(shown: list[Session], team_states: dict[str, TeamState], pinned: set[str]) -> list[Lane]:
+    """The board's lanes over the sessions shown (visible(): already filtered and in the list's order).
+    Each session is in the lane of its own state, but a team is one card, in the lane of its most
+    urgent member, where that member comes. Pinned cards first (a team's when a member is pinned),
+    then the list's order. DONE is folded."""
+    lanes = {key: Lane(key, title, tone, caption, folded=key == "done") for key, title, tone, caption in LANES}
+    rank = {key: place for place, (key, *_rest) in enumerate(LANES)}
+    own = {s.session_id: lane_of(s) for s in shown}
+    blocks = team_blocks(shown, team_states)
+    team_of = {s.session_id: state.team.name for state, members in blocks for _, s in members}
+    team_lane = {state.team.name: min((own[s.session_id] for _, s in members), key=rank.__getitem__)
+                 for state, members in blocks}
+    stuck = {state.team.name for state, members in blocks if any(s.session_id in pinned for _, s in members)}
+    placed: set[str] = set()
+    for s in shown:
+        lane = lanes[own[s.session_id]]
+        lane.count += 1
+        team = team_of.get(s.session_id)
+        if team is None:
+            lane.items.append(s.session_id)
+        elif own[s.session_id] != team_lane[team]:
+            lane.away[team] = lane.away.get(team, 0) + 1
+        elif team not in placed:
+            placed.add(team)
+            lane.items.append(TEAM_CARD + team)
+    for lane in lanes.values():
+        lane.items.sort(key=lambda item: not (item[len(TEAM_CARD):] in stuck if item.startswith(TEAM_CARD)
+                                              else item in pinned))
+        mine = [s for s in shown if own[s.session_id] == lane.key]
+        if lane.key == "open":
+            doing: dict[tuple[str, str, int], int] = {}
+            for s in mine:
+                doing[state_of(s)] = doing.get(state_of(s), 0) + 1
+            lane.words = [f"{count} {label}" for (label, _tone, _rank), count in sorted(doing.items(), key=lambda item: item[0][2])]
+        elif lane.key != "done":
+            lane.words = by_project(mine)
+    return list(lanes.values())
