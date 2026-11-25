@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import gc
 import math
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -39,6 +38,7 @@ from . import (
     actions,
     actor,
     agy,
+    alerts,
     background,
     browsers,
     claudeupdate,
@@ -62,7 +62,6 @@ from . import (
     teamwatch,
     toast,
     tokens,
-    typein,
     updates,
     usage,
     workspaces,
@@ -2144,26 +2143,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def warn_crowded(self, sessions) -> None:
         """Say so, once per session, when an open session's context passes the handover point.
         Nothing is handed over unless you ask."""
-        crowded = [s for s in sessions if s.exit is Exit.RUNNING and context.crowded(s, self.cap_of(s), self.default_cap)
-                   and s.session_id not in self.told_crowded]
-        if not crowded:
-            return
-        self.told_crowded |= {s.session_id for s in crowded}
-        if len(crowded) == 1:
-            session = crowded[0]
-            going = f" has been going for {duration((datetime.now() - session.started).total_seconds())} and" \
-                if session.started else ""
-            cap = self.cap_of(session)
-            size = human(session.context) + (f", {context.share(session, cap):.0%} of its cap" if cap else "")
-            self.notify(f"{session.project}{going} its context is {size}, and every reply reads all of it again. "
-                        "/compact in its tab goes on with the same work; h starts a new phase in a fresh session, "
-                        "and shows what is handed over.", title="Crowded session", timeout=12)
-            self.mascot.react("crowded", f"{session.project}: context {human(session.context)}", AMBER)
-        else:
-            names = ", ".join(s.project for s in crowded[:4])
-            self.notify(f"{len(crowded)} open sessions have crowded contexts ({names}). /compact in a tab goes "
-                        "on with the same work; h on one starts a new phase in a fresh session, and shows what is "
-                        "handed over.", title="Crowded sessions", timeout=12)
+        event = alerts.crowded_event(sessions, self.cap_of, self.default_cap, self.told_crowded)
+        if event is not None:
+            self.tell(event)
 
     def action_handover(self) -> None:
         team = self.team_at() if not self.selected else None
@@ -2527,31 +2509,28 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def deliver_notes(self) -> None:
         """The messages waiting for team members: typed in once one waits for you, never while it works
         or asks you something (Enter would answer a question on its screen)."""
-        for sid, (who, message) in list(self.notes.items()):
-            session = self.sessions.get(sid)
-            if session is None or session.exit is not Exit.RUNNING:
-                del self.notes[sid]
-                copy_text(self, message)
-                self.notify(f"{who} closed before its message went in: the message is on the clipboard.",
-                            severity="warning", timeout=12)
-            elif session.live_state in handover.IDLE:
-                del self.notes[sid]
-                self.type_note(session, who, message)
+        for due in alerts.deliveries(self.notes, self.sessions):
+            del self.notes[due.sid]
+            if due.closed is not None:
+                copy_text(self, due.closed.clipboard)
+                self.say_note(due.closed)
+            else:
+                self.type_note(due.session, due.who, due.message)
 
     @work(thread=True, group="notes")
     def type_note(self, session: Session, who: str, message: str) -> None:
-        if typein.type_into(session.session_id, message):
-            self.call_from_thread(self.notify, f"Sent to {who}.", timeout=5)
+        told = alerts.type_note(session, who, message)
+        if told.go_to is None:
+            self.call_from_thread(self.say_note, told)
         else:
-            self.call_from_thread(self.note_by_hand, session, who, message)
+            self.call_from_thread(self.note_by_hand, told)
 
-    def note_by_hand(self, session: Session, who: str, message: str) -> None:
+    def note_by_hand(self, told: actions.Told) -> None:
         """Nothing could type into its tab (not Windows, or its console would not take the keys): the
         message on the clipboard and you in its tab."""
-        copy_text(self, message)
-        self.go_to_tab(session)
-        self.notify(f"Could not type into {who}'s tab: the message is on the clipboard (Ctrl+V, Enter).",
-                    severity="warning", timeout=14)
+        copy_text(self, told.clipboard)
+        self.go_to_tab(told.go_to)
+        self.say_note(told)
 
     def accent(self) -> str:
         return THEMES.get(self.theme, THEMES[DEFAULT_THEME])[1]
@@ -2626,16 +2605,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.sync_rows(changed_agy)
                 self.update_dashboard()
         now = time.monotonic()
-        for name, state in states.items():
-            said = {(m.sender, m.receiver, m.text) for m in state.said}
-            seen = self.team_seen.get(name)
-            new = [(m, now) for m in state.between_members() if (m.sender, m.receiver, m.text) not in (seen or ())]
-            if seen is not None and new:  # the first look only takes note: history does not fly
-                self.team_flights.setdefault(name, []).extend(new)
-                if self.team_graph is not None and self.team_graph.team.name == name:
-                    for message, _ in new:
-                        self.team_graph.launch_flight(message)
-            self.team_seen[name] = said
+        said, seen = alerts.team_events(states, self.team_seen)
+        for event in said:  # the first look at a team only takes note: history does not fly
+            self.team_flights.setdefault(event.team, []).append((event.message, now))
+            if self.team_graph is not None and self.team_graph.team.name == event.team:
+                self.team_graph.launch_flight(event.message)
+        self.team_seen.update(seen)
         if states == self.team_states:
             return
         self.team_states = states
@@ -3016,14 +2991,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         free = [s for s in self.sessions.values() if at_limit(s) and s.signed_in_again]
         who = accounts.words(self.account, 80, org=self.account.email in accounts.shared_emails()) \
             if self.account is not None else ""
+        self.tell(alerts.signed_in_event(len(free), who))
         if free:
-            self.mascot.react("lifted", f"Signed in as {who}: {len(free)} stopped at a limit can go on. "
-                              "c continues them", AMBER, seconds=10)
             for session in free:
                 self.update_row(session)
             self.update_detail()
-        else:
-            self.mascot.say(f"Signed in as {who}", self.accent(), seconds=6)
 
     def action_accounts(self) -> None:
         """A: the Claude accounts you use, to sign in with another (Claude Code's own sign-in, in a tab),
@@ -3122,23 +3094,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def update_claude(self) -> None:
         """claude update (claudeupdate.py), and with a new version, whether it still takes every flag
         tabmancer runs it with (doctor's check)."""
-        outcome = claudeupdate.run()
-        missing = None
-        if outcome.changed and (claude := shutil.which("claude")):
-            from .doctor import missing_from_cli
-
-            missing = missing_from_cli(claude)
-        self.call_from_thread(self.claude_updated, outcome, missing)
+        self.call_from_thread(self.claude_updated, *alerts.run_claude_update())
 
     def claude_updated(self, outcome: claudeupdate.Outcome, missing: list[str] | None) -> None:
         self.updating_claude = False
         waiting, self.after_claude_update = self.after_claude_update, []
-        if outcome.changed or not outcome.ok or waiting:
-            self.notify(outcome.words(), severity="information" if outcome.ok else "warning",
-                        timeout=10 if outcome.ok else 20)
-        if missing:
-            self.notify(f"Claude Code {outcome.after} no longer lists what tabmancer runs it with: "
-                        f"{'; '.join(missing)}. tabmancer doctor says more.", severity="error", timeout=30)
+        for note in alerts.update_notes(outcome, missing, bool(waiting)):
+            self.notify(note.words, severity=note.severity, timeout=note.seconds)
         for then in waiting:
             then()
 
@@ -3148,7 +3110,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if not self.updating_claude:
             return False
         self.after_claude_update.append(then)
-        self.notify(f"Claude Code is updating: {what} once it is done.", timeout=8)
+        self.say_note(alerts.updating_note(what))
         return True
 
     def tell_update(self, version: str, command: str) -> None:
@@ -3576,12 +3538,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         stopped = actions.newly_stopped(self.sessions, at, self.told_limit, self.armed)
         if not stopped:
             return
-        self.told_limit.update(s.session_id for s in stopped)
-        said = actions.limit_say(stopped, lambda soon: self.other_accounts_note(soon)[1])
-        if said.mood:
-            self.mascot.react(said.mood, said.words, AMBER, seconds=said.seconds)
-        else:
-            self.mascot.say(said.words, AMBER, seconds=said.seconds)
+        event = alerts.stopped_event(stopped, lambda soon: self.other_accounts_note(soon)[1])
+        self.told_limit.update(event.once_keys)
+        self.show_bit(event.bit)
 
     def save_queued(self) -> None:
         """This window's queued handovers, saved for the other windows to show (actions.read_queued)."""
@@ -3714,8 +3673,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.warn_crowded(updates.values())
         store.rest(updates.values(), self.resting_members())  # a member done for now waits for its lead, not for you
         turned: list[Session] = []  # were working and now wait for you, or stopped at a limit
+        handing = {sid for sid, fresh in updates.items() if sid in self.queued and actions.finished(fresh)}
+        said: dict[str, list[alerts.Event]] = {}
+        for event in alerts.events(self.sessions, updates, self.told_crowded, self.cap_of, self.default_cap,
+                                   self.who, skip=handing):
+            said.setdefault(event.session, []).append(event)
         for sid, fresh in updates.items():
-            if sid in self.queued and actions.finished(fresh):
+            if sid in handing:
                 how = self.queued.pop(sid)  # it finished: the handover asked for with h
                 self.save_queued()
                 done = actions.queued_finished(sid, fresh, self.watch is not None, actor.first_to)
@@ -3726,25 +3690,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.unasked.add(sid)  # its fresh session opens by itself: in the dashboard's window
                 self.hand_over(fresh, how)
                 continue
-            old = self.sessions.get(sid)
-            if fresh.exit is Exit.RUNNING and fresh.fell_back and (old is None or old.fell_back != fresh.fell_back):
-                self.tell_fallback(fresh)
-            was = state_of(old)[2] if old and old.exit is Exit.RUNNING else None
-            now = state_of(fresh)[2] if fresh.exit is Exit.RUNNING else None
-            if was == 2 and at_limit(fresh):
-                turned.append(fresh)
-            if was == 2 and now in (0, 1):  # it was working, now it needs you
-                turned.append(fresh)
-                if self.live_mode:
-                    self.bell()
-                words = f"{fresh.project}: {state_of(fresh)[0]}"
-                if now == 0 and fresh.status is Status.BACKGROUND:  # nowhere to answer but in it
-                    words += f" ({fresh.title}). It runs in the background: Enter on its row attaches to it."
-                self.notify(words, timeout=10)
-                if now == 1:
-                    self.mascot.celebrate(fresh.project)  # done, waiting for your next message
-                else:
-                    self.mascot.alert(fresh.project)  # blocked: it needs an answer
+            for event in said.get(sid, []):  # fell back; stopped at a limit; needs you or done
+                if event.toast:
+                    turned.append(fresh)
+                self.tell(event)
         if turned and self.acts:  # the dashboard sends them: a monitor's would be a second one
             self.tell_desktop(turned)
         changed = {sid for sid, fresh in updates.items() if self.sessions.get(sid) != fresh}
@@ -3769,18 +3718,56 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.update_dashboard()
             self.check_limits()
 
-    def tell_fallback(self, session: Session) -> None:
-        """Another model took over in an open session by itself (its safeguards stopped a reply, say):
-        it goes on, weaker, unless you pick the model again, so it is said once, loud."""
-        who = session.project
+    def who(self, session: Session) -> str:
+        """A session as a note names it: its project, or a team member as 'team: member'."""
         if session.session_id in self.member_rows:
             team, member = self.member_rows[session.session_id]
-            who = f"{team}: {member}"
-        self.notify(f"{who}: {session.fell_back}. It goes on with that model: /model in its tab picks yours again.",
-                    title="Model fell back", severity="warning", timeout=15)
-        if self.live_mode:
+            return f"{team}: {member}"
+        return session.project
+
+    def tell_fallback(self, session: Session) -> None:
+        """Another model took over in an open session by itself (alerts.fallback_event)."""
+        self.tell(alerts.fallback_event(session, self.who(session)))
+
+    def tell(self, event: alerts.Event) -> None:
+        """An event as the dashboard says it: its note, the bell where the live list shows, Bit; and
+        the sessions it is said for once, kept (crowded)."""
+        if event.kind == alerts.CROWDED:
+            self.told_crowded |= set(event.once_keys)
+        ring = event.bell and self.live_mode
+        turned = event.kind in (alerts.NEEDS_YOU, alerts.DONE)
+        if ring and turned:  # a turn rings before its note, a fallback after (as always)
             self.bell()
-        self.mascot.alert(session.project)
+        if event.note is not None:
+            self.say_note(event.note)
+        if ring and not turned:
+            self.bell()
+        if event.bit is not None:
+            self.show_bit(event.bit)
+
+    def say_note(self, note: actions.Note) -> None:
+        """A note, with only what it sets beyond notify's defaults (its title, severity, timeout)."""
+        extra = {}
+        if getattr(note, "title", ""):
+            extra["title"] = note.title
+        if note.severity != "information":
+            extra["severity"] = note.severity
+        if note.seconds is not None:
+            extra["timeout"] = note.seconds
+        self.notify(note.words, **extra)
+
+    def show_bit(self, bit: alerts.Bit) -> None:
+        """What Bit does for an event: the front end's part (alerts.Bit says what happened, how loud)."""
+        colour = {"amber": AMBER, "green": GREEN}.get(bit.tone) or self.accent()
+        timing = {} if bit.seconds is None else {"seconds": bit.seconds}
+        if bit.how == "celebrate":
+            self.mascot.celebrate(bit.words)
+        elif bit.how == "alert":
+            self.mascot.alert(bit.words)
+        elif bit.how == "react":
+            self.mascot.react(bit.mood, bit.words, colour, **timing)
+        else:
+            self.mascot.say(bit.words, colour, **timing)
 
     def resting_members(self) -> set[str]:
         """The sessions of the teams' members other than their leads: idle, they wait for the lead's
@@ -3792,23 +3779,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         is (toast.show); elsewhere the terminal reports focus."""
         if not toast.enabled() or (sys.platform != "win32" and self.app_focus):
             return
-        if len(turned) > 1:
-            title = f"{len(turned)} sessions want you back"
-            body = ", ".join(f"{s.project} ({state_of(s)[0]})" for s in turned)
-        elif at_limit(turned[0]):
-            session = turned[0]
-            title = f"{session.project} stopped at the usage limit"
-            ahead = session.resets and session.resets > datetime.now()
-            when = f"at {lifts(session.resets)}" if ahead else "now"
-            body = f"It lifts {when}. c in the dashboard continues it then."
-            note, _ = self.other_accounts_note(session.resets if ahead else None)
-            if note:
-                body += f"\n{note}"
-        else:
-            session = turned[0]
-            title = f"{session.project}: {state_of(session)[0]}"
-            body = session.title
-        self.send_toast(title, body)
+        self.send_toast(*alerts.toast_words(turned, lambda opens: self.other_accounts_note(opens)[0]))
 
     @work(thread=True, group="toast")
     def send_toast(self, title: str, body: str) -> None:
@@ -3909,8 +3880,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.open_in_dashboard_window(launches)
             return
         if not updated:
-            if (not self.updating_claude and any(launch.cli == "claude" for launch in launches)
-                    and claudeupdate.due()):
+            if alerts.update_due(self.updating_claude, (launch.cli for launch in launches)):
                 self.updating_claude = True
                 self.update_claude()
             if self.after_update("the session opens" if len(launches) == 1
@@ -3948,9 +3918,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """Say which of the sessions opened a while ago never showed up open: Claude Code would not
         resume one (its folder gone, say), and its tab says why. After a reboot, with a dozen tabs
         opening at once, one of them is easy to miss."""
-        words = actions.came_up_missing(ids, self.came_up, self.sessions)
-        if words:
-            self.notify(words, severity="warning", timeout=15)
+        event = alerts.not_up_event(ids, self.came_up, self.sessions)
+        if event is not None:
+            self.tell(event)
 
     def open_elsewhere(self, launches: list[Launch]) -> set[str]:
         """Which of these sessions to resume a Claude process has open right now (actions.open_elsewhere)."""
