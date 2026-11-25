@@ -52,6 +52,14 @@ def test_the_notes():
     assert handoverwords.team_not_started_note(team).seconds == 10
 
 
+def test_closing_with_handovers_queued_or_under_way_says_what_goes():
+    assert handoverwords.queued_on_closing(1) == "1 handover is queued here: closing drops it. Close anyway?"
+    assert handoverwords.queued_on_closing(2) == "2 handovers are queued here: closing drops them. Close anyway?"
+    one = handoverwords.finishing_note(["api"])
+    assert one.words == "Finishing the handover of api… the window closes once it is written."
+    assert handoverwords.finishing_note(["api", "team web"]).words.endswith("once they are written.")
+
+
 def test_the_line_up_preview():
     team = teams.new_team("shop", "C:/work/shop", "g", teams.parse_members("lead: steer\napi: a", lead_ok=True))
     assert handoverwords.lineup_problems(team, []) == ["a member at least, one a line"]

@@ -68,7 +68,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, actions, bitart, clis, commands, engine, marks, search, teams
+from .. import __version__, actions, bitart, clis, commands, engine, handoverwords, marks, search, teams
 from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
@@ -76,6 +76,7 @@ from ..sessions import Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
 from . import commandbar, frame, look, monitor, teamgraph
 from .board import Board
+from .closing import CloseDialog
 from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
 from .front import WindowFront
@@ -233,6 +234,8 @@ class MainWindow(QMainWindow):
         self.opener.closed.connect(self.closed_tabs)
         self.monitors: dict[str, MonitorWindow] = {}  # M: each team's monitor opened from here
         self.popup: QMenu | None = None  # a card's or a row's menu, while it is shown
+        self.leaving = False  # closing anyway: the handovers queued here dropped (CloseDialog), or the app quit
+        self.close_after = False  # closed while a handover was written: closes once it is (finish_closing)
         self.tick()
         self.board.setFocus()  # the arrows pick a card from the start
         if start:
@@ -1212,6 +1215,20 @@ class MainWindow(QMainWindow):
             dock.show()
 
     def closeEvent(self, event) -> None:
+        """Handovers queued here go with the window, so it asks first (CloseDialog). One being written is never
+        cut short (a session closed to write its own would lose it): the window says so and stays till it is
+        written and its fresh session opened (finish_closing)."""
+        if self.engine.state.queued and not self.leaving:
+            event.ignore()
+            self.ask_to_close()
+            return
+        if self.front.handing_now() or (self.close_after and self.engine.state.updating_claude):
+            event.ignore()
+            self.close_after = True
+            if handing := self.front.handing_now():
+                note = handoverwords.finishing_note(handing)
+                self.say_note(note.words, float(note.seconds or 4), note.severity)
+            return
         self.door.close()
         self.timer.stop()
         self.ticker.stop()
@@ -1223,6 +1240,29 @@ class MainWindow(QMainWindow):
             shown.deleteLater()
         frame.save_layout(self, LAYOUT_KEY)
         super().closeEvent(event)
+
+    def ask_to_close(self) -> None:
+        """The handovers queued here, by name: closed anyway (accepted), they are dropped; else nothing changes."""
+        if any(asked.isVisible() for asked in self.findChildren(CloseDialog)):
+            return  # asked already
+        sessions = self.engine.state.sessions
+        names = [self.front.who(sessions[sid]) if sid in sessions else sid[:8] for sid in self.engine.state.queued]
+        asked = CloseDialog(self, names, self.accent)
+        asked.accepted.connect(self.close_anyway)
+        asked.open()
+
+    def close_anyway(self) -> None:
+        """The handovers queued here dropped, the other dashboards told (they showed them queued), and closed."""
+        self.leaving = True
+        self.engine.state.queued.clear()
+        actions.save_queued({})
+        self.close()
+
+    def finish_closing(self) -> None:
+        """A handover's thread over, or a claude update done: a window closed meanwhile closes now, unless
+        another is still written, or the fresh session still waits for the update (closeEvent decides)."""
+        if self.close_after:
+            self.close()
 
 
 def elsewhere(shown: QMainWindow, beside: QMainWindow) -> None:
@@ -1266,6 +1306,7 @@ def run(demo: bool = False, days: float = DAYS, include_all: bool = False) -> in
             window.show()
             code = app.exec()
             if window.isVisible():  # the app was told to quit, the window not closed: its layout is kept too
+                window.leaving = True  # nothing can be asked now; a handover being written: settle waits for it
                 window.close()
             return code
         finally:

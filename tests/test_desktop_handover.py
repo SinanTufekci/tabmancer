@@ -39,6 +39,7 @@ from tabmancer import (
     shutdowns,
 )
 from tabmancer.desktop import frame, front, look, main, opening
+from tabmancer.desktop.closing import CloseDialog
 from tabmancer.desktop.handover import HandoverDialog
 from tabmancer.sessions import Session
 
@@ -331,3 +332,110 @@ def test_the_opened_sessions_and_the_leftovers_are_the_windows_way(qapp, window,
     assert QApplication.clipboard().text() == "claude --resume made-up"
     assert shown.bit_line.text() == opening.NO_TERMINAL and look.AMBER in shown.bit_line.styleSheet()
     assert shown.isVisible()  # the window stays: the terminal dashboard exits with them instead
+
+
+def close_dialog_of(shown) -> CloseDialog:
+    (found,) = [d for d in shown.findChildren(CloseDialog) if d.isVisible()]
+    return found
+
+
+def test_closing_with_handovers_queued_here_asks_first_and_keeps_them_unless_closed_anyway(qapp, window, monkeypatch):
+    """h on a busy one queues its handover in this window, which alone hands it over: closing asks, by name.
+    Esc, Enter or Keep it open keep the window and the queue; Close anyway drops them, for every window."""
+    shown = window()
+    read(qapp, shown)
+    busy = busy_one(shown)
+    monkeypatch.setattr(shown.front, "hand_over", lambda session, how: pytest.fail("handed over on closing"))
+    shown.engine.handover(busy, "transcript")
+    assert shown.engine.state.queued == {busy.session_id: "transcript"}
+    assert actions.read_queued() == {busy.session_id: "transcript"}  # the other windows show it queued
+    for key in (Qt.Key.Key_Escape, Qt.Key.Key_Return):
+        shown.close()
+        shown.close()  # asked once, however often
+        asked = close_dialog_of(shown)
+        assert handoverwords.queued_on_closing(1) in asked.question.text()
+        assert shown.front.who(busy) in asked.names.text() and asked.focusWidget() is asked.keep
+        QTest.keyClick(asked.focusWidget(), key)
+        qapp.processEvents()
+        assert not asked.isVisible() and shown.isVisible()
+        assert shown.engine.state.queued == {busy.session_id: "transcript"}
+    shown.close()
+    close_dialog_of(shown).leave.click()
+    qapp.processEvents()
+    assert not shown.isVisible() and not shown.engine.state.queued and actions.read_queued() == {}
+
+
+def test_closing_while_a_handover_is_written_waits_for_it_and_its_fresh_session(qapp, window, world, monkeypatch):
+    """The handover's thread is never cut short (a session closed to write its own would lose it): the window
+    says so, stays, and closes once it is written and its fresh session opened, after the claude update the
+    fresh session waited for."""
+    shown = window()
+    read(qapp, shown)
+    session = closed_one(shown)
+    written_now, updated_now = threading.Event(), threading.Event()
+
+    def written(old, how, now, member_of):
+        assert written_now.wait(10)
+        return actions.Handed("THE HANDOVER")
+
+    def update():
+        assert updated_now.wait(10)
+        return claudeupdate.Outcome(True, "2.1.0", "2.1.1"), None
+
+    monkeypatch.setattr(actions, "write_handover", written)
+    shown.engine.handover(session, "transcript")
+    shown.close()
+    assert shown.isVisible() and shown.close_after
+    written_now.set()
+    until(qapp, lambda: not shown.isVisible())  # no update due: closed as its fresh session opened
+    assert [fresh.prompt.endswith("THE HANDOVER") for fresh in world.opened] == [True]
+    world.opened.clear()
+    written_now.clear()
+    shown = window()
+    read(qapp, shown)
+    monkeypatch.setattr(alerts, "update_due", lambda updating, clis: not updating)
+    monkeypatch.setattr(alerts, "run_claude_update", update)
+    shown.engine.handover(session, "transcript")
+    assert shown.front.handing_now() == [session.project]
+    shown.close()
+    assert shown.isVisible() and shown.close_after
+    assert shown.bit_line.text() == handoverwords.finishing_note([session.project]).words
+    written_now.set()
+    until(qapp, lambda: not shown.front.handing_now() and shown.engine.state.updating_claude)
+    assert shown.isVisible() and not world.opened  # written; its fresh session waits for the update
+    updated_now.set()
+    until(qapp, lambda: not shown.isVisible())
+    (fresh,) = world.opened
+    assert fresh.prompt.endswith("THE HANDOVER")
+
+
+def test_settle_waits_for_a_handover_however_long_and_cuts_the_rest_short(qapp, window, monkeypatch):
+    """settle is the last wait before the process ends, and these threads with it: a session's handover and a
+    team's run to their end; any other thread is waited for up to the seconds given."""
+    shown = window()
+    read(qapp, shown)
+    session = closed_one(shown)
+    team = next(iter(shown.snap.team_states.values())).team
+    go, other = threading.Event(), threading.Event()
+
+    def written(old, how, now, member_of):
+        assert go.wait(10)
+        return actions.Handed("THE HANDOVER")
+
+    def team_written(team, members, now, close_tabs):
+        assert go.wait(10)
+
+    monkeypatch.setattr(actions, "write_handover", written)
+    monkeypatch.setattr(actions, "write_team_handover", team_written)
+    shown.engine.handover(session, "transcript")
+    shown.front.hand_over_team(team, {})
+    shown.front.start(other.wait, 10)  # an ordinary thread
+    assert sorted(shown.front.handing_now()) == sorted([session.project, f"team {team.name}"])
+    threading.Timer(0.3, go.set).start()
+    shown.front.settle(0.05)
+    handing = [t for t in shown.front.workers if t.name == front.HANDOVER_THREAD]
+    assert len(handing) == 2 and not any(t.is_alive() for t in handing) and not shown.front.handing_now()
+    assert [t.is_alive() for t in shown.front.workers if t.name != front.HANDOVER_THREAD] == [True]  # cut short
+    other.set()
+    shown.front.settle()
+    qapp.processEvents()  # the handover's Signal, late: the fresh session opens all the same

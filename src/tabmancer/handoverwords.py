@@ -87,6 +87,25 @@ def team_handed_note(team: teams.Team, fresh: teams.Team) -> Told:
                 seconds=10, title="Team handed over")
 
 
+QUEUED_WHY = ("Each is handed over by the window that queued it, once its session finishes: closed, nothing "
+              "hands them over. The sessions stay as they are.")
+
+
+def queued_on_closing(count: int) -> str:
+    """Asked on closing a window with handovers queued in it (h on sessions at work): they go with it."""
+    many = count != 1
+    return (f"{count} handover{'s' if many else ''} {'are' if many else 'is'} queued here: closing drops "
+            f"{'them' if many else 'it'}. Close anyway?")
+
+
+def finishing_note(names: list[str]) -> Note:
+    """Said on closing while a handover is written (minutes): the window waits for it, since one cut short
+    loses it (a session that writes its own is closed before it starts writing)."""
+    many = len(names) != 1
+    return Note(f"Finishing the handover of {', '.join(names)}… the window closes once "
+                f"{'they are' if many else 'it is'} written.", seconds=30)
+
+
 def cap_words(chosen: str) -> str:
     """'300K: …' for the cap picked in the team handover dialog."""
     return f"{CAP_SHORT.get(chosen, chosen)}: {picks.cap_words(chosen)}"

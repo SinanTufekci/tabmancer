@@ -7,7 +7,8 @@ handover is written on a thread of its own and comes back by a Signal (Engine.ha
 fresh session opens as the engine opens one (Engine.open). h twice on a team the same way: its lead writes
 the handover on a thread (Engine.team_handover), its dialog shows it with the line-up (desktop/teamhandover.py),
 and the new generation opens as the terminal's opens (teamkeys.TeamKeys.open_team: claude --bg members on a
-thread, then the tabs).
+thread, then the tabs). A handover being written is never cut short: the window closing waits for it
+(handing_now), and so does settle, however long it takes.
 
 The window never acts: its Engine's state.acts stays False and nothing here claims the actor lock, so
 what happens by itself (a desktop note for the sessions that turned, continuing at a limit's reset,
@@ -48,6 +49,7 @@ TONES = {"amber": look.AMBER, "green": look.GREEN, "red": look.RED}  # Bit's ton
 NOW_SECONDS = 5.0  # how long a handover's thread waits for the window to say how the session is now
 WAITING_BITS = 3  # Bit's words that wait their turn behind something said: the newest few
 FAILED_SECONDS = 15.0  # how long a handover that failed is said
+HANDOVER_THREAD = "tabmancer-handover"  # a handover's thread: never cut short on closing (settle)
 
 
 @dataclass
@@ -71,12 +73,14 @@ class WindowFront(QObject):
     team_handed = Signal(object, object, str, str, bool)  # a team's handover written: team, lead, handover, line-up, suggested
     noted = Signal(object)  # a thread's actions.Note, said on the window's thread
     started = Signal(object)  # a team's background members started: the tabs to open now (Launches)
+    ended = Signal()  # a handover's thread is over, whatever came of it
 
     def __init__(self, window: MainWindow, update: bool = True) -> None:
         super().__init__(window)
         self.update = update
         self.members: dict[str, tuple[str, str]] = {}  # session id -> (team, member), as the last reading had them
         self.workers: list[threading.Thread] = []
+        self.handing: dict[threading.Thread, str] = {}  # the handovers being written: thread -> what is handed over
         self.waiting: list[tuple[str, float, str]] = []  # Bit's words waiting their turn: (words, seconds, colour)
         self.handed.connect(self.handover_ready)
         self.failed.connect(self.handover_failed)
@@ -85,6 +89,7 @@ class WindowFront(QObject):
         self.team_handed.connect(self.team_handover_ready)
         self.noted.connect(self.say_note)
         self.started.connect(self.open_sessions)
+        self.ended.connect(self.handover_ended)
 
     def window(self) -> MainWindow:
         return self.parent()  # type: ignore[return-value]
@@ -196,7 +201,7 @@ class WindowFront(QObject):
         """The handover written on a thread of its own (actions.write_handover: a minute or more, the old
         session closed on the way); back on the window's thread by a Signal, Engine.handover_ready opens
         the fresh one."""
-        self.start(self.write, session, how)
+        self.start(self.write, session, how, handing=session.project)
 
     def write(self, session: Session, how: str) -> None:
         try:
@@ -227,13 +232,22 @@ class WindowFront(QObject):
     def handover_failed(self, words: str) -> None:
         self.window().say_note(words, FAILED_SECONDS, "error")
 
+    def handover_ended(self) -> None:
+        """A handover's thread over (after what came of it, by its own Signal): a window closing meanwhile
+        closes now, if that was the last one."""
+        self.window().finish_closing()
+
+    def handing_now(self) -> list[str]:
+        """What the handovers being written hand over (a session's project, a team): closing waits for them."""
+        return list(self.handing.values())
+
     # --- h twice on a team ----------------------------------------------------------------------------
 
     def hand_over_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
         """The whole team handed over on a thread of its own (actions.write_team_handover: its members'
         tabs closed, its lead resumed once to write the handover and the line-up, minutes); back by a
         Signal, Engine.team_handover_ready shows them (ask_team_start)."""
-        self.start(self.write_team, team, members)
+        self.start(self.write_team, team, members, handing=f"team {team.name}")
 
     def write_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
         try:
@@ -315,20 +329,39 @@ class WindowFront(QObject):
         self.emit("updated", *alerts.run_claude_update())
 
     def claude_updated(self, outcome: claudeupdate.Outcome, missing: list[str] | None) -> None:
-        self.window().engine.claude_updated(outcome, missing)
+        """Done: what waited for it opens (a handover's fresh session among them); a window closing meanwhile
+        closes now."""
+        window = self.window()
+        window.engine.claude_updated(outcome, missing)
+        window.finish_closing()
 
     # --- threads ------------------------------------------------------------------------------------
 
-    def start(self, work: Callable[..., None], *args: object) -> None:
+    def start(self, work: Callable[..., None], *args: object, handing: str = "") -> None:
+        """work(*args) on a thread of its own. handing: a handover's, what it hands over (handing_now): the
+        window closing waits for it, and so does settle, however long it takes."""
         self.workers = [thread for thread in self.workers if thread.is_alive()]
-        thread = threading.Thread(target=work, args=args, daemon=True, name="tabmancer-front")
+        thread = threading.Thread(target=self.work_on, args=(work, args, handing), daemon=True,
+                                  name=HANDOVER_THREAD if handing else "tabmancer-front")
+        if handing:
+            self.handing[thread] = handing
         self.workers.append(thread)
         thread.start()
 
+    def work_on(self, work: Callable[..., None], args: tuple[object, ...], handing: str) -> None:
+        try:
+            work(*args)
+        finally:
+            if handing:
+                self.handing.pop(threading.current_thread(), None)
+                self.emit("ended")
+
     def settle(self, seconds: float = 10) -> None:
-        """Wait for what is under way (on closing, and in tests)."""
+        """Wait for what is under way (on closing, and in tests): a handover till it is written, however long
+        (cut short, a session closed to write its own would lose it: the process ends with the window's
+        thread, and these threads with it); the rest up to seconds each."""
         for thread in list(self.workers):
-            thread.join(seconds)
+            thread.join(None if thread.name == HANDOVER_THREAD else seconds)
 
     def emit(self, signal: str, *args: object) -> bool:
         """One of the front's Signals, by name, from a thread: False when the window has gone meanwhile."""
