@@ -10,7 +10,8 @@ It only watches, as a second dashboard does: the dashboard's store (store.Dashbo
 on a thread of its own every two seconds, and nothing here claims the actor lock, records a plan
 limit or an account, opens, starts or closes a session. The panels fill in slice by slice; till
 then a key not done here is greyed in its menu and in the key bar, and done in the terminal
-dashboard (tabmancer).
+dashboard (tabmancer). The Team panel (teampanel), a tab beside the list, shows each team's
+picture over its conversation; T brings it to the front.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ from ..store import DashboardStore, DashSnapshot
 from . import frame, look
 from .frame import KeysDialog, made_up_world
 from .monitor import sequences, short
+from .teampanel import TeamPanel
 from .widgets import KeyBar, bit_pixmap, text_label
 
 POLL_MS = 2000  # as often as the terminal dashboard reads its pid files (LIVE_REFRESH_SECONDS)
@@ -52,7 +54,7 @@ INFO_LEAST = 20  # characters the info line keeps before the accounts give way
 LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
-HERE = {"?", "q"}
+HERE = {"?", "q", "T"}
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
 KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), ("c", "continue"), ("M", "monitor"),
@@ -60,13 +62,14 @@ KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), 
 # The top bar's tones (viewmodel.usage_parts, account_parts) as colours.
 TONES = {"muted": look.MUTED, "text": look.TEXT, "empty": "#2a2a2a", "ok": look.GREEN, "low": look.AMBER,
          "out": look.RED}
-PANELS = ("Sessions", "Preview", "Projects", "Cards", "Bit")
+PANELS = ("Sessions", "Preview", "Projects", "Cards", "Bit", "Team")
 SOON = {
     "Sessions": "The sessions, their teams and members",
     "Preview": "The highlighted session: how it stands, what it said last",
     "Projects": "The projects, with where each stands in git",
     "Cards": "Open now · need you · to continue · this week",
     "Bit": "",
+    "Team": "",
 }
 
 
@@ -114,7 +117,9 @@ class MainWindow(QMainWindow):
         self.resize(1500, 950)
         self.build()
         self.default_state = self.saveState(frame.LAYOUT_VERSION)
-        frame.restore_layout(self, LAYOUT_KEY)
+        known = frame.restore_layout(self, LAYOUT_KEY)
+        frame.place_new(self, known, self.docks["Team"], [self.docks["Sessions"], self.docks["Preview"]],
+                        Qt.DockWidgetArea.RightDockWidgetArea)
         self.started = time.monotonic()
         self.ticker = QTimer(self)
         self.ticker.timeout.connect(self.tick)
@@ -143,6 +148,9 @@ class MainWindow(QMainWindow):
         self.splitDockWidget(docks["Cards"], docks["Projects"], Qt.Orientation.Vertical)
         self.splitDockWidget(docks["Projects"], docks["Sessions"], Qt.Orientation.Horizontal)
         self.splitDockWidget(docks["Sessions"], docks["Bit"], Qt.Orientation.Vertical)
+        self.tabifyDockWidget(docks["Sessions"], docks["Team"])  # a tab beside the list: T, or its tab
+        docks["Sessions"].raise_()
+        docks["Team"].visibilityChanged.connect(self.team_panel.wake)  # behind a tab: its picture rests
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, docks["Preview"])
         self.resizeDocks([docks["Projects"], docks["Sessions"], docks["Preview"]], [230, 760, 500],
                          Qt.Orientation.Horizontal)
@@ -196,7 +204,11 @@ class MainWindow(QMainWindow):
         inside.setStyleSheet(f"background:{look.BLACK};")
         box = QVBoxLayout(inside)
         box.setContentsMargins(12, 10, 12, 10)
-        if title == "Bit":
+        if title == "Team":
+            self.team_panel = TeamPanel(self.accent)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.addWidget(self.team_panel)
+        elif title == "Bit":
             line = QHBoxLayout()
             self.bit = QLabel()
             self.bit.setStyleSheet("background:transparent;")
@@ -218,7 +230,7 @@ class MainWindow(QMainWindow):
         bar = self.menus
         bar.setFont(look.font(9.5))
         self.actions_by_key: dict[str, QAction] = {}
-        doing = {"?": self.show_keys, "q": self.close}
+        doing = {"?": self.show_keys, "q": self.close, "T": self.show_teams}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
             menu.setToolTipsVisible(True)
@@ -286,6 +298,7 @@ class MainWindow(QMainWindow):
         self.snap, self.agy_first = snap, first
         self.show_top()
         self.show_bit()
+        self.team_panel.set(snap)
 
     # --- showing ----------------------------------------------------------------------------------
 
@@ -341,6 +354,13 @@ class MainWindow(QMainWindow):
 
     def show_keys(self) -> None:
         KeysDialog(self, "Keys · tabmancer", KEYS, HERE, ELSEWHERE).show()
+
+    def show_teams(self) -> None:
+        """T: the Team panel to the front (back where it was, if it was closed), its tabs to pick with."""
+        dock = self.docks["Team"]
+        dock.show()
+        dock.raise_()
+        self.team_panel.tabs.setFocus()
 
     # --- one window -------------------------------------------------------------------------------
 

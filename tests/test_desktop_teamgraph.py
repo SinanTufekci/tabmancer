@@ -16,7 +16,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QColor, QContextMenuEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 from tabmancer import teams
 from tabmancer import viewmodel as VM
@@ -320,3 +320,31 @@ def test_calm_paints_once_more_when_its_bubble_goes(graph):
     assert not calm.frames.isActive()  # nothing moves in calm once landed
     gone_ms = (teamgraph.BUBBLE_SECONDS - 0.01) * 1000
     assert calm.lights.isActive() and gone_ms <= calm.lights.interval() <= gone_ms + 50
+
+
+def test_its_window_minimized_rests_it_and_back_wakes_it(qapp):
+    """Minimized, its window hides it and its clock stops; back, it starts again. The window's own
+    signals are followed too (no event filter left on a window), and out of sight it rests."""
+    holder = QWidget()
+    g = teamgraph.TeamGraph(now=Clock())
+    g.setParent(holder)
+    holder.resize(900, 560)
+    g.resize(900, 560)
+    holder.show()
+    try:
+        g.set(busy_team(), [], COLOURS)
+        assert g.breaths.isActive() and g.watched is holder.windowHandle()
+        holder.showMinimized()
+        qapp.processEvents()
+        assert not g.breaths.isActive()
+        holder.showNormal()
+        qapp.processEvents()
+        assert g.breaths.isActive()
+        g.move(2000, 0)  # out of its window's sight, as a panel behind another tab
+        g.wake()
+        assert not g.breaths.isActive()
+    finally:
+        holder.close()
+        holder.deleteLater()
+        qapp.processEvents()
+

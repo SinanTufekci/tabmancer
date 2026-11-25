@@ -13,9 +13,9 @@ import tempfile
 from collections.abc import Generator
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray
+from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QDialog, QMainWindow, QTextBrowser, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QDockWidget, QMainWindow, QTextBrowser, QVBoxLayout, QWidget
 
 from ..config import config_dir, merge_json, read_json
 from . import look
@@ -53,25 +53,49 @@ def listen(server: QLocalServer, name: str) -> None:
         server.listen(name)
 
 
-def restore_layout(window: QMainWindow, key: str) -> None:
-    """The window's size, place and panels as it was last closed (desktop.json, under key)."""
+def restore_layout(window: QMainWindow, key: str) -> set[str] | None:
+    """The window's size, place and panels as it was last closed (desktop.json, under key). Says
+    which panels (by object name) that layout knew, so one new since can go where it starts
+    (place_new): Qt squeezes a panel its saved layout does not name in beside the others. A layout
+    kept before it named them knew none. None: nothing kept or readable, the panels as they start."""
     saved = read_json(LAYOUT_FILE)
     kept = saved.get(key) if isinstance(saved, dict) else None
     if not isinstance(kept, dict):
-        return
+        return None
     try:
         if kept.get("geometry"):
             window.restoreGeometry(QByteArray(base64.b64decode(kept["geometry"])))
-        if kept.get("state"):
-            window.restoreState(QByteArray(base64.b64decode(kept["state"])), LAYOUT_VERSION)
+        if kept.get("state") and not window.restoreState(QByteArray(base64.b64decode(kept["state"])),
+                                                         LAYOUT_VERSION):
+            return None
     except (TypeError, ValueError):
-        pass  # a layout written by hand or cut short: the panels as they start
+        return None  # a layout written by hand or cut short: the panels as they start
+    named = kept.get("docks")
+    return {name for name in named if isinstance(name, str)} if isinstance(named, list) else set()
 
 
 def save_layout(window: QMainWindow, key: str) -> None:
     merge_json(LAYOUT_FILE, **{key: {
         "geometry": base64.b64encode(bytes(window.saveGeometry().data())).decode("ascii"),
-        "state": base64.b64encode(bytes(window.saveState(LAYOUT_VERSION).data())).decode("ascii")}})
+        "state": base64.b64encode(bytes(window.saveState(LAYOUT_VERSION).data())).decode("ascii"),
+        "docks": sorted(dock.objectName() for dock in window.findChildren(QDockWidget))}})
+
+
+def place_new(window: QMainWindow, known: set[str] | None, dock: QDockWidget, beside: list[QDockWidget],
+              area: Qt.DockWidgetArea) -> None:
+    """A panel the kept layout did not know: a tab behind the first of beside that is docked and
+    shown (it stays in front), else in area; shown either way. One it knew stays as it was kept,
+    closed too."""
+    if known is None or dock.objectName() in known:
+        return
+    for other in beside:
+        if not other.isHidden() and not other.isFloating():
+            window.tabifyDockWidget(other, dock)
+            other.raise_()
+            break
+    else:
+        window.addDockWidget(area, dock)
+    dock.show()
 
 
 class KeysDialog(QDialog):

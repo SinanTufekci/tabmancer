@@ -181,7 +181,9 @@ class MonitorWindow(QMainWindow):
         self.resize(1500, 950)
         self.build()
         self.default_state = self.saveState(LAYOUT_VERSION)
-        frame.restore_layout(self, "monitor")
+        known = frame.restore_layout(self, "monitor")
+        frame.place_new(self, known, self.docks["members"], [self.docks["messages"], self.docks["usage"]],
+                        Qt.DockWidgetArea.RightDockWidgetArea)
         self.name_window()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)

@@ -280,6 +280,7 @@ class KeyBar(QWidget):
         row.setContentsMargins(8, 3, 8, 3)
         row.setSpacing(14)
         self.keys: list[str] = []
+        self.dim = set(dim)
         for key, words in pairs:
             pair = QHBoxLayout()
             pair.setSpacing(5)

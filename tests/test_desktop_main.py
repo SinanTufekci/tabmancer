@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QApplication, QMenu
 from tabmancer import accounts, actor, agy, cli, demo, sessions, store, teambus, teams, usage
 from tabmancer import viewmodel as VM
 from tabmancer.config import merge_json, read_json
-from tabmancer.desktop import frame, look, main
+from tabmancer.desktop import frame, look, main, teampanel
 from tabmancer.keys import KEYS
 from tabmancer.widgets import bar_text
 
@@ -98,7 +98,7 @@ def test_it_opens_on_the_demo(qapp, window):
     assert shown.snap is not None and len(shown.snap.sessions) >= len(demo.SESSIONS)  # and the team's agy member
     listed = len(shown.snap.sessions)
     assert shown.info.text() == VM.info_words(listed, 0, 14)[0] == f"{listed} sessions, last 14 days"
-    assert list(shown.docks) == ["Sessions", "Preview", "Projects", "Cards", "Bit"]
+    assert list(shown.docks) == ["Sessions", "Preview", "Projects", "Cards", "Bit", "Team"]
     assert all(dock.isVisible() for dock in shown.docks.values())
     assert shown.windowTitle() == "tabmancer"
     assert [w for w in qapp.topLevelWidgets() if w.isVisible()] == [shown]  # no panel a window of its own
@@ -197,11 +197,50 @@ def test_the_layout_is_kept(qapp, window):
     shown.docks["Preview"].close()
     shown.close()
     kept = read_json(frame.LAYOUT_FILE)
-    assert set(kept["main"]) == {"geometry", "state"}
+    assert set(kept["main"]) == {"geometry", "state", "docks"}
+    assert kept["main"]["docks"] == sorted(dock.objectName() for dock in shown.docks.values())
     again = window()
     assert again.docks["Preview"].isHidden()
     again.reset_layout()
     assert not any(dock.isHidden() for dock in again.docks.values())
+
+
+def test_a_panel_new_since_the_layout_was_kept_goes_where_it_starts(qapp, window):
+    old = window()
+    old.removeDockWidget(old.docks["Team"])  # its layout as kept before the Team panel
+    old.close()
+    kept = read_json(frame.LAYOUT_FILE)["main"]
+    merge_json(frame.LAYOUT_FILE, main={"geometry": kept["geometry"], "state": kept["state"]})  # before it named them
+    shown = window()
+    team, listed = shown.docks["Team"], shown.docks["Sessions"]
+    assert team in shown.tabifiedDockWidgets(listed) and not team.isHidden()  # not squeezed in beside the rest
+    shown.show_teams()
+    qapp.processEvents()
+    assert team.width() > 400 and not team.visibleRegion().isEmpty()
+    team.close()
+    shown.close()
+    again = window()
+    assert again.docks["Team"].isHidden()  # known now, and closed: it stays so
+
+
+def test_the_team_panel_is_a_tab_beside_the_list_and_t_brings_it(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    team, listed = shown.docks["Team"], shown.docks["Sessions"]
+    assert team in shown.tabifiedDockWidgets(listed)
+    assert team.visibleRegion().isEmpty() and not listed.visibleRegion().isEmpty()  # the list in front
+    panel = shown.team_panel
+    first = shown.snap.view.teams[0]
+    assert panel.team == first.name and panel.graph.view is first
+    assert panel.lanes.said == shown.snap.team_states[first.name].said
+    assert panel.graph.hint == teampanel.HINT  # a click lights a member here: no tab, no actions
+    assert panel.graph.breathing() and not panel.graph.breaths.isActive()  # behind the list: at rest
+    shown.actions_by_key["T"].trigger()
+    qapp.processEvents()
+    assert not team.visibleRegion().isEmpty() and listed.visibleRegion().isEmpty()
+    assert panel.graph.breaths.isActive()  # in front: its members breathe
+    assert "T" not in shown.keybar.dim  # the key bar and the menus in step
+    assert shown.keybar.dim == {key for key in shown.keybar.keys if not shown.actions_by_key[key].isEnabled()}
 
 
 def test_a_broken_layout_file_is_left_alone(qapp, window):

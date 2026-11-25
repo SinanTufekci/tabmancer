@@ -28,7 +28,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFontMetricsF,
@@ -38,6 +38,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QWindow,
 )
 from PySide6.QtWidgets import QToolTip, QWidget
 
@@ -55,6 +56,7 @@ GLOW_SECONDS = 1.6  # a wire's glow fading after its message lands
 LIT_SECONDS = 2.0  # calm and off: a wire lit, then not
 RIPPLE_SECONDS = 0.7
 BUBBLE_SECONDS = 1.5  # what a message said, over its receiver once it lands (the wide picture)
+HINT = "click: its tab · right-click: its actions"  # under a member's words (the monitor's)
 MOVE_SECONDS = 0.5  # members making room, growing in, shrinking away
 FRAME_MS = 33
 BREATH_MS = 100
@@ -178,6 +180,7 @@ class TeamGraph(QWidget):
     def __init__(self, compact: bool = False, now: Callable[[], float] = time.monotonic) -> None:
         super().__init__()
         self.compact, self.now = compact, now
+        self.hint = HINT  # what a click does, as the window that holds it says
         self.view: VM.TeamView | None = None
         self.colours: dict[str, str] = {}
         self.picked: str | None = None
@@ -192,7 +195,7 @@ class TeamGraph(QWidget):
         self.was: dict[str, QPointF] = {}  # where each stood before the last change
         self.drawn: dict[str, QPointF] = {}  # where each was drawn last
         self.radius: dict[str, float] = {}
-        self.watched: QObject | None = None
+        self.watched: QWindow | None = None  # the window whose minimizing and showing it follows
         self.version = 0  # each set() and motion change: the still picture is drawn again
         self.still: QPixmap | None = None  # everything but the breathing members, while only they move
         self.still_key: tuple = ()
@@ -205,6 +208,10 @@ class TeamGraph(QWidget):
         self.lights = QTimer(self)  # calm and off: the paint that puts a lit wire out
         self.lights.setSingleShot(True)
         self.lights.timeout.connect(self.lights_out)
+        self.waker = QTimer(self)  # the window minimized or back: looked at once its state has settled
+        self.waker.setSingleShot(True)
+        self.waker.setInterval(0)
+        self.waker.timeout.connect(self.wake)
         self.setMouseTracking(True)
         self.setMinimumSize(180, 140) if compact else self.setMinimumSize(360, 260)
 
@@ -273,8 +280,9 @@ class TeamGraph(QWidget):
         return any(standing(m) in ("working", "needs") for m in self.view.members)
 
     def can_move(self) -> bool:
-        window = self.window()
-        return self.isVisible() and not window.isMinimized()
+        """Shown, its window not minimized, and not behind another tab (a panel tabbed away stays
+        'visible', moved out of sight)."""
+        return self.isVisible() and not self.window().isMinimized() and not self.visibleRegion().isEmpty()
 
     def wake(self) -> None:
         """Run the frames while something moves, the breaths while only members breathe, nothing else."""
@@ -322,9 +330,13 @@ class TeamGraph(QWidget):
 
     def showEvent(self, event) -> None:
         window = self.window()
-        if window is not self and window is not self.watched:
-            window.installEventFilter(self)
-            self.watched = window
+        handle = window.windowHandle() if window is not self else None
+        if handle is not None and handle is not self.watched:
+            # Its signals, not an event filter on the window: a connection goes with the graph, while
+            # a filter left on a window being torn down crashed a later run of the app.
+            handle.windowStateChanged.connect(self.waker.start)
+            handle.visibilityChanged.connect(self.waker.start)
+            self.watched = handle
         self.wake()
         super().showEvent(event)
 
@@ -333,11 +345,6 @@ class TeamGraph(QWidget):
         self.breaths.stop()
         self.lights.stop()
         super().hideEvent(event)
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if event.type() in (QEvent.Type.WindowStateChange, QEvent.Type.Show, QEvent.Type.Hide):
-            QTimer.singleShot(0, self.wake)
-        return False
 
     # --- where things are -------------------------------------------------------------------------
 
@@ -728,7 +735,8 @@ class TeamGraph(QWidget):
                 other = member.last.receiver if mine else member.last.sender
                 lines.append(look.span(("→ " if mine else "← ") + other + "  ", f"bold {self.colours.get(other, look.TEXT)}")
                              + look.span(member.last.text[:200], look.TEXT))
-            lines.append(look.span("click: its tab · right-click: its actions", look.DIM))
+            if self.hint:
+                lines.append(look.span(self.hint, look.DIM))
             return "<br>".join(lines)
         now = self.now()
         spots, centre, _ = self.placed(now)

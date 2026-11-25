@@ -400,11 +400,25 @@ def test_the_layout_is_kept(qapp, window):
     shown.docks["messages"].close()
     shown.close()
     kept = read_json(monitor.LAYOUT_FILE)
-    assert set(kept["monitor"]) == {"geometry", "state"}
+    assert set(kept["monitor"]) == {"geometry", "state", "docks"}
     again = window()
     assert again.docks["messages"].isHidden()
     again.reset_layout()
     assert not any(dock.isHidden() for dock in again.docks.values())
+
+
+def test_the_members_go_behind_the_messages_in_a_layout_kept_before_them(qapp, window):
+    from tabmancer.config import merge_json
+
+    old = window()
+    old.removeDockWidget(old.docks["members"])  # its layout as kept before the Members panel
+    old.close()
+    kept = read_json(monitor.LAYOUT_FILE)["monitor"]
+    merge_json(monitor.LAYOUT_FILE, monitor={"geometry": kept["geometry"], "state": kept["state"]})
+    shown = window()
+    members, messages = shown.docks["members"], shown.docks["messages"]
+    assert members in shown.tabifiedDockWidgets(messages) and not members.isHidden()
+    assert members.visibleRegion().isEmpty() and not messages.visibleRegion().isEmpty()
 
 
 def test_a_broken_layout_file_is_left_alone(qapp, window):

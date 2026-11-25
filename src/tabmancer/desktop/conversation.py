@@ -143,7 +143,9 @@ class Conversation(QAbstractScrollArea):
     def wake(self) -> None:
         if self.drawing is not None and self.now() - self.drawing[1] >= DRAW_SECONDS:
             self.drawing = None
-        if self.drawing is not None and self.isVisible() and not self.window().isMinimized():
+        # the viewport's region: its own leaves out the children (the viewport covers it all)
+        seen = self.isVisible() and not self.window().isMinimized() and not self.viewport().visibleRegion().isEmpty()
+        if self.drawing is not None and seen:
             if not self.frames.isActive():
                 self.frames.start()
         else:

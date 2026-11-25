@@ -100,6 +100,12 @@ def sheet(accent_colour: str) -> str:
                                   border-top: 2px solid transparent; }}
     QMainWindow > QTabBar::tab:selected {{ background: {PANEL}; color: {TEXT}; border-top: 2px solid {accent_colour}; }}
     QMainWindow > QTabBar::tab:hover {{ color: {TEXT}; }}
+    QTabBar#teams {{ background: {BLACK}; }}
+    QTabBar#teams::tab {{ background: {BLACK}; color: {MUTED}; padding: 5px 14px; border: none;
+                          border-bottom: 2px solid transparent; }}
+    QTabBar#teams::tab:selected {{ color: {TEXT}; border-bottom: 2px solid {accent_colour}; }}
+    QTabBar#teams::tab:hover {{ color: {TEXT}; }}
+    QSplitter::handle {{ background: {BORDER}; }}
     QStatusBar {{ background: {SURFACE}; border-top: 1px solid {BORDER}; }}
     QStatusBar::item {{ border: none; }}
     QScrollArea, QTextBrowser {{ background: {SUNKEN}; border: none; }}
