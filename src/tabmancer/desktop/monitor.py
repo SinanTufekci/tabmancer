@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__, agy, bitart, focus, teams, teamwords
+from ..commands import short
 from ..keys import MONITOR_KEYS
 from ..sessions import Exit, Status
 from ..store import Snapshot, TeamStore
@@ -69,17 +70,6 @@ KEY_BAR = [("← →", "member"), ("Enter", "its tab"), ("j", "needs you"), ("Es
            ("?", "keys"), ("q", "quit")]
 AGY_TONE = {"ok": look.CYAN, "low": look.AMBER, "out": look.RED, "unknown": look.MUTED}
 GROUND = {look.AMBER: "#221b0c", look.RED: "#2a0f0e"}  # a pill's patch under amber or red words
-
-
-def short(words: str) -> str:
-    """A key's words for a menu: up to the first ':', ';', ',' or '(' of what MONITOR_KEYS says it does."""
-    cut = len(words)
-    for mark in (":", ";", ",", " ("):
-        at = words.find(mark)
-        if at != -1:
-            cut = min(cut, at)
-    text = words[:cut].strip()
-    return text[:1].upper() + text[1:]
 
 
 def sequences(key: str) -> list[QKeySequence]:

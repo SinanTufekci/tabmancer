@@ -80,7 +80,7 @@ print(sorted(m for m in sys.modules if m.split(".")[0] in BLOCKED))
 CORE = ("keys", "store", "viewmodel", "actions", "actor", "marks", "search", "teams", "teambus", "codexbus",
         "mcpserver", "agyplugin", "summarize", "router", "handover", "teamwatch", "launch", "picks", "agy",
         "palette", "teamwords", "sessionwords", "handoverwords", "accountwords", "limitwords",
-        "engine")
+        "engine", "commands")
 
 
 def test_the_core_runs_without_textual_or_qt(tmp_path):
