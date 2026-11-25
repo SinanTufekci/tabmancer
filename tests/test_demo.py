@@ -1,10 +1,13 @@
 """`tabmancer --demo`: the made-up sessions in the dashboard, and nothing real within reach."""
 
+from pathlib import Path
+
 import pytest
 from conftest import box_has_focus
 
-from tabmancer import cli, demo
+from tabmancer import cli, demo, launch
 from tabmancer.app import SessionPicker
+from tabmancer.launch import Launch, Mode
 
 
 @pytest.fixture
@@ -91,6 +94,18 @@ async def test_a_prompt_written_in_the_demo_opens_nothing_and_says_so(in_demo):
                 break
         assert any("claude --resume mobile" in note for note in told(app))
         assert not [note for note in told(app) if note.startswith("Opened")]
+
+
+@pytest.mark.parametrize("env", [(), (("BROWSER", "made-up"),)])  # a cd, or PowerShell's Set-Location
+def test_what_would_have_opened_is_said_in_the_made_up_folder_never_your_home(tmp_path, env):
+    told = []
+    stand_in = {(module, name): value for module, name, value in demo.stand_ins(tmp_path, [], told.append)}
+    opened = stand_in[launch, "open_tabs"]
+    made_up = Launch(title="data", cwd="C:/dev/data-pipeline", mode=Mode.RESUME, session_id="data", env=env)
+    nowhere = Launch(title="new", cwd="", mode=Mode.NEW, session_id="")
+    assert opened([made_up]) == [] and opened([nowhere]) == []
+    assert "C:/dev/data-pipeline" in told[0] and "claude --resume data" in told[0]
+    assert all(str(Path.home()) not in words for words in told)  # a GIF of the demo shows nobody's home
 
 
 def test_the_made_up_answers_stand_in_for_the_models(in_demo):

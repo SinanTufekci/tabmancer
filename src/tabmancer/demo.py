@@ -359,7 +359,10 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
     from .launch import shell_line
 
     def opened(launches: list) -> list[str]:
-        line = shell_line(launches[0])
+        first = launches[0]
+        line = shell_line(first)
+        if first.directory != first.cwd:  # its made-up folder is on no machine: the line went to your home
+            line = line.replace(first.directory, first.cwd or "~")  # where it would be, never your own
         line = line if len(line) <= 160 else line[:159] + "…"
         more = f" (and {len(launches) - 1} more)" if len(launches) > 1 else ""
         tell(f"Nothing opens in the demo. For real, a new tab would run: {line}{more}")
