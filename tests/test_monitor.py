@@ -10,7 +10,19 @@ from datetime import datetime, timedelta
 import pytest
 from rich.text import Text
 
-from tabmancer import accounts, agy, claudeupdate, cli, config, teams, teamwatch, toast, usage, wrapped
+from tabmancer import (
+    accounts,
+    agy,
+    claudeupdate,
+    cli,
+    config,
+    engine,
+    teams,
+    teamwatch,
+    toast,
+    usage,
+    wrapped,
+)
 from tabmancer import app as app_module
 from tabmancer import viewmodel as VM
 from tabmancer.app import SessionPicker
@@ -260,7 +272,8 @@ async def test_a_queued_handovers_fresh_session_opens_unasked(fake_home, monkeyp
     unasked, asked = [], []
     monkeypatch.setattr(handover, "fresh", lambda session, written: Launch("fresh", ".", Mode.NEW, ""))
     monkeypatch.setattr(SessionPicker, "open_unasked", lambda self, launches: unasked.append(len(launches)))
-    monkeypatch.setattr(SessionPicker, "open_sessions", lambda self, launches, window=None: asked.append(len(launches)))
+    monkeypatch.setattr(engine.Engine, "open", lambda self, launches, window=None, updated=False:
+                        asked.append(len(launches)))  # as a key opens (Engine.open)
     app = SessionPicker(days=14)
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause(0.3)

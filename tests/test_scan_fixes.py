@@ -155,7 +155,9 @@ def test_the_handover_and_the_tick_count_follow_the_list_as_it_is_now():
     # (footer.row is given how many, and says them).
     source = Path(__file__).resolve().parent.parent / "src" / "tabmancer" / "app.py"
     text = source.read_text(encoding="utf-8")
-    assert "self.hand_over(now, how)" in text
+    flows = source.with_name("engine.py").read_text(encoding="utf-8")  # handing over: Engine.start_handover
+    assert "current = state.sessions.get(session.session_id, session)" in flows
+    assert "front.hand_over(current, how)" in flows
     assert text.count("len(self.selected), self.member_rows)") == 2
     rules = source.with_name("footer.py").read_text(encoding="utf-8")
     assert 'return Row("ticked", ticked, anyone)' in rules

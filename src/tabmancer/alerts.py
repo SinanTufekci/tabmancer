@@ -38,6 +38,7 @@ NEWER = "newer"              # a newer tabmancer is out (once a version)
 LIMIT_NEAR = "limit-near"    # a plan limit at 85% or more (each reading)
 AGY_OUT = "agy-out"          # every agy model in the chain is out (once until it is back)
 BACK = "back"                # sessions stopped at a limit went on (c, or the limit lifted)
+HANDED = "handed"            # a session or a team handed over: its fresh one opened
 
 
 @dataclass
@@ -179,6 +180,12 @@ def back_event(back: int) -> Event:
     """Sessions stopped at a limit went on (opened, or the prompt typed into their tab): Bit says how
     many are back at work, in the dashboard's own colour."""
     return Event(BACK, bit=Bit("react", back_words(back), "back", "accent"))
+
+
+def handed_event(name: str) -> Event:
+    """A session (its project) or a team (its name) handed over, its fresh one opened: Bit says so, in
+    the dashboard's own colour."""
+    return Event(HANDED, bit=Bit("react", f"{name}: handed over", "handover", "accent"))
 
 
 def signed_in_event(free: int, who: str) -> Event:

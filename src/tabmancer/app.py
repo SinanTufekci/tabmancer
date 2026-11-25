@@ -45,7 +45,6 @@ from . import (
     footer,
     gitstate,
     handover,
-    handoverwords,
     limitwords,
     marks,
     newforms,
@@ -76,9 +75,7 @@ from .actions import (
     close_tabs,
     closing_note,
     cold_note,
-    handing_note,
     open_names,
-    team_handover_problem,
 )
 from .actions import clip as _clip
 from .clisettings import CliSettings
@@ -719,14 +716,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.team_flights: dict[str, list[tuple[teams.Message, float]]] = {}  # messages in flight, since when
         self.unfolded: set[str] = set()  # teams shown with their members under their row (e); else one row
         self.closing_team: str | None = None  # x once on an open team's row: again closes its members' tabs
-        self.handing_team: str | None = None  # h once on a team (its row or view): again hands it over
         self.cold_team: str | None = None  # a team started once while its cache was gone: again starts it
         self.blocks: list[tuple[teamtree.TeamState, list[tuple[str, Session]]]] = []  # the teams in the list
         self.member_rows: dict[str, tuple[str, str]] = {}  # their members' session ids -> (team, member)
         self.grouped = VM.Groups([], [], {})  # the list as groups() last grouped it (rowwords.Listing)
         self.default_cap = picks.cap_tokens(picks.default_cap())  # the cap new sessions get, in tokens
-        # Teams whose lead wrote a handover not taken yet (Esc in its dialog): h shows it again, unwritten.
-        self.kept_handovers: dict[str, tuple[Session, str, str, bool]] = {}
         self.limits: list[usage.Limit] = []  # the plan limits as last read
         self.agy_bar: dict = {}  # agy's chain as last read from its saved quota (agy.bar_view); {} with no agy
         self.card_filter: str | None = None  # 1 2 3: the list shows only what that card counts
@@ -1729,65 +1723,24 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def press_team_handover(self, team: teams.Team, members: dict[str, Session | None]) -> None:
         """h on a team's row or in its view. Twice: the whole team handed over (hand_over_team). A
-        handover its lead wrote already, the team still closed, is shown again, not written again."""
-        if open_names(team, members):  # opened again since it was written: that handover is old now
-            self.kept_handovers.pop(team.name, None)
-        kept = self.kept_handovers.get(team.name)
-        if kept is not None:
-            self.team_handover_ready(team, *kept)
-            return
-        reason = team_handover_problem(team, members)
-        if reason:
-            self.notify(reason, severity="warning", timeout=8)
-            return
-        if self.handing_team != team.name:
-            self.handing_team = team.name
-            self.notify(handing_note(team, members), timeout=10)
-            self.set_timer(10, lambda: setattr(self, "handing_team", None))
-            return
-        self.handing_team = None
-        self.say_note(handoverwords.team_handing_note(team))
-        self.hand_over_team(team, members)
+        handover its lead wrote already, the team still closed, is shown again, not written again
+        (Engine.team_handover)."""
+        self.engine.team_handover(team, members)
 
     def open_handover(self, session: Session | None, how: str | None = None) -> None:
         """The h dialog for a session: how its handover should be written. Given how ("self" or
-        "transcript", as act() may), it starts straight away, after the same checks."""
-        if session is None:
-            return
-        refusal = actions.handover_refusal(session, self.open_ones(), session.session_id in self.queued)
-        if refusal:
-            self.notify(refusal.words, severity="warning", **({"timeout": refusal.seconds} if refusal.seconds else {}))
-            return
-        if session.session_id in self.queued:  # h again: not after all
-            del self.queued[session.session_id]
-            self.save_queued()
-            note = actions.unqueued_note(session)
-            self.notify(note.words, timeout=note.seconds)
-            self.update_row(session)
-            return
-        if how is not None:
-            self.start_handover(session, how)
-            return
-        self.push_screen(HandoverDialog(session), lambda how: how and self.start_handover(session, how))
+        "transcript", as act() may), it starts straight away, after the same checks (Engine.handover)."""
+        self.engine.handover(session, how)
+
+    def ask_handover(self, session: Session, then: Callable[[str], None]) -> None:
+        self.push_screen(HandoverDialog(session), lambda how: how and then(how))
 
     def start_handover(self, session: Session, how: str) -> None:
-        """Hand it over now, or once it finishes if it is working."""
-        now = self.sessions.get(session.session_id, session)
-        if actions.busy(now):
-            self.queued[session.session_id] = how
-            self.save_queued()
-            note = actions.queued_note(session, how)
-            self.notify(note.words, title=note.title, timeout=note.seconds)
-            self.update_row(now)
-            return
-        # As the list has it now, not as it was when h was pressed: it may have opened or closed
-        # while the dialog stood, and an open one written to by a second process was not closed.
-        self.tell_elsewhere(now, "its whole conversation" if how == "self" else "a digest of it")
-        self.say_note(handoverwords.started_note(now, how))
-        self.hand_over(now, how)
+        """Hand it over now, or once it finishes if it is working (Engine.start_handover)."""
+        self.engine.start_handover(session, how)
 
     def open_ones(self) -> list[Session]:
-        return [s for s in self.sessions.values() if s.exit is Exit.RUNNING]
+        return self.engine.open_ones()
 
     @work(thread=True, group="handover")
     def hand_over(self, session: Session, how: str) -> None:
@@ -1803,14 +1756,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.call_from_thread(self.handover_ready, session, handed.written, handed.left_open)
 
     def handover_ready(self, session: Session, written: str, left_open: str = "") -> None:
-        fresh = [handover.fresh(session, written)]
-        if session.session_id in self.unasked:  # queued: it finished while you were elsewhere
-            self.unasked.discard(session.session_id)
-            self.open_unasked(fresh)
-        else:
-            self.open_sessions(fresh)
-        self.say_note(handoverwords.handed_note(session, left_open))
-        self.mascot.react("handover", f"{session.project}: handed over", self.accent())
+        """Its handover written: the fresh session opens (Engine.handover_ready)."""
+        self.engine.handover_ready(session, written, left_open)
 
     @work(thread=True, group="team-handover")
     def hand_over_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
@@ -1822,32 +1769,18 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.call_from_thread(self.notify, error.words, severity="error", timeout=15)
             return
         if handed is not None:
-            self.call_from_thread(self.team_handover_ready, team, handed.lead, handed.written, handed.lineup,
-                                  handed.suggested)
+            self.call_from_thread(self.engine.team_handover_ready, team, handed.lead, handed.written,
+                                  handed.lineup, handed.suggested)
 
-    def team_handover_ready(self, team: teams.Team, lead: Session, written: str, lineup: str,
-                            suggested: bool) -> None:
+    def ask_team_start(self, team: teams.Team, written: str, lineup: str, suggested: bool,
+                       then: Callable[[tuple[str, str] | None], None]) -> None:
         """The lead's handover and line-up shown; Ctrl+S starts the team's new generation."""
-        self.kept_handovers[team.name] = (lead, written, lineup, suggested)
+        self.push_screen(TeamHandoverDialog(team, written, lineup, suggested), then)
 
-        def start(answer: tuple[str, str] | None) -> None:
-            if answer is None:
-                self.say_note(handoverwords.team_not_started_note(team))
-                return
-            lines, cap = answer
-            fresh = handover.next_team(teams.load().get(team.name, team), lines, cap)
-            saved = teams.load()
-            saved[fresh.name] = fresh
-            teams.save(saved)
-            self.kept_handovers.pop(team.name, None)
-            for screen in self.screen_stack:
-                if isinstance(screen, TeamScreen) and screen.team.name == team.name:
-                    screen.adopt(fresh)
-            self.open_team(fresh, handover.team_launches(fresh, lead, written))
-            self.say_note(handoverwords.team_handed_note(team, fresh))
-            self.mascot.react("handover", f"{team.name}: handed over", self.accent())
-
-        self.push_screen(TeamHandoverDialog(team, written, lineup, suggested), start)
+    def adopt_team(self, team: teams.Team) -> None:
+        for screen in self.screen_stack:
+            if isinstance(screen, TeamScreen) and screen.team.name == team.name:
+                screen.adopt(team)
 
     # --- renaming ----------------------------------------------------------------------
 

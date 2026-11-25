@@ -24,11 +24,26 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Protocol
 
-from . import accounts, actions, actor, alerts, claudeupdate, openings, store, toast, usage, wrapped
+from . import (
+    accounts,
+    accountwords,
+    actions,
+    actor,
+    alerts,
+    claudeupdate,
+    handover,
+    handoverwords,
+    openings,
+    store,
+    teams,
+    toast,
+    usage,
+    wrapped,
+)
 from .actions import Note
 from .launch import Launch
 from .openings import Openings
-from .sessions import Session
+from .sessions import Exit, Session
 from .viewmodel import at_limit
 
 # --- when the front runs what: its timers (SCHEDULE) -------------------------------------------------
@@ -110,7 +125,35 @@ class Front(Protocol):
         ...
 
     def hand_over(self, session: Session, how: str) -> None:
-        """Hand it over (how: "self" or "transcript"), its fresh session opening unasked."""
+        """Write its handover off the UI thread (actions.write_handover); written, Engine.handover_ready."""
+        ...
+
+    def hand_over_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
+        """A whole team's handover written by its lead off the UI thread (actions.write_team_handover);
+        written, Engine.team_handover_ready."""
+        ...
+
+    def ask_handover(self, session: Session, then: Callable[[str], None]) -> None:
+        """The h dialog: how its handover is written ("self" or "transcript"); then, with the answer
+        given (not called when it was closed)."""
+        ...
+
+    def ask_team_start(self, team: teams.Team, written: str, lineup: str, suggested: bool,
+                       then: Callable[[tuple[str, str] | None], None]) -> None:
+        """The lead's handover and line-up shown; then with (line-up, cap) to start the next generation,
+        or None (closed)."""
+        ...
+
+    def adopt_team(self, team: teams.Team) -> None:
+        """The team as saved now, in the views of it that are open."""
+        ...
+
+    def open_team(self, team: teams.Team, launches: list[Launch]) -> None:
+        """A team's sessions opened: in tabs, its members first."""
+        ...
+
+    def update_row(self, session: Session) -> None:
+        """This session's row drawn again."""
         ...
 
     def type_note(self, session: Session, who: str, message: str) -> None:
@@ -262,6 +305,9 @@ class EngineState:
     account: accounts.Account | None = None
     signed_as: str | None = None
     told_agy_out: datetime | None = None  # Bit said every agy model is out, until this time
+    handing_team: str | None = None  # h once on a team (its row or view): again hands it over
+    # Teams whose lead wrote a handover not taken yet (Esc in its dialog): h shows it again, unwritten.
+    kept_handovers: dict[str, tuple[Session, str, str, bool]] = field(default_factory=dict)
     team_seen: dict[str, set[tuple[str, str, str]]] = field(default_factory=dict)  # what each team said
 
 
@@ -449,6 +495,114 @@ class Engine:
         event = alerts.not_up_event(ids, self.state.openings.came_up, self.state.sessions)
         if event is not None:
             self.tell(event)
+
+    # --- handing over (h): one session, or a whole team ----------------------------------------------
+
+    def open_ones(self) -> list[Session]:
+        return [s for s in self.state.sessions.values() if s.exit is Exit.RUNNING]
+
+    def handover(self, session: Session | None, how: str | None = None) -> None:
+        """h on a session: how its handover should be written (Front.ask_handover). Given how ("self" or
+        "transcript", as the act API may), it starts straight away, after the same checks. h on one
+        queued to hand over once it finishes: not after all."""
+        state, front = self.state, self.front
+        if session is None:
+            return
+        refusal = actions.handover_refusal(session, self.open_ones(), session.session_id in state.queued)
+        if refusal:
+            front.say_note(Note(refusal.words, "warning", refusal.seconds or None))
+            return
+        if session.session_id in state.queued:  # h again: not after all
+            del state.queued[session.session_id]
+            actions.save_queued(state.queued)
+            front.say_note(actions.unqueued_note(session))
+            front.update_row(session)
+            return
+        if how is not None:
+            self.start_handover(session, how)
+            return
+        front.ask_handover(session, lambda how: self.start_handover(session, how))
+
+    def start_handover(self, session: Session, how: str) -> None:
+        """Hand it over now (how: "self" or "transcript"), or once it finishes if it is working. The h
+        dialog's answer."""
+        state, front = self.state, self.front
+        current = state.sessions.get(session.session_id, session)
+        if actions.busy(current):
+            state.queued[session.session_id] = how
+            actions.save_queued(state.queued)
+            front.say_note(actions.queued_note(session, how))
+            front.update_row(current)
+            return
+        # As the list has it now, not as it was when h was pressed: it may have opened or closed
+        # while the dialog stood, and an open one written to by a second process was not closed.
+        elsewhere = accountwords.elsewhere_note(current, "its whole conversation" if how == "self" else "a digest of it",
+                                                state.account)
+        if elsewhere is not None:
+            front.say_note(elsewhere)
+        front.say_note(handoverwords.started_note(current, how))
+        front.hand_over(current, how)
+
+    def handover_ready(self, session: Session, written: str, left_open: str = "") -> None:
+        """Its handover written: the fresh session opens (unasked for a queued one: it finished while you
+        were elsewhere), and it is said."""
+        fresh = [handover.fresh(session, written)]
+        if session.session_id in self.state.unasked:
+            self.state.unasked.discard(session.session_id)
+            self.front.open_unasked(fresh)
+        else:
+            self.open(fresh)
+        self.front.say_note(handoverwords.handed_note(session, left_open))
+        self.tell(alerts.handed_event(session.project))
+
+    def team_handover(self, team: teams.Team, members: dict[str, Session | None]) -> None:
+        """h on a team's row or in its view. Twice: the whole team handed over (Front.hand_over_team). A
+        handover its lead wrote already, the team still closed, is shown again, not written again."""
+        state, front = self.state, self.front
+        if actions.open_names(team, members):  # opened again since it was written: that handover is old now
+            state.kept_handovers.pop(team.name, None)
+        kept = state.kept_handovers.get(team.name)
+        if kept is not None:
+            self.team_handover_ready(team, *kept)
+            return
+        reason = actions.team_handover_problem(team, members)
+        if reason:
+            front.say_note(Note(reason, "warning", 8))
+            return
+        if state.handing_team != team.name:
+            state.handing_team = team.name
+            front.say_note(Note(actions.handing_note(team, members), seconds=10))
+            front.later(10, lambda: setattr(state, "handing_team", None))
+            return
+        state.handing_team = None
+        front.say_note(handoverwords.team_handing_note(team))
+        front.hand_over_team(team, members)
+
+    def team_handover_ready(self, team: teams.Team, lead: Session, written: str, lineup: str,
+                            suggested: bool) -> None:
+        """The lead's handover and line-up, kept and shown (Front.ask_team_start); its answer to
+        team_start."""
+        self.state.kept_handovers[team.name] = (lead, written, lineup, suggested)
+        self.front.ask_team_start(team, written, lineup, suggested,
+                                  lambda answer: self.team_start(team, lead, written, answer))
+
+    def team_start(self, team: teams.Team, lead: Session, written: str, answer: tuple[str, str] | None) -> None:
+        """The team handover dialog's answer: (line-up, cap) starts the team's next generation, a fresh
+        lead with the handover; None leaves it closed (h shows the handover again)."""
+        front = self.front
+        if answer is None:
+            front.say_note(handoverwords.team_not_started_note(team))
+            return
+        lines, cap = answer
+        fresh = handover.next_team(teams.load().get(team.name, team), lines, cap)
+        saved = teams.load()
+        saved[fresh.name] = fresh
+        teams.save(saved)
+        self.state.kept_handovers.pop(team.name, None)
+        front.adopt_team(fresh)
+        front.open_team(fresh, handover.team_launches(fresh, lead, written))
+        front.say_note(handoverwords.team_handed_note(team, fresh))
+        self.tell(alerts.handed_event(team.name))
 
     # --- usage limits: the sessions stopped at one, and those to continue when it lifts (c) ----------
 

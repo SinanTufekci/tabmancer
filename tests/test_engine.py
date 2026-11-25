@@ -206,7 +206,8 @@ def test_the_dashboards_state_is_the_engines():
     assert engine.FORWARDED == ("acts", "sessions", "queued", "unasked", "notes", "told_crowded", "told_idle",
                                 "background_live", "openings", "full_poll_due", "full_polls", "armed", "armed_unsaved",
                                 "told_limit", "actor_misses", "told_alone", "told_update", "updating_claude",
-                                "after_claude_update", "account", "signed_as", "told_agy_out", "team_seen")
+                                "after_claude_update", "account", "signed_as", "told_agy_out",
+                                "handing_team", "kept_handovers", "team_seen")
     for name in engine.FORWARDED:
         value = object()
         setattr(app, name, value)
