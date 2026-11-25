@@ -114,12 +114,18 @@ def test_human_numbers():
 
 # --- in the dashboard and on the command line ---------------------------------------
 
-async def counted(pilot, app):
-    for _ in range(80):
+async def until(pilot, check, said="the condition never became true"):
+    """By the clock (20 s at most), not a count of pauses: a loaded machine may take longer."""
+    end = time.monotonic() + 20
+    while time.monotonic() < end:
         await pilot.pause(0.05)
-        if app.sessions and app.token_report is not None:
+        if check():
             return
-    raise AssertionError("tokens were never counted")
+    raise AssertionError(said)
+
+
+async def counted(pilot, app):
+    await until(pilot, lambda: app.sessions and app.token_report is not None, "tokens were never counted")
 
 
 def add_reply(home, folder, name, records):
@@ -153,14 +159,14 @@ async def test_the_dashboard_shows_where_tokens_went(fake_home):
         app.update_chart()
         assert app.activity_target[-1] == 2_000_052
         await pilot.press("u")
-        assert isinstance(app.screen, TokensScreen)
+        await until(pilot, lambda: isinstance(app.screen, TokensScreen))
         console = Console(record=True, width=120, file=io.StringIO())
         console.print(render(app.token_report, app.sessions, "#d97757"))
         shown = console.export_text()
         assert "TOP SESSIONS" in shown and "First task" in shown and "other" in shown
         assert "claude-opus-5-5" in shown
         await pilot.press("escape")
-        assert not isinstance(app.screen, TokensScreen)
+        await until(pilot, lambda: not isinstance(app.screen, TokensScreen), "the stats screen stayed open")
 
 
 def test_tokens_command_prints_json(home, capsys):

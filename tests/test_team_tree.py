@@ -68,6 +68,16 @@ def shop(home, tmp_path, monkeypatch, api_open=True):
     return made
 
 
+async def until(pilot, check, said="the condition never became true"):
+    """By the clock (20 s at most), not a count of pauses: a loaded machine may take longer."""
+    end = time.monotonic() + 20
+    while time.monotonic() < end:
+        await pilot.pause(0.05)
+        if check():
+            return
+    raise AssertionError(said)
+
+
 async def ready(pilot, app, unfold=False):
     """Until the team "shop" is in the list, open (a team may show closed until the live poll lands),
     and with unfold, its members under its row. By the clock (20 s at most), not a count of pauses:
@@ -128,10 +138,7 @@ async def test_e_capital_unfolds_every_team_and_folds_them_again(fake_home, tmp_
 async def test_e_capital_says_so_when_no_team_is_in_the_list(fake_home):
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await until(pilot, lambda: app.sessions)
         await pilot.press("E")
         assert any("No team" in note.message for note in app._notifications) and not app.unfolded
 
@@ -199,9 +206,10 @@ async def test_the_team_preview_shows_every_key_each_whole(fake_home, tmp_path, 
             lines = app.meta.render_lines(app.meta.region.reset_offset)[:visible]
             return "\n".join("".join(segment.text for segment in line) for line in lines)
 
-        for _ in range(100):
+        end = time.monotonic() + 20  # by the clock: a loaded machine lays the preview out late
+        while time.monotonic() < end:
             await pilot.pause(0.05)
-            if "MESSAGES" in shown() and "message 0" in shown():
+            if all(words in shown() for words in ("MESSAGES", "message 0", "start the rest", "T  teams")):
                 break
         text = shown()
         assert "start the rest" in text and "T  teams" in text
@@ -288,10 +296,8 @@ async def test_a_team_with_nobody_open_is_one_row_that_s_starts(fake_home, tmp_p
     monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if f"{TEAM_ROW}shop" in app.table.rows:
-                break
+        # The team's row, and the live poll landed: "one" is open, so EARLIER has its heading.
+        await until(pilot, lambda: f"{TEAM_ROW}shop" in app.table.rows and f"{HEADING}rest" in app.table.rows)
         keys = [row.key.value for row in app.table.ordered_rows]
         assert keys.index(f"{HEADING}rest") < keys.index(f"{TEAM_ROW}shop")  # in EARLIER, where it last worked
         assert not {"lead-1", "api-1", "ui-1"} & set(keys)
@@ -305,13 +311,13 @@ async def test_a_team_with_nobody_open_is_one_row_that_s_starts(fake_home, tmp_p
         app.selected.clear()
         app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
         await pilot.press("enter")  # its view, closed as it is: nothing opens
-        await pilot.pause(0.1)
-        assert isinstance(app.screen, TeamScreen) and not opened
+        await until(pilot, lambda: isinstance(app.screen, TeamScreen))
+        assert not opened
         await pilot.press("escape")
-        await pilot.pause(0.1)
+        await until(pilot, lambda: not isinstance(app.screen, TeamScreen))
         app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
         await pilot.press("s")  # starts it: every member as itself, the lead last
-        await pilot.pause(0.1)
+        await until(pilot, lambda: len(opened) == 3, f"opened: {opened}")
     assert [launch.session_id for launch in opened] == ["api-1", "ui-1", "lead-1"]
     assert all(launch.options[:2] == ("--name", f"shop-{name}") for launch, name in zip(opened, ("api", "ui", "lead")))
 

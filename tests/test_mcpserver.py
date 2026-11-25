@@ -224,9 +224,12 @@ def test_a_newer_listen_supersedes_the_wait(tmp_path):
     box = {}
     thread = threading.Thread(target=lambda: box.update(r=_call(server, out, "team_wait", {"timeout": 30})))
     thread.start()
-    time.sleep(0.5)
+    deadline = time.monotonic() + 15
+    while not teambus._read_claim("shop", "api").get("token") and time.monotonic() < deadline:
+        time.sleep(0.02)  # the wait has claimed the member: only then is a newer claim newer
     teambus._write_claim("shop", "api", {**teambus._pid_info(os.getpid()), "token": "newer", "since": ""})
     thread.join(timeout=15)
+    assert not thread.is_alive()
     assert "[superseded]" in _text(box["r"])
 
 

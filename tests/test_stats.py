@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -155,6 +156,16 @@ def test_export_and_csv(home, tmp_path):
     assert json.loads(as_json.read_text(encoding="utf-8"))["days"] == 7 and as_csv.exists()
 
 
+async def until(pilot, check):
+    """By the clock (20 s at most), not a count of pauses: a loaded machine may take longer."""
+    end = time.monotonic() + 20
+    while time.monotonic() < end:
+        await pilot.pause(0.05)
+        if check():
+            return
+    raise AssertionError("the condition never became true")
+
+
 async def test_the_stats_screen_has_tabs_periods_and_export(fake_home, monkeypatch):
     from tabmancer.app import SessionPicker
     from tabmancer.statsview import StatsScreen
@@ -164,36 +175,28 @@ async def test_the_stats_screen_has_tabs_periods_and_export(fake_home, monkeypat
         fake_home / "s.json", fake_home / "s.csv"))
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if app.token_report is not None:
-                break
+        await until(pilot, lambda: app.token_report is not None)
         await pilot.press("u")
+        await until(pilot, lambda: isinstance(app.screen, StatsScreen))
         screen = app.screen
-        assert isinstance(screen, StatsScreen) and screen.report.days == 14
-        assert screen.query_one("TabbedContent").active == "overview"
+        assert screen.report.days == 14
+
+        def tab() -> str:
+            return screen.query_one("TabbedContent").active
+
+        await until(pilot, lambda: tab() == "overview")
         await pilot.press("right")
-        assert screen.query_one("TabbedContent").active == "tokens"
+        await until(pilot, lambda: tab() == "tokens")
         await pilot.press("left", "left")
-        assert screen.query_one("TabbedContent").active == "report"  # round the end
+        await until(pilot, lambda: tab() == "report")  # round the end
         await pilot.press("left")
-        assert screen.query_one("TabbedContent").active == "limits"
-        for _ in range(80):  # the first count with the kept days and the period before
-            await pilot.pause(0.05)
-            if not screen.counting:
-                break
+        await until(pilot, lambda: tab() == "limits")
+        await until(pilot, lambda: not screen.counting)  # the first count with the kept days and the period before
         assert screen.before is not None
         await pilot.press("3")
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if screen.report.days == 30:
-                break
-        assert screen.report.days == 30 and not screen.counting
+        await until(pilot, lambda: screen.report.days == 30 and not screen.counting)
         await pilot.press("x")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if saved:
-                break
+        await until(pilot, lambda: saved)
         assert saved == [30]
 
 

@@ -112,7 +112,8 @@ async def test_h_twice_hands_the_whole_team_over(fake_home, tmp_path, monkeypatc
         await pilot.press("h")
         assert done["written"] == 0  # once: only what a second h does
         await pilot.press("h")
-        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog))
+        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog) and any(
+            str(w.render()).strip() for w in app.screen.query("#handover-preview")))  # on_mount done
         dialog = app.screen
         assert done["closed"] == ["shop-lead"] and done["written"] == 1
         assert "the lead's suggestion" in str(dialog.query_one("#handover-lineup-card").border_subtitle)
@@ -132,13 +133,15 @@ async def test_a_handover_not_taken_is_shown_again_without_writing_again(fake_ho
     async with app.run_test(size=(150, 44)) as pilot:
         view = await team_view(pilot, app)
         await pilot.press("h", "h")
-        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog))
+        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog) and any(
+            str(w.render()).strip() for w in app.screen.query("#handover-preview")))  # on_mount done
         await pilot.press("escape")
         await until(pilot, lambda: app.screen is view)
         view.sessions = {name: None if s is None else s.__class__(**{**s.__dict__, "exit": s.exit.CLEAN})
                          for name, s in view.sessions.items()}  # closed now, as the handover left them
         await pilot.press("h")
-        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog))
+        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog) and any(
+            str(w.render()).strip() for w in app.screen.query("#handover-preview")))  # on_mount done
         assert done["written"] == 1 and not done["opened"]
 
 
@@ -176,7 +179,8 @@ async def test_h_twice_on_the_teams_row_in_the_list_hands_it_over_too(fake_home,
         app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
         await pilot.pause(0.1)
         await pilot.press("h", "h")
-        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog))
+        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog) and any(
+            str(w.render()).strip() for w in app.screen.query("#handover-preview")))  # on_mount done
         assert done["written"] == 1
 
 
@@ -187,7 +191,8 @@ async def test_the_new_generations_cap_is_picked_in_the_dialog(fake_home, tmp_pa
     async with app.run_test(size=(150, 44)) as pilot:
         await team_view(pilot, app)
         await pilot.press("h", "h")
-        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog))
+        await until(pilot, lambda: isinstance(app.screen, TeamHandoverDialog) and any(
+            str(w.render()).strip() for w in app.screen.query("#handover-preview")))  # on_mount done
         dialog = app.screen
         # Pushed is not yet mounted: under a loaded machine the preview was read before on_mount filled it.
         await until(pilot, lambda: str(dialog.query_one("#handover-preview").render()).strip() != "")

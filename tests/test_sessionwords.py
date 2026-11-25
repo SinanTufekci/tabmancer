@@ -81,10 +81,18 @@ def test_how_it_came_out():
     assert heading[0] == ("Open now · working", f"bold {GREEN}")
 
 
-def test_the_status_and_a_limit():
+def test_the_status_and_a_limit(monkeypatch):
     parts, means = sessionwords.status_row(s(cli="codex"))
     assert "Codex" in means and "Claude" not in means
-    stopped = s(status=Status.LIMIT, resets=datetime.now() + timedelta(hours=1))
+    now = datetime(2026, 11, 25, 14, 0, 0)  # one clock for the row and the words it is held to
+
+    class Pinned(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(VM, "datetime", Pinned)
+    stopped = s(status=Status.LIMIT, resets=now + timedelta(hours=1))
     parts, means = sessionwords.status_row(stopped)
     assert words(parts).startswith("◐ limit · ") and means == VM.limit_help(stopped)
 
