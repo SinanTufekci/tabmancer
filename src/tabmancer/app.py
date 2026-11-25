@@ -1779,44 +1779,33 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         session = self.current()
         if session is None:
             return
-        if session.cli != "claude":
-            self.notify(f"Only Claude Code sessions can be renamed: {clis.label(session.cli)} has no /rename.",
-                        severity="warning")
-            return
-        if teams.member_of(session) is not None:
-            self.notify("Team members keep their names: the team finds them by it.", severity="warning")
-            return
-        if session.status is Status.BACKGROUND:
-            self.notify("A background session renames itself: attach to it (B) and type /rename there.",
-                        severity="warning")
+        refused = rename.refusal(session)  # its words in one copy: the window says them too
+        if refused is not None:
+            self.say_note(actions.Note(refused, "warning"))
             return
 
         def chosen(name: str | None) -> None:
             if not name or name == session.title:
                 return
             if session.exit is Exit.RUNNING:  # renamed from outside, its next turn would write the old name back
-                copy_text(self, rename.command(name))
+                told = rename.open_told(session, name)
+                copy_text(self, told.clipboard)
                 self.go_to_tab(session)
-                self.notify(f"{session.project} is open, so it renames itself: /rename is on the clipboard, "
-                            "paste it into its tab (Ctrl+V, Enter).", title="Rename", timeout=12)
+                self.say_note(told)
             else:
                 self.rename_closed(session, name)
 
-        if session.exit is Exit.RUNNING:
-            hint = Text("It is open, so it renames itself.\n", style=MUTED) + keys(
-                ("Enter", "copy /rename and go to its tab, to paste"), ("Esc", "cancel"))
-        else:
-            hint = keys(("Enter", "rename it, in Claude Code's own list too"), ("Esc", "cancel"))
-        self.push_screen(NamePrompt(f"Rename {session.project} · “{_clip(session.title, 60)}”", value=session.title,
-                                    placeholder="a new name", hint=hint), chosen)
+        enter = keys(("Enter", rename.enter_words(session)), ("Esc", "cancel"))
+        hint = Text(rename.OPEN_WORDS + "\n", style=MUTED) + enter if session.exit is Exit.RUNNING else enter
+        self.push_screen(NamePrompt(rename.heading(session), value=session.title, placeholder=rename.PLACEHOLDER,
+                                    hint=hint), chosen)
 
     @work(thread=True, group="rename")
     def rename_closed(self, session: Session, name: str) -> None:
         try:
             rename.rename(session, name)
         except OSError as error:
-            self.call_from_thread(self.notify, f"{session.project} was not renamed: {error}", severity="error",
-                                  timeout=10)
+            self.call_from_thread(self.say_note, rename.failed_note(session, error))
             return
         fresh = read_session(session.path) if session.path else None
         self.call_from_thread(self.renamed, fresh or replace(session, title=name))
@@ -1826,7 +1815,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.sessions[session.session_id] = session
             self.update_row(session)
             self.update_detail()
-        self.notify(f"Renamed to “{session.title}”.", timeout=5)
+        self.say_note(rename.renamed_note(session.title))
 
     def action_monitor(self, name: str = "") -> None:
         """M: the team's monitor (`tabmancer team watch`) in a window of its own, on the second
