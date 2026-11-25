@@ -6,6 +6,7 @@ and Linux). `tabmancer cleanup` (cleanup.py) and a desktop window use these alik
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -90,6 +91,23 @@ def collect() -> list[Item]:
         items.append(Item(session, files, sum(disk_size(f) for f in files)))
     items.sort(key=lambda item: item.size, reverse=True)
     return items
+
+
+BIN = "Recycle Bin" if sys.platform == "win32" else "Trash"
+
+
+def older_than(items: list[Item], days: float, now: datetime | None = None) -> list[Item]:
+    """The closed sessions last active more than `days` ago: what the clean-up screen's o picks
+    (7 days) and `tabmancer cleanup --older DAYS` moves. Open ones are never picked."""
+    cutoff = (now or datetime.now()).timestamp() - days * 86400
+    return [item for item in items if not item.is_open and item.session.last_active.timestamp() < cutoff]
+
+
+def as_json(item: Item) -> dict:
+    s = item.session
+    return {"session_id": s.session_id, "project": s.project, "title": s.title, "cwd": s.cwd,
+            "last_active": s.last_active.isoformat(timespec="seconds"), "size": item.size, "open": item.is_open,
+            "files": [str(path) for path in item.files]}
 
 
 def _trash_one(path: Path) -> None:

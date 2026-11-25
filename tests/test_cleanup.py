@@ -161,3 +161,100 @@ def test_moving_to_the_recycle_bin_is_diskclean_alone():
     assert cleanup.collect is diskclean.collect and cleanup.Item is diskclean.Item
     with pytest.raises(AttributeError):
         pytest.MonkeyPatch().setattr(cleanup, "_trash_one", lambda path: None)
+
+
+# --- `tabmancer cleanup` in plain text: --list, --older, --yes, --json --------------------------------
+
+@pytest.fixture
+def moves(monkeypatch):
+    """What would reach the Recycle Bin, kept here instead: no test moves a real file."""
+    trashed = []
+    monkeypatch.setattr(diskclean, "_trash_one", lambda path: trashed.append(path.name))
+    return trashed
+
+
+def cleanup_cli(capsys, *flags) -> tuple[int, str, str]:
+    from tabmancer.cli import main
+
+    with pytest.raises(SystemExit) as done:
+        main(["cleanup", *flags])
+    out = capsys.readouterr()
+    return done.value.code, out.out, out.err
+
+
+def test_cleanup_list_shows_every_session_and_moves_nothing(home, moves, monkeypatch, capsys):
+    _, add = home
+    add("old", prompt="the old cart", days_old=20, history_bytes=5000)
+    add("open", prompt="still at work")
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
+        {"sessionId": "open", "kind": "interactive"}])
+    code, out, _ = cleanup_cli(capsys, "--list")
+    assert code == 0 and not moves
+    lines = out.splitlines()
+    assert lines[0].startswith("2 sessions use ") and "older than 30 days on its own" in lines[0]
+    assert "the old cart" in lines[1] and "(open" not in lines[1]  # biggest first
+    assert "still at work" in lines[2] and lines[2].endswith("(open, kept)")
+    assert "--older DAYS" in lines[-1]
+
+
+def test_cleanup_older_says_what_it_would_move_and_moves_nothing(home, moves, capsys):
+    _, add = home
+    add("old", prompt="the old cart", days_old=20)
+    add("new", prompt="this week")
+    code, out, _ = cleanup_cli(capsys, "--older", "7")
+    assert code == 0 and not moves
+    assert "the old cart" in out and "this week" not in out
+    assert "Would move 1 sessions" in out and "more than 7 days ago" in out and "add --yes" in out
+
+
+def test_cleanup_yes_moves_what_older_picks_and_keeps_open_ones(home, moves, monkeypatch, capsys):
+    _, add = home
+    add("old", days_old=20, history_bytes=100)
+    add("old-open", days_old=20)
+    add("new")
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
+        {"sessionId": "old-open", "kind": "interactive"}])
+    code, out, _ = cleanup_cli(capsys, "--older", "7", "--yes")
+    assert code == 0 and sorted(moves) == ["old", "old.jsonl"]
+    assert out.startswith("Moved 1 sessions (") and "to the " in out
+
+
+def test_cleanup_yes_says_each_problem_as_plain_words(home, monkeypatch, capsys):
+    _, add = home
+    add("old", days_old=20)
+
+    def refuse(path):
+        raise OSError("denied [/b]")
+
+    monkeypatch.setattr(diskclean, "_trash_one", refuse)
+    code, out, _ = cleanup_cli(capsys, "--older", "7", "--yes")
+    assert code == 1 and "Moved 0 sessions" in out and "not moved: " in out and "denied [/b]" in out
+
+
+def test_cleanup_yes_without_older_moves_nothing(home, moves, capsys):
+    _, add = home
+    add("old", days_old=20)
+    code, out, err = cleanup_cli(capsys, "--yes")
+    assert code == 2 and not moves and not out and "--older" in err
+
+
+def test_cleanup_json_lists_and_marks_what_older_picks(home, moves, capsys):
+    _, add = home
+    add("old", prompt="the old cart", days_old=20)
+    add("new")
+    code, out, _ = cleanup_cli(capsys, "--json")
+    listed = json.loads(out)
+    assert code == 0 and sorted(entry["session_id"] for entry in listed) == ["new", "old"]
+    assert all("picked" not in entry for entry in listed) and listed[0]["files"]
+    code, out, _ = cleanup_cli(capsys, "--older", "7", "--json")
+    assert {entry["session_id"]: entry["picked"] for entry in json.loads(out)} == {"old": True, "new": False}
+    code, out, _ = cleanup_cli(capsys, "--older", "7", "--yes", "--json")
+    done = json.loads(out)
+    assert done["moved"] == ["old"] and done["freed"] > 0 and done["problems"] == [] and moves
+
+
+def test_cleanup_with_no_flag_opens_the_screen(home, moves, monkeypatch, capsys):
+    ran = []
+    monkeypatch.setattr(cleanup.CleanupApp, "run", lambda self: ran.append(self))
+    code, out, _ = cleanup_cli(capsys)
+    assert code == 0 and len(ran) == 1 and not out and not moves

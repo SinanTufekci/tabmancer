@@ -8,7 +8,6 @@ mistake can be undone. Sessions that are open right now are never touched.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import ClassVar
 
 from rich.text import Text
@@ -181,9 +180,7 @@ class CleanupApp(App[None]):
         self.refresh_marks()
 
     def action_select_older(self) -> None:
-        cutoff = datetime.now().timestamp() - 7 * 86400
-        self.selected |= {sid for sid, item in self.items.items()
-                          if not item.is_open and item.session.last_active.timestamp() < cutoff}
+        self.selected |= {item.session.session_id for item in diskclean.older_than(list(self.items.values()), 7)}
         self.refresh_marks()
 
     def action_toggle_all(self) -> None:

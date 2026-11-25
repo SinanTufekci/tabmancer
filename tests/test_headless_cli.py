@@ -29,7 +29,7 @@ from pathlib import Path
 class Blocked:
     def find_spec(self, name, path=None, target=None):
         if name.split(".")[0] in BLOCKED:
-            raise ImportError("blocked: " + name)
+            raise ModuleNotFoundError("blocked: " + name, name=name)  # as a missing one says it
 
 sys.meta_path.insert(0, Blocked())
 home = Path(HOME)
@@ -111,6 +111,10 @@ COMMANDS = {  # the command, and words its output must hold
     "claude-updates": (["claude-updates"], []),
     "team who": (["team", "who", "shop"], ["lead"]),
     "new help": (["new", "--help"], ["--prompt", "--cli"]),
+    "cleanup list": (["cleanup", "--list"], ["sessions use", "pcb-router"]),
+    "cleanup older": (["cleanup", "--older", "7"], ["Would move", "add --yes"]),  # says, moves nothing
+    "cleanup json": (["cleanup", "--json"], ['"session_id"']),
+    "cleanup, no screen": (["cleanup"], ["sessions use", "--older DAYS"]),  # no Textual: the list
 }
 
 

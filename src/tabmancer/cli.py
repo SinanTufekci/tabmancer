@@ -101,7 +101,13 @@ def main(argv: list[str] | None = None) -> None:
     using.add_argument("action", nargs="?", choices=["enable", "disable", "main"],
                        help="main: the CLI tabmancer starts by default and runs its own calls on (claude or agy)")
     using.add_argument("names", nargs="*", metavar="name", help=", ".join(clis.CLIS))
-    sub.add_parser("cleanup", help="free disk space: move old sessions to the Recycle Bin")
+    cleaning = sub.add_parser("cleanup", help="free disk space: move old sessions to the Recycle Bin (a screen; "
+                                              "--list, --older and --yes in plain text)")
+    cleaning.add_argument("--list", action="store_true", help="list the sessions on disk, biggest first")
+    cleaning.add_argument("--older", type=float, metavar="DAYS",
+                          help="pick the closed sessions last active more than DAYS ago (says what would move)")
+    cleaning.add_argument("--yes", action="store_true", help="move the sessions --older picks to the Recycle Bin")
+    cleaning.add_argument("--json", action="store_true", help="machine-readable output")
     prompt = sub.add_parser("continue-prompt", help="show or change what auto-continue tells Claude")
     prompt.add_argument("text", nargs="?", help="the new prompt")
     prompt.add_argument("--reset", action="store_true", help="go back to the default prompt")
@@ -196,9 +202,7 @@ def main(argv: list[str] | None = None) -> None:
 
         sys.exit(run())
     elif args.command == "cleanup":
-        from .cleanup import CleanupApp
-
-        CleanupApp().run()
+        sys.exit(clean_up(args.list, args.older, args.yes, args.json))
     elif args.command == "continue-prompt":
         manage_continue_prompt(args.text, args.reset)
     elif args.command == "shortcut":
@@ -879,6 +883,63 @@ def print_stats(days: float | None, as_json: bool, as_csv: bool) -> None:
     console = Console()
     for part in plain_text(report, sessions, THEMES[DEFAULT_THEME][1], before):
         console.print(part)
+
+
+def clean_up(listing: bool, older: float | None, yes: bool, as_json: bool) -> int:
+    """`tabmancer cleanup`: the screen, where Textual is installed and no flag is given; else plain
+    text. --list lists, --older DAYS says what it would move, and only --yes with --older moves:
+    never everything by accident. Which are open is asked again as they move (diskclean.trash)."""
+    from . import diskclean
+
+    if yes and older is None:
+        print("--yes moves what --older DAYS picks: give --older too (nothing was moved).", file=sys.stderr)
+        return 2
+    if not (listing or older is not None or as_json):
+        try:
+            from .cleanup import CleanupApp
+        except ImportError as error:
+            if not (error.name or "").startswith("textual"):
+                raise
+            listing = True  # a core install: no screen, so the list
+        else:
+            CleanupApp().run()
+            return 0
+    items = diskclean.collect()
+    picked = diskclean.older_than(items, older) if older is not None else []
+    if yes:
+        moved, problems = diskclean.trash(picked)
+        freed = sum(item.size for item in moved)
+        if as_json:
+            json.dump({"moved": [item.session.session_id for item in moved], "freed": freed, "problems": problems},
+                      sys.stdout, indent=2)
+            print()
+        else:
+            print(f"Moved {len(moved)} sessions ({diskclean.human(freed)}) to the {diskclean.BIN}.")
+            for problem in problems:
+                print(f"  not moved: {problem}")
+        return 1 if problems else 0
+    if as_json:
+        chosen = {id(item) for item in picked}
+        json.dump([dict(diskclean.as_json(item), **({"picked": id(item) in chosen} if older is not None else {}))
+                   for item in items], sys.stdout, indent=2)
+        print()
+        return 0
+    shown = picked if older is not None else items
+    total = sum(item.size for item in items)
+    print(f"{len(items)} sessions use {diskclean.human(total)} · Claude Code deletes sessions older than "
+          f"{diskclean.claude_cleanup_days()} days on its own")
+    for item in shown:
+        s = item.session
+        print(f"{diskclean.human(item.size):>9}  {s.last_active:%Y-%m-%d}  {s.project[:22]:<22}  {s.title[:52]}"
+              + ("  (open, kept)" if item.is_open else ""))
+    if older is not None:
+        size = diskclean.human(sum(item.size for item in picked))
+        days = f"{older:g}"
+        print(f"Would move {len(picked)} sessions ({size}) last active more than {days} days ago to the "
+              f"{diskclean.BIN}; add --yes to move them.")
+    else:
+        print(f"Pick with --older DAYS (what would move), then add --yes to move them to the {diskclean.BIN}.")
+    return 0
 
 
 def print_tokens(days: float, as_json: bool) -> None:
