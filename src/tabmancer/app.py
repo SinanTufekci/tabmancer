@@ -2265,6 +2265,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def start_team(self, state: teamtree.TeamState) -> None:
         """Every member not open: a closed one resumed as itself, one never started new; the lead last."""
+        self.engine.state.kept_handovers.pop(state.team.name, None)  # going on as it was, not handed over
         sessions = {name: self.sessions.get(s.session_id, s) if s is not None else None
                     for name, s in state.sessions.items()}
         start = actions.start_team(state.team, sessions, self.openings.recent())
