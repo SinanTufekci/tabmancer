@@ -28,6 +28,17 @@ def test_the_at_words_at_a_lines_end_are_its_model_and_effort(line, text, pick):
     assert picks.split(line) == (text, pick)
 
 
+def test_a_choice_offers_a_value_it_does_not_list_and_says_what_it_is():
+    """A 500k cap from config.json or a team's: shown and kept, never swapped for the first word (saved so)."""
+    caps = [*picks.CAPS, picks.NO_CAP]
+    assert picks.choices(caps, "300k") == caps
+    assert picks.choices(caps, "500k") == ["500k", *caps]
+    assert picks.choices(caps, "") == caps  # nothing given: the choice starts on its first word, as before
+    assert picks.choices(iter(caps), "500k")[1:] == caps
+    assert picks.cap_words("300k") == picks.CAP_WORDS["300k"]
+    assert picks.cap_words("500k") == picks.OWN_CAP and picks.cap_words("lots") == picks.NOT_A_CAP
+
+
 def test_a_pick_says_itself_as_flags_and_words():
     assert Pick("sonnet", "high").flags() == ("--model", "sonnet", "--effort", "high")
     assert Pick("", "low").flags() == ("--effort", "low") and Pick().flags() == ()

@@ -89,7 +89,7 @@ def team_handed_note(team: teams.Team, fresh: teams.Team) -> Told:
 
 def cap_words(chosen: str) -> str:
     """'300K: …' for the cap picked in the team handover dialog."""
-    return f"{CAP_SHORT.get(chosen, chosen)}: {picks.CAP_WORDS[chosen]}"
+    return f"{CAP_SHORT.get(chosen, chosen)}: {picks.cap_words(chosen)}"
 
 
 def lineup_problems(team: teams.Team, members: list[teams.Member]) -> list[str]:

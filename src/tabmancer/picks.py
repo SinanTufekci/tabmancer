@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -50,6 +51,8 @@ CAP_WORDS = {
     "600k": "wide work: much of a large codebase in view at once",
     NO_CAP: "Claude Code's own: the model's whole window (1M for most), compacted near its end",
 }
+OWN_CAP = "a cap of its own, set before (config.json, or the team's): kept as it is"  # one not among CAPS
+NOT_A_CAP = "not a cap Claude Code takes (100k to 1M): it starts with none"
 # One line each, said where you pick. Prices are the API's per token; a plan's limits weigh
 # the models in much the same order.
 MODEL_WORDS = {
@@ -160,6 +163,22 @@ def cap_tokens(cap: str) -> int:
 def cap_flags(cap: str) -> tuple[str, ...]:
     """--autocompact for a cap; nothing for NO_CAP or none decided."""
     return ("--autocompact", cap) if cap_tokens(cap) else ()
+
+
+def cap_words(cap: str) -> str:
+    """What a cap does, said where it is picked: its CAP_WORDS line; for one not among CAPS (a 500k from
+    config.json, or a team's), that it is its own and kept."""
+    if cap in CAP_WORDS:
+        return CAP_WORDS[cap]
+    return OWN_CAP if cap_tokens(cap) else NOT_A_CAP
+
+
+def choices(words: Iterable[str], value: str) -> list[str]:
+    """The words a choice offers while it holds value: a value given that is not among them (a 500k cap
+    from config.json, a team's cap of its own) is offered too, first, so it shows and stays picked. A
+    choice that took its first word instead would save that one, unasked. No value: the words as they are."""
+    listed = list(words)
+    return [value, *listed] if value and value not in listed else listed
 
 
 def default_cap() -> str:

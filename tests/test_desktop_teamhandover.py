@@ -141,6 +141,27 @@ def test_the_dialog_shows_the_handover_and_the_lineup_in_the_terminals_words(qap
     parent.close()
 
 
+def test_a_cap_of_its_own_shows_first_and_stays_picked(qapp, world):
+    """A team under a cap not among the dialog's (500k, from config.json when it was made): its own pill,
+    picked, said as its own; Ctrl+S keeps it (it used to come up as 200k, and was saved so)."""
+    parent = QWidget()
+    parent.show()
+    answers: list = []
+    team = replace(made_up_team(), cap="500k")
+    dialog = TeamHandoverDialog(parent, team, "THE HANDOVER", LINEUP, True, answers.append, look.ORANGE)
+    dialog.open()
+    qapp.processEvents()
+    assert dialog.cap.words == ["500k", *picks.CAPS, picks.NO_CAP] and dialog.cap.value == "500k"
+    assert dialog.cap.group.button(0).text() == "● 500k"
+    assert dialog.cap_words.text() == look.span(f"500k: {picks.OWN_CAP}", look.MUTED)
+    assert "Each under a 500k context cap." in dialog.preview.text()
+    QTest.keyClick(dialog.cap, Qt.Key.Key_Right)
+    QTest.keyClick(dialog.cap, Qt.Key.Key_Left)  # away and back: still there
+    ctrl_s(dialog)
+    assert answers == [("api: the endpoints @sonnet\nqa: the tests @agy", "500k")]
+    parent.close()
+
+
 def test_esc_answers_none_once(qapp, world):
     parent = QWidget()
     parent.show()

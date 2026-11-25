@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFocusEvent, QKeyEvent
 from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from .. import picks
 from . import look
 
 GAP = "   "  # between a key line's keys
@@ -24,13 +25,14 @@ class Choice(QWidget):
     """One of a few words side by side, the one picked marked (● 300k  ○ 400k), as the terminal's Choice
     shows them. ←/→ (or Space) moves the mark while it has the focus, round from the last to the first;
     a click picks a word. labels: how a word is shown, where it is not shown as it is. A value not among
-    the words starts on the first, as the terminal's does."""
+    the words (a 500k cap from config.json) is offered too, first, and stays picked (picks.choices): one
+    swapped for the first word would be saved so. No value: the first word."""
 
     changed = Signal(str)
 
     def __init__(self, words: Iterable[str], value: str, accent: str, labels: dict[str, str] | None = None) -> None:
         super().__init__()
-        self.words = list(words)
+        self.words = picks.choices(words, value)
         self.labels = labels or {}
         self.accent = accent
         self.value = value if value in self.words else self.words[0]
