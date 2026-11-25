@@ -44,6 +44,7 @@ from . import (
     focus,
     footer,
     gitstate,
+    handoverwords,
     limitwords,
     marks,
     newforms,
@@ -2564,8 +2565,23 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.table.focus()
         elif step == "card":
             self.action_card(self.card_filter)
-        else:
+        elif self.quit_ok("Esc"):
             self.exit(None)
+
+    async def action_quit(self) -> None:
+        """q (and Ctrl+Q): quit, unless handovers are queued here (quit_ok)."""
+        if self.quit_ok("q"):
+            await super().action_quit()
+
+    def quit_ok(self, key: str) -> bool:
+        """Whether a quit key quits now: with handovers queued here (h on sessions at work), which go with
+        the dashboard, the first press says so and a second within QUIT_AGAIN_SECONDS quits (the presses
+        on row_keys' clock: no timer to forget them)."""
+        count = len(self.queued)
+        if not count or self.row_keys.again("quit", "dashboard", QUIT_AGAIN_SECONDS):
+            return True
+        self.say_note(handoverwords.queued_on_quit(count, key))
+        return False
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         # With a dialog or the team view on top, the dashboard's keys belong to it (footer.allowed).
@@ -3126,5 +3142,6 @@ for _name in engine.FORWARDED:
 del _name
 
 # The dashboard's own keys, which a dialog or the team view on top keeps for itself.
+QUIT_AGAIN_SECONDS = 6  # q again, with handovers queued here: quits (SessionPicker.quit_ok)
 DASHBOARD_ACTIONS = {binding.action for binding in SessionPicker.BINDINGS} - {
     "quit", "back", "cycle_theme", "toggle_mascot"}

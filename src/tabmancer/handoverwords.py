@@ -98,6 +98,14 @@ def queued_on_closing(count: int) -> str:
             f"{'them' if many else 'it'}. Close anyway?")
 
 
+def queued_on_quit(count: int, key: str) -> Note:
+    """Said on the terminal's first quit key (q, Ctrl+Q, Esc) with handovers queued in it: they go with it,
+    and the same key again quits (app.QUIT_AGAIN_SECONDS)."""
+    many = count != 1
+    return Note(f"{count} handover{'s' if many else ''} {'are' if many else 'is'} queued here: {key} again "
+                f"drops {'them' if many else 'it'}. {QUEUED_WHY}", "warning", 6)
+
+
 def finishing_note(names: list[str]) -> Note:
     """Said on closing while a handover is written (minutes): the window waits for it, since one cut short
     loses it (a session that writes its own is closed before it starts writing)."""
