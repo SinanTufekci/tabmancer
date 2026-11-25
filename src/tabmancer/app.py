@@ -47,6 +47,7 @@ from . import (
     gitstate,
     handover,
     handoverwords,
+    limitwords,
     marks,
     newforms,
     newsessions,
@@ -309,7 +310,7 @@ class PromptDialog(ModalScreen[tuple[str, str] | None]):
         self.dismiss(None)
 
 
-BIG_CONTEXT = 300_000  # tokens: going on with this much on another account costs much of its limit
+BIG_CONTEXT = limitwords.BIG_CONTEXT  # tokens: going on with this much on another account costs much of its limit
 
 
 class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
@@ -336,35 +337,18 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
         self.away, self.where = away or {}, where
 
     def compose(self) -> ComposeResult:
-        now = Option(Text.assemble(
-            ("Continue the ticked now", f"bold {TEXT}"), ("  you signed in with another account, or the limit has lifted\n", MUTED),
-            ("  an open one gets the prompt in its tab, a closed one opens in a new tab", MUTED)), id="now")
-        later = Option(Text.assemble(
-            ("Continue the ticked when the limit lifts", f"bold {TEXT}"), (f"  {self.when}\n", MUTED),
-            ("  leave the dashboard open; each goes on by itself then", MUTED)), id="lift")
-        over = Option(Text.assemble(
-            ("Hand the ticked over", f"bold {TEXT}"),
-            ("  each a fresh session, its handover written from the transcript\n", MUTED),
-            ("  cheap on another account: the old context is not sent again", MUTED),
-            ("\n  only a digest goes: your prompts, its last replies and commits, not what its tools read"
-             if self.away else "", AMBER)), id="handover")
-        options = [now, later, over] if self.room else [later, now, over]
-        if self.armed:
-            options.append(Option(Text.assemble(("Do not continue them by themselves", f"bold {TEXT}"),
-                                                ("  they wait for you", MUTED)), id="off"))
-        count = len(self.stopped)
+        options = [Option(Text.assemble(*parts), id=way)
+                   for way, parts in limitwords.ways(self.when, self.room, self.armed, bool(self.away))]
         with Vertical():
-            yield Label(title("Stopped at a usage limit", f"{count} session{'' if count == 1 else 's'}",
-                              f"it lifts {self.when}"))
+            yield Label(title(*limitwords.title_words(len(self.stopped), self.when)))
             if self.plan:
                 yield Label(self.plan, classes="plan")
-            biggest = sorted(self.stopped, key=lambda s: -s.context)  # what costs most to go on with first
-            yield SelectionList(*[Selection(self.line(s), s.session_id, True) for s in biggest], id="which")
+            yield SelectionList(*[Selection(self.line(s), s.session_id, True)
+                                  for s in limitwords.biggest(self.stopped)], id="which")
             yield Label(self.cost(), classes="cost")
             yield Label(self.away_words(), classes="away")
             yield OptionList(*options, id="ways")
-            yield Label(keys(("Space", "tick"), ("Tab", "the sessions or the ways"), ("Enter", "choose"),
-                             ("Esc", "cancel")), classes="hint")
+            yield Label(keys(*limitwords.KEY_PAIRS), classes="hint")
 
     def on_mount(self) -> None:
         ways = self.query_one("#ways", OptionList)
@@ -374,22 +358,11 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
 
     def away_words(self) -> Text:
         """For the ticked ones that ran on another organisation: where going on sends them."""
-        ticked = [sid for sid in self.ticked() if sid in self.away]
-        if not ticked:
-            return Text("")
-        held = sorted({kind for sid in ticked for kind in self.away[sid]})
-        one = len(ticked) == 1
-        said = (f"{'One' if one else len(ticked)} of the ticked ran on another organisation: "
-                f"{'its conversation goes' if one else 'their conversations go'} to {self.where} if "
-                f"{'it goes' if one else 'they go'} on")
-        return Text.assemble((said, AMBER), (f" ({' / '.join(held)} content in {'it' if one else 'them'})"
-                                             if held else "", f"bold {AMBER}"), (".", AMBER))
+        return Text.assemble(*limitwords.away_parts(self.ticked(), self.away, self.where))
 
     def line(self, session: Session) -> Text:
         """'web-app  Fix the login loop  612k context', a big context in amber."""
-        size = session.context
-        return Text.assemble((f"{_clip(session.project, 18):<18}  ", TEXT), (f"{_clip(session.title, 36):<36}  ", MUTED),
-                             (f"{human(size)} context" if size else "", AMBER if size >= BIG_CONTEXT else MUTED))
+        return Text.assemble(*limitwords.line_parts(session))
 
     def ticked(self) -> list[str]:
         return list(self.query_one("#which", SelectionList).selected) if self.is_mounted else \
@@ -397,15 +370,8 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
 
     def cost(self) -> Text:
         """What going on costs on another account, for the ticked ones."""
-        ticked = set(self.ticked())
-        total = sum(s.context for s in self.stopped if s.session_id in ticked)
-        if not total:
-            return Text("")
-        return Text.assemble(
-            "On another account each one goes on by writing its whole context into the cache again: ",
-            (f"{human(total)} tokens", f"bold {AMBER}" if total >= BIG_CONTEXT else f"bold {TEXT}"),
-            " for the ticked ones, much of a 5-hour limit at once. Handed over, a session starts afresh "
-            "with a short handover.", style=MUTED)
+        parts = limitwords.cost_parts(limitwords.ticked_total(self.stopped, self.ticked()))
+        return Text.assemble(*parts, style=MUTED) if parts else Text("")
 
     def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
         self.query_one(".cost", Label).update(self.cost())
@@ -416,7 +382,7 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
             return
         ticked = self.ticked()
         if not ticked and event.option.id != "off":
-            self.notify("Tick a session first (Space, after Tab).", timeout=4)
+            self.notify(limitwords.TICK_FIRST.words, timeout=limitwords.TICK_FIRST.seconds)
             return
         self.dismiss((event.option.id, ticked))
 
