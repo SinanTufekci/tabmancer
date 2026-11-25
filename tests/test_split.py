@@ -369,12 +369,12 @@ async def test_a_head_wider_than_the_pane_leaves_every_key_on_the_screen(fake_ho
     window, 2026-11-23). It breaks between its parts only: never "671k" on one row, "tokens" on the next."""
     from rich.text import Text
 
-    from tabmancer import teamtree
+    from tabmancer import teamtree, teamwords
 
     shop(fake_home, tmp_path, monkeypatch)
-    monkeypatch.setattr(teamtree, "head", lambda state, tokens, accent: Text.assemble(
+    monkeypatch.setattr(teamwords, "head", lambda state, tokens, accent: [  # the preview's head (team_detail)
         ("TEAM ", "bold"), ("shop", f"bold {accent}"), ("  ·  4 of 4 open  ·  1234 messages", "dim"),
-        ("  ·  999.9M tokens", "dim")))
+        ("  ·  999.9M tokens", "dim")])
     monkeypatch.setattr(teamtree, "latest", lambda state, colours, room, width: Text(
         "\n".join(f"message {n}" for n in range(room))))
     app = SessionPicker(days=14)

@@ -64,6 +64,7 @@ from . import (
     teams,
     teamtree,
     teamwatch,
+    teamwords,
     toast,
     tokens,
     usage,
@@ -404,6 +405,23 @@ def cell(value: sessionwords.Cell) -> Text:
     if len(value) == 1:
         return Text(value[0][0], style=value[0][1])
     return Text.assemble(*value)
+
+
+def facts_table(rows: list[sessionwords.Row]) -> Table:
+    """The facts column next to the preview (sessionwords.fact_rows): quiet labels, the words beside them."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style=MUTED, no_wrap=True)
+    grid.add_column(overflow="fold")
+    for label, value in rows:
+        grid.add_row(label, cell(value))
+    return grid
+
+
+def clipped_line(parts: list[tuple[str, str]], room: int) -> Text:
+    """Parts on one line (based), cut to the room with an ellipsis."""
+    line = based(parts)
+    line.truncate(room, overflow="ellipsis")
+    return line
 
 
 def based(parts: list[tuple[str, str]]) -> Text:
@@ -1745,30 +1763,38 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             return
         self.inspector.remove_class("team-only")
         self.drop_team_graph()
-        head = Text(session.title, style=f"bold {TEXT}")
-        words, means = sessionwords.status_row(session)
-        status = Table.grid(padding=(0, 2))  # what it means beside the status, wrapped under itself
-        status.add_column(no_wrap=True)
-        status.add_column(style=MUTED, overflow="fold")
-        status.add_row(cell(words), means)
-        enter = Text.assemble(("⏎ ", f"bold {self.accent()}"), (self.enter_words(session), self.accent()))
         # Quiet labels on the left, the words themselves bright and indented beside them,
         # each cut to a few lines of the room there is, so the reply still shows when narrow.
         room = max(24, (detail.content_size.width or 74) - 14)
+        view = sessionwords.detail(session, self.detail_inputs(session, room))
+        head = Text(view.head, style=f"bold {TEXT}")
+        status = Table.grid(padding=(0, 2))  # what it means beside the status, wrapped under itself
+        status.add_column(no_wrap=True)
+        status.add_column(style=MUTED, overflow="fold")
+        status.add_row(cell(view.status), view.means)
+        enter = Text.assemble(*view.enter)
         said = Table.grid(padding=(0, 2))
         said.add_column(style=MUTED, no_wrap=True)
         said.add_column(style=TEXT, overflow="fold")
-        found = None
-        if session.session_id in self.said_in():  # the filter's words, where they were said
-            found = self.search.snippet(session.session_id, self.filter_text, width=2 * room)
-        for label, value in sessionwords.said_rows(
-                session, messages=[] if session.session_id in self.member_rows else None, found=found,
-                summary=self.summaries.get(session.session_id), summarizing=session.session_id in self.summarizing,
-                summary_model=summarize.MODEL, room=room, more=3 if self.split else 1, accent=self.accent()):
+        for label, value in view.said:
             # more: beside the list, at full height, more of each; a member's messages cut to the room here
-            said.add_row(label, self.member_messages(session, 2 * room) if label == "Messages" else cell(value))
+            said.add_row(label, clipped_line(value, 2 * room) if label == "Messages" else cell(value))
         detail.update(Group(head, status, enter, Text(""), said))
-        self.meta.update(self.meta_table(session))
+        self.meta.update(facts_table(view.facts))
+
+    def detail_inputs(self, session: Session, room: int = 60, said: bool = True) -> sessionwords.DetailInputs:
+        """What the preview says of a session beyond the session itself, as this dashboard has it
+        (sessionwords.detail). said=False: only what its facts need."""
+        sid = session.session_id
+        found = None
+        if said and sid in self.said_in():  # the filter's words, where they were said
+            found = self.search.snippet(sid, self.filter_text, width=2 * room)
+        return sessionwords.read_inputs(
+            session, members=self.member_rows, team_states=self.team_states, git=self.git,
+            session_tokens=self.session_tokens, background=self.background_live, armed=self.armed,
+            queued=self.queued, modes=self.modes, default_cap=self.default_cap, accent=self.accent(),
+            selected=self.selected, summaries=self.summaries, summarizing=self.summarizing, found=found,
+            room=room, more=3 if self.split else 1, said=said)
 
     def enter_words(self, session: Session) -> str:
         """What Enter does with the highlighted session, as it stands: ticked ones go first."""
@@ -1776,19 +1802,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def meta_table(self, session: Session) -> Table:
         """The facts column next to the preview."""
-        grid = Table.grid(padding=(0, 2))
-        grid.add_column(style=MUTED, no_wrap=True)
-        grid.add_column(overflow="fold")
-        for label, value in sessionwords.fact_rows(
-                session, member=self.member_rows.get(session.session_id),
-                effort=self.effort_of(session) if session.cli == "claude" else "",
-                git=self.git.get(folder_key(session.cwd)), tokens=self.session_tokens.get(session.session_id),
-                cap=self.cap_of(session) if session.context and session.cli == "claude" else 0,
-                default_cap=self.default_cap, launch=lambda: self.launch_for(session), mode=self.mode(session),
-                armed=self.armed.get(session.session_id), queued=session.session_id in self.queued,
-                accent=self.accent()):
-            grid.add_row(label, cell(value))
-        return grid
+        return facts_table(sessionwords.facts(session, self.detail_inputs(session, said=False)))
 
     def cap_of(self, session: Session) -> int:
         """The context cap a session runs under, as far as tabmancer knows (teams.cap_of); 0 for none."""
@@ -2382,15 +2396,15 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         wide = self.size.width >= TEAM_MESSAGES_FROM
         self.inspector.set_class(not wide, "team-only")
         width = max(30, (self.detail.content_size.width if wide else self.inspector.content_size.width - 1) or 70)
-        head = teamtree.head(state, state.tokens(self.session_tokens), self.accent())
+        words = teamwords.team_detail(state, state.tokens(self.session_tokens), self.accent(),
+                                      self.team_open(state.team.name))
         hint = self.team_keys(state)
-        goal = Text.assemble(("Goal  ", MUTED), (teamtree.one_line(state.team.goal), TEXT))
+        goal = cell(words.goal)
         goal.truncate(width, overflow="ellipsis")
-        lines = [head, goal, *teamtree.tree(state, width, looks, colours, self.team_flights.get(state.team.name, ()),
-                                            time.monotonic())]
-        if not self.team_open(state.team.name):
-            last = f", {state.team.lead.name} last" if state.team.lead is not None else ""
-            lines.insert(2, Text(f"Closed. Enter starts it: each member resumed as itself{last}.", style=AMBER))
+        lines = [cell(words.head), goal, *teamtree.tree(state, width, looks, colours,
+                                                        self.team_flights.get(state.team.name, ()), time.monotonic())]
+        if words.closed:
+            lines.insert(2, cell(words.closed))
         if not wide:  # no room beside it: its keys under it
             hint.truncate(width, overflow="ellipsis")
             self.detail.update(Text("\n").join([*lines, hint]))
@@ -2413,12 +2427,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         width = area.width or max(PANE_LEAST, min(PANE_MOST, self.size.width - PANE_TAKES)) - 4  # padding 2+2
         top = area.y or 2
         bottom = area.bottom if area.height else self.size.height - 3  # before the first layout, a guess
-        goal = Text.assemble(("Goal  ", MUTED), (teamtree.one_line(state.team.goal), TEXT))
+        words = teamwords.team_detail(state, state.tokens(self.session_tokens), self.accent(),
+                                      self.team_open(state.team.name))
+        goal = cell(words.goal)
         goal.truncate(width, overflow="ellipsis")
-        lines = [*wrap_at(teamtree.head(state, state.tokens(self.session_tokens), self.accent()), width), goal]
-        if not self.team_open(state.team.name):
-            last = f", {state.team.lead.name} last" if state.team.lead is not None else ""
-            lines.append(Text(f"Closed. Enter starts it: each member resumed as itself{last}.", style=AMBER))
+        lines = [*wrap_at(cell(words.head), width), goal]
+        if words.closed:
+            lines.append(cell(words.closed))
         beside = max(20, width - 2)  # a body's indent: no line wraps
         hint = keys_in(beside, *self.team_key_pairs(state))
         keys_h = len(hint.split())
@@ -2484,11 +2499,13 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def member_messages(self, session: Session, room: int) -> Text:
         """'3 in · 2 out · ← lead 2m: Heads-up…' for a member's own preview."""
+        return clipped_line(self.member_parts(session), room)
+
+    def member_parts(self, session: Session) -> list[sessionwords.Part]:
+        """A member's messages on one line, as parts (sessionwords.messages)."""
         name, member = self.member_rows[session.session_id]
         state = self.team_states[name]
-        line = based(sessionwords.messages(state.said, member, team_colours(state.team, self.accent())))
-        line.truncate(room, overflow="ellipsis")
-        return line
+        return sessionwords.messages(state.said, member, team_colours(state.team, self.accent()))
 
     def toggle_folded(self, name: str) -> None:
         self.unfolded ^= {name}

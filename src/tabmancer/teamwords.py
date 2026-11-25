@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from typing import NamedTuple
 
 from . import agy, teams
 from . import viewmodel as VM
@@ -92,6 +93,24 @@ def head(state: teams.TeamState, tokens: int, accent: str) -> list[Part]:
     what = f"  ·  {state.open_count()} of {len(team.members)} open  ·  {said} message{'s' if said != 1 else ''}"
     return [("TEAM ", f"bold {MUTED}"), (team.name, f"bold {accent}"), (what, MUTED),
             (f"  ·  {human(tokens)} tokens" if tokens else "", MUTED)]
+
+
+class TeamDetail(NamedTuple):
+    """A team's preview, its first lines: the head, its goal, and while it is closed what Enter does
+    ([] while at work)."""
+
+    head: list[Part]
+    goal: list[Part]
+    closed: list[Part]
+
+
+def team_detail(state: teams.TeamState, tokens: int, accent: str, at_work: bool) -> TeamDetail:
+    """A team's preview, its first lines, as both fronts show them. at_work: any of it open."""
+    closed: list[Part] = []
+    if not at_work:
+        last = f", {state.team.lead.name} last" if state.team.lead is not None else ""
+        closed = [(f"Closed. Enter starts it: each member resumed as itself{last}.", AMBER)]
+    return TeamDetail(head(state, tokens, accent), [("Goal  ", MUTED), (one_line(state.team.goal), TEXT)], closed)
 
 
 def gist(message: teams.Message, other: str = "") -> str:

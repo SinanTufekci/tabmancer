@@ -3,23 +3,30 @@ Enter does, how it came out, and its preview (status, what was said, the facts b
 parts, (words, style), as in teamwords: the style a colour from palette.py with 'bold ' before it where
 the words stand out, '' for none. A Cell is parts, or a str said as it is. A Row is (label, cell); a
 row with the label '' goes on from the one above. The terminal dashboard (app) puts them into rich
-Text, the desktop window into its own; both say the same."""
+Text, the desktop window into its own; both say the same.
+
+A style is '' or words from a closed set, joined by spaces: one colour (from palette.py, or the accent
+passed in) and any of bold, dim, italic, reverse ('bold reverse {accent}' marks the filter's words,
+'dim italic' a summary being written). A front maps exactly these; a new word needs a line in each.
+
+detail() is the whole preview of a session as one value (DetailView), from plain inputs (DetailInputs)
+that read_inputs() reads off the state each front holds."""
 
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Callable
-from dataclasses import replace
+from collections.abc import Callable, Collection
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import agy, clis, context, picks, teams
+from . import actions, agy, clis, context, picks, summarize, teams, teamwords
 from . import viewmodel as VM
 from .actions import clip
 from .gitstate import GitState
-from .launch import Launch, Mode
+from .launch import Launch, Mode, default_mode
 from .palette import AMBER, BLUE, CYAN, GREEN, MUTED, RED, TEXT
-from .sessions import Exit, Session, Status
+from .sessions import Exit, Session, Status, folder_key
 from .teamwords import Part, message_parts
 from .tokens import Tokens, duration, human
 
@@ -81,7 +88,7 @@ def open_as(session: Session, mode: Mode, *, armed: datetime | None, queued: boo
     return [(MODE_LABEL[mode], f"bold {accent}" if mode is Mode.AUTO else MUTED)]
 
 
-def enter_words(session: Session, launch: Callable[[], Launch], selected: set[str]) -> str:
+def enter_words(session: Session, launch: Callable[[], Launch], selected: Collection[str]) -> str:
     """What Enter does with the highlighted session, as it stands: ticked ones go first. launch: how
     it would open (only asked when that is what Enter does)."""
     if selected:
@@ -245,3 +252,96 @@ def fact_rows(session: Session, *, member: tuple[str, str] | None, effort: str, 
         if how.options:
             rows.append(("", [(f"as {how.title}, with its role and the team's messages let in", MUTED)]))
     return rows
+
+
+# --- the whole preview, as one value ------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DetailInputs:
+    """What a session's preview says beyond the session itself, as plain data: the terminal dashboard
+    reads it off its own state (app.detail_inputs), the desktop window off its snapshot."""
+
+    launch: Callable[[], Launch]  # how it would open, asked only where that is said (may raise agy.NoModel)
+    mode: Mode  # how it opens as m set it
+    member: tuple[str, str] | None = None  # (team, member) for a team member's session
+    messages: list[Part] | None = None  # a member's (messages()), one line; None for a session in no team
+    effort: str = ""  # the effort it runs at ('' for none known, or not Claude)
+    git: GitState | None = None  # its folder's git now
+    tokens: Tokens | None = None  # over its whole life
+    cap: int = 0  # the context cap it runs under (0: none, or not Claude)
+    default_cap: int = 0  # the one new sessions get
+    armed: datetime | None = None  # c: goes on when its limit lifts
+    queued: bool = False  # h on a busy one: handed over once it is free
+    selected: Collection[str] = frozenset()  # the ticked sessions' ids: Enter opens them
+    found: tuple[str, int, int] | None = None  # where the filter's words were said: (piece, start, end)
+    summary: dict | None = None  # the one written for it (s)
+    summarizing: bool = False  # one is being written
+    summary_model: str = ""  # by this model
+    room: int = 60  # the room for what was said, in characters: each is cut to a few lines of it
+    more: int = 1  # how many times as much of each (beside the list: 3)
+    accent: str = ""  # the theme's accent colour
+    now: datetime | None = None  # the clock, for how long it has been going
+
+
+@dataclass(frozen=True)
+class DetailView:
+    """A session's preview: its title (bold, in TEXT), its status with what that means beside it (in
+    MUTED), what Enter does, what was said in it, and the facts beside them."""
+
+    head: str
+    status: list[Part]
+    means: str
+    enter: list[Part]  # '⏎ resumes it in a new tab · m changes how', in the accent
+    said: list[Row]  # said_rows(): a 'Messages' row is one line, for the front to cut to its room
+    facts: list[Row]  # fact_rows()
+
+
+def read_inputs(session: Session, *, members: dict[str, tuple[str, str]], team_states: dict[str, teams.TeamState],
+                git: dict[str, GitState], session_tokens: dict[str, Tokens], background: dict[str, dict],
+                armed: dict[str, datetime], queued: Collection[str], modes: dict[str, Mode], default_cap: int,
+                accent: str, selected: Collection[str] = frozenset(), summaries: dict[str, dict] | None = None,
+                summarizing: Collection[str] = frozenset(), found: tuple[str, int, int] | None = None,
+                room: int = 60, more: int = 1, said: bool = True) -> DetailInputs:
+    """A session's preview inputs, read off what a front holds: members, session id -> (team, member)
+    for the sessions listed as a team's; git by folder key; background, the background sessions' jobs
+    (Enter attaches to one); modes, how m set each (else its status's default); found, where the
+    filter's words were said (the front's search finds them). said=False: only what the facts need."""
+    sid = session.session_id
+    claude = session.cli == "claude"
+    member = members.get(sid)
+    mode = modes.get(sid) or default_mode(session.status)
+    job = background.get(sid) if session.status is Status.BACKGROUND else None
+    parts = None
+    if said and member is not None:
+        state = team_states[member[0]]
+        parts = messages(state.said, member[1], teamwords.colours(state.team, accent))
+    cap = 0
+    if session.context and claude:
+        state = team_states.get(member[0]) if member else None
+        cap = teams.cap_of(sid, state.team if state is not None else None)
+    return DetailInputs(
+        launch=lambda: actions.launch_for(session, mode, job), mode=mode, member=member, messages=parts,
+        effort=VM.effort_of(session, member is not None) if claude else "",
+        git=git.get(folder_key(session.cwd)), tokens=session_tokens.get(sid), cap=cap, default_cap=default_cap,
+        armed=armed.get(sid), queued=sid in queued, selected=selected, found=found if said else None,
+        summary=(summaries or {}).get(sid) if said else None, summarizing=said and sid in summarizing,
+        summary_model=summarize.MODEL, room=room, more=more, accent=accent)
+
+
+def facts(session: Session, inputs: DetailInputs) -> list[Row]:
+    """The facts beside the preview (fact_rows), from the inputs."""
+    return fact_rows(session, member=inputs.member, effort=inputs.effort, git=inputs.git, tokens=inputs.tokens,
+                     cap=inputs.cap, default_cap=inputs.default_cap, launch=inputs.launch, mode=inputs.mode,
+                     armed=inputs.armed, queued=inputs.queued, accent=inputs.accent, now=inputs.now)
+
+
+def detail(session: Session, inputs: DetailInputs) -> DetailView:
+    """A session's whole preview, as both fronts show it."""
+    status, means = status_row(session)
+    enter = [("⏎ ", f"bold {inputs.accent}"),
+             (enter_words(session, inputs.launch, inputs.selected), inputs.accent)]
+    said = said_rows(session, messages=inputs.messages, found=inputs.found, summary=inputs.summary,
+                     summarizing=inputs.summarizing, summary_model=inputs.summary_model, room=inputs.room,
+                     more=inputs.more, accent=inputs.accent)
+    return DetailView(session.title, status, means, enter, said, facts(session, inputs))
