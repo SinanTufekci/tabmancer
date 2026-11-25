@@ -116,3 +116,14 @@ def test_with_agys_chain_all_out_the_preview_says_nothing_opens_it(monkeypatch):
     ticked = sessionwords.detail(gemini, sessionwords.DetailInputs(launch=inputs.launch, mode=Mode.RESUME,
                                                                     selected={"g1"}))
     assert ticked.enter[1][0] == "opens the 1 ticked session, each in a tab"  # what Enter does first
+
+
+def test_how_it_opens_is_asked_once_per_preview():
+    asked = []
+
+    def launch() -> Launch:
+        asked.append(1)
+        return resume()
+    sessionwords.detail(s(), sessionwords.DetailInputs(launch=launch, mode=Mode.RESUME))
+    assert asked == [1]  # Enter, the check behind it and Opens as: one launch (a member's writes its files)
+

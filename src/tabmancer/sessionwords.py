@@ -337,7 +337,16 @@ def facts(session: Session, inputs: DetailInputs) -> list[Row]:
 
 
 def detail(session: Session, inputs: DetailInputs) -> DetailView:
-    """A session's whole preview, as both fronts show it."""
+    """A session's whole preview, as both fronts show it. How it would open is asked once at most
+    (for a team's agy or Codex member that writes its role and bus files: teams.as_member)."""
+    known: list[Launch] = []
+    ask = inputs.launch
+
+    def launch() -> Launch:
+        if not known:
+            known.append(ask())
+        return known[0]
+    inputs = replace(inputs, launch=launch)
     status, means = status_row(session)
     try:
         enter = [("⏎ ", f"bold {inputs.accent}"),
