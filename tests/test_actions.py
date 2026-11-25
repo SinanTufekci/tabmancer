@@ -584,3 +584,7 @@ def test_what_h_says_on_a_working_session_and_when_it_finishes():
     assert not closed.hand_over and closed.note.severity == "warning" and closed.note.words == (
         "shop closed before it finished: not handed over from here.")
     assert actions.queued_finished("a", replace(working, exit=Exit.CLEAN), False, lambda what: True).hand_over
+    unclaimed = actions.queued_finished("a", one(), False, lambda what: None)  # the claim could not be noted
+    assert not unclaimed.hand_over and unclaimed.note.severity == "warning" and unclaimed.note.words == (
+        "shop finished, but tabmancer could not claim its handover (its claims folder could not be written), so it "
+        "was not handed over from here: h hands it over.")

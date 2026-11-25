@@ -411,7 +411,7 @@ class Engine:
             if sid in handing:
                 how = state.queued.pop(sid)  # it finished: the handover asked for with h
                 saved = actions.save_queued(state.queued)
-                done = actions.queued_finished(sid, fresh, front.monitoring(), actor.first_to)
+                done = actions.queued_finished(sid, fresh, front.monitoring(), actor.first)
                 front.say_note(actions.queue_note(done.note, saved))
                 if not done.hand_over:
                     continue

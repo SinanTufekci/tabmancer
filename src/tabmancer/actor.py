@@ -328,9 +328,11 @@ def release() -> None:
 
 # --- once, by whichever process gets there first -------------------------------------------------
 
-def first_to(what: str, within: float = CLAIM_SECONDS) -> bool:
+def first(what: str, within: float = CLAIM_SECONDS) -> bool | None:
     """True for the first process to ask for this (a queued handover of one session, say), False for
-    any other within the next `within` seconds. Two dashboards that both queued it hand it over once."""
+    any other within the next `within` seconds. Two dashboards that both queued it hand it over once.
+    None when the claim could not be noted at all (its folder not made or written, tried BUSY_TRIES
+    times, BUSY_WAIT apart): neither may count itself first then, or both would do it."""
     folder = config_dir() / CLAIMS
     path = folder / _claim_name(what)
     try:
@@ -340,7 +342,7 @@ def first_to(what: str, within: float = CLAIM_SECONDS) -> bool:
                 old.unlink(missing_ok=True)
     except OSError:
         pass
-    for _ in range(2):
+    for attempt in range(BUSY_TRIES):
         try:
             os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
             return True
@@ -348,12 +350,20 @@ def first_to(what: str, within: float = CLAIM_SECONDS) -> bool:
             if _age(path) <= within:
                 return False
             try:
-                path.unlink()
+                path.unlink(missing_ok=True)  # an old claim: it goes, and this one is noted next time round
+                continue
             except OSError:
-                return False
+                pass  # another process has it open: wait a moment
         except OSError:
-            return True  # no folder to note it in: better done than never
-    return False
+            pass  # held for a moment (a scanner), or no folder: wait a moment
+        if attempt + 1 < BUSY_TRIES:
+            time.sleep(BUSY_WAIT)
+    return None
+
+
+def first_to(what: str, within: float = CLAIM_SECONDS) -> bool:
+    """first's answer as a yes or no: only a claim noted counts (one that could not be noted is no)."""
+    return first(what, within) is True
 
 
 def let_go(what: str) -> None:

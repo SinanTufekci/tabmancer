@@ -44,7 +44,7 @@ from tabmancer.sessions import Exit
 ALLOWED = {"who", "cap_of", "monitoring", "tell", "say_note", "show_bit", "flash_changed", "untick_open",
            "rows_changed"}
 NEVER = [(toast, "show"), (typein, "write_keys"), (launch, "open_tabs"), (launch, "run_in_background"),
-         (actions, "save_queued"), (actions, "write_handover"), (actor, "first_to"), (handover, "write_itself"),
+         (actions, "save_queued"), (actions, "write_handover"), (actor, "first_to"), (actor, "first"), (handover, "write_itself"),
          (summarize, "ask"), (claudeupdate, "run"), (claudeupdate, "before_opening"), (bgjobs, "_run")]
 
 

@@ -929,14 +929,20 @@ class Finished:
     hand_over: bool
 
 
-def queued_finished(sid: str, session: Session, monitor: bool, claim: Callable[[str], bool]) -> Finished:
-    """It finished: handed over by one window only (claim: actor.first_to, the first to ask). A monitor
-    hands over only what is still open as it finishes: closed in its tab meanwhile (from the dashboard,
-    say), it was taken care of there."""
+def queued_finished(sid: str, session: Session, monitor: bool, claim: Callable[[str], bool | None]) -> Finished:
+    """It finished: handed over by one window only (claim: actor.first, the first to ask; None when the
+    claim could not be noted, so neither window hands it over by itself and you are told to press h). A
+    monitor hands over only what is still open as it finishes: closed in its tab meanwhile (from the
+    dashboard, say), it was taken care of there."""
     if monitor and session.exit is not Exit.RUNNING:
         return Finished(Told(f"{session.project} closed before it finished: not handed over from here.", "warning",
                              10), False)
-    if not claim(f"handover-{sid}"):  # queued in another dashboard or monitor too
+    claimed = claim(f"handover-{sid}")
+    if claimed is None:  # nowhere to note it: another window that queued it might hand it over too
+        return Finished(Told(f"{session.project} finished, but tabmancer could not claim its handover (its "
+                             f"{actor.CLAIMS} folder could not be written), so it was not handed over from here: h hands it "
+                             "over.", "warning", 15, title=f"{session.project} not handed over"), False)
+    if not claimed:  # queued in another dashboard or monitor too
         return Finished(Told(f"{session.project} finished: another tabmancer window hands it over.", seconds=8),
                         False)
     return Finished(Told(f"{session.project} finished: handing it over now.", seconds=10,

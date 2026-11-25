@@ -159,6 +159,33 @@ def test_first_to_once_within_the_time():
     assert actor.first_to("handover-abc")  # long after: a new one
 
 
+def test_a_claim_that_cannot_be_noted_is_nobodys(monkeypatch):
+    """No claims folder to note it in: neither window counts itself first (both would hand it over), and
+    it is tried BUSY_TRIES times before that is said."""
+    waits = []
+    monkeypatch.setattr(actor.time, "sleep", waits.append)
+    config_dir().mkdir(parents=True, exist_ok=True)
+    (config_dir() / actor.CLAIMS).write_text("a file where the folder goes", encoding="utf-8")
+    assert actor.first("handover-abc") is None
+    assert waits == [actor.BUSY_WAIT] * (actor.BUSY_TRIES - 1)
+    assert actor.first_to("handover-abc") is False
+
+
+def test_a_claim_held_for_a_moment_is_noted_when_it_is_let_go(monkeypatch):
+    real, refused = actor.os.open, []
+
+    def busy_twice(path, *args):
+        if len(refused) < 2:
+            refused.append(path)
+            raise PermissionError(13, "held by a scanner")
+        return real(path, *args)
+
+    monkeypatch.setattr(actor.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(actor.os, "open", busy_twice)
+    assert actor.first("handover-abc") is True and len(refused) == 2
+    assert actor.first("handover-abc") is False
+
+
 def test_first_to_keeps_the_name_inside_its_folder():
     assert actor.first_to("../../escape")
     assert not (config_dir().parent / "escape").exists()

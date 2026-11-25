@@ -73,7 +73,7 @@ class Front:
 def claims(monkeypatch):
     saved: list[dict] = []
     monkeypatch.setattr(actions, "save_queued", lambda queued: saved.append(dict(queued)) or True)
-    monkeypatch.setattr(actor, "first_to", lambda key: True)
+    monkeypatch.setattr(actor, "first", lambda key: True)
     return saved
 
 
