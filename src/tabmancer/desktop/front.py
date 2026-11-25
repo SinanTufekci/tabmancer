@@ -23,6 +23,7 @@ kept the window would be a cycle, closed yet alive till Python's cycle collector
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
@@ -260,7 +261,7 @@ class WindowFront(QObject):
         """A team's sessions, as the terminal's open them (teamkeys.TeamKeys.open_team, one copy): its
         members in the background first where it runs them there, then the tabs; one opened a moment
         ago not again. What the team keys ask of a dashboard besides, the window answers below."""
-        teamkeys.TeamKeys(cast("teamkeys.Dashboard", self)).open_team(team, launches)
+        teamkeys.TeamKeys(cast("teamkeys.Dashboard", self), time.monotonic).open_team(team, launches)
 
     def say(self, note: actions.Note) -> None:
         self.say_note(note)

@@ -10,11 +10,11 @@ from tabmancer.sessions import Exit, Session, Status
 
 
 class Recorder:
-    """A surface that keeps what it was asked; its timers wait in `timers` until fired."""
+    """A surface that keeps what it was asked, with a clock the test moves on (`now`, seconds)."""
 
     def __init__(self, recent: set[str] | None = None, cold_ok: bool = True) -> None:
         self.calls: list = []
-        self.timers: list = []
+        self.now = 0.0
         self.kept: dict = {"shop": "a handover written before"}
         self.recent_ids = recent
         self.cold_ok = cold_ok
@@ -22,9 +22,6 @@ class Recorder:
 
     def say(self, note) -> None:
         self.calls.append(("say", note.words, note.severity, note.seconds))
-
-    def later(self, seconds, then) -> None:
-        self.timers.append((seconds, then))
 
     def open_team(self, team, launches) -> None:
         self.calls.append(("open_team", team.name, [launch.title for launch in launches]))
@@ -55,6 +52,10 @@ class Recorder:
         self.calls.append(("clipboard", text[:40]))
 
 
+def keys_on(surface: Recorder) -> teamkeys.TeamKeys:
+    return teamkeys.TeamKeys(surface, clock=lambda: surface.now)
+
+
 def shop(tmp_path) -> teams.Team:
     team = teams.new_team("shop", str(tmp_path), "Add a checkout", teams.parse_members("api: x; ui: y"))
     teams.save({"shop": team})
@@ -70,9 +71,9 @@ def opened(sid: str, state: str = "idle", status: Status = Status.RUNNING) -> Se
                    title=f"shop-{sid}")
 
 
-def test_x_twice_closes_the_open_members_and_the_timer_forgets_the_first(fake_home, tmp_path):
+def test_x_twice_closes_the_open_members_and_a_first_press_is_forgotten_in_time(fake_home, tmp_path):
     team, surface = shop(tmp_path), Recorder()
-    keys = teamkeys.TeamKeys(surface)
+    keys = keys_on(surface)
     members = {"lead": opened("L"), "api": opened("A", "busy"), "ui": None}
     keys.close(team, {"lead": closed("L"), "api": None, "ui": None})
     assert surface.calls == [("say", teamkeys.NOBODY_OPEN, "information", 3)] and keys.closing is None
@@ -80,8 +81,7 @@ def test_x_twice_closes_the_open_members_and_the_timer_forgets_the_first(fake_ho
     keys.close(team, members)
     assert keys.closing == "shop" and [c[0] for c in surface.calls] == ["say"] and not any(
         c[0] == "close_tabs" for c in surface.calls)
-    assert surface.timers[0][0] == teamkeys.CLOSE_AGAIN_SECONDS
-    surface.timers[0][1]()  # six seconds on: the first press is forgotten
+    surface.now = teamkeys.CLOSE_AGAIN_SECONDS  # six seconds on: the first press is forgotten
     assert keys.closing is None
     keys.close(team, members)
     keys.close(team, members)
@@ -92,20 +92,20 @@ def test_s_drops_the_kept_handover_leaves_the_opening_ones_and_asks_a_cold_team(
     team = shop(tmp_path)
     members = {"lead": closed("L"), "api": closed("A"), "ui": None}
     surface = Recorder(recent={"L"})
-    teamkeys.TeamKeys(surface).start(team, members)
+    keys_on(surface).start(team, members)
     assert surface.kept == {}
     assert surface.calls == [("cold_start_ok", "shop"), ("open_team", "shop", ["shop: api", "shop: ui"])]
     cold = Recorder(cold_ok=False)
-    teamkeys.TeamKeys(cold).start(team, members)
+    keys_on(cold).start(team, members)
     assert cold.calls == [("cold_start_ok", "shop")]  # it said what going on costs: nothing opens
     everyone = Recorder(recent={"U"})
-    teamkeys.TeamKeys(everyone).start(team, {"lead": opened("L"), "api": opened("A"), "ui": closed("U")})
+    keys_on(everyone).start(team, {"lead": opened("L"), "api": opened("A"), "ui": closed("U")})
     assert everyone.calls == [("say", "Every member of shop is open already, or opening.", "information", 3)]
 
 
 def test_a_cold_start_needs_a_second_press(fake_home, tmp_path, monkeypatch):
     team, surface = shop(tmp_path), Recorder()
-    keys = teamkeys.TeamKeys(surface)
+    keys = keys_on(surface)
     monkeypatch.setattr(actions, "cold_note", lambda team, members: "its cache is gone")
     assert not keys.cold_start_ok(team, {}) and keys.cold == "shop"
     assert surface.calls == [("say", "its cache is gone", "information", teamkeys.COLD_AGAIN_SECONDS)]
@@ -116,7 +116,7 @@ def test_a_cold_start_needs_a_second_press(fake_home, tmp_path, monkeypatch):
 
 def test_enter_on_a_member(fake_home, tmp_path):
     team, surface = shop(tmp_path), Recorder()
-    keys = teamkeys.TeamKeys(surface)
+    keys = keys_on(surface)
     lead, api, ui = team.members
     keys.open_member(team, None, None)
     keys.open_member(team, api, opened("A", "busy", Status.BACKGROUND))
@@ -129,7 +129,7 @@ def test_enter_on_a_member(fake_home, tmp_path):
 
 def test_a_on_a_closed_team_saves_them_and_on_one_at_work_opens_them(fake_home, tmp_path):
     team, surface = shop(tmp_path), Recorder()
-    keys = teamkeys.TeamKeys(surface)
+    keys = keys_on(surface)
     keys.add(team, "qa: tests", at_work=False)
     assert surface.calls == [("adopt", ["lead", "api", "ui", "qa"]),
                              ("say", "qa joined shop: they start with the team (Enter on its row).", "information", 6)]
@@ -143,7 +143,7 @@ def test_a_on_a_closed_team_saves_them_and_on_one_at_work_opens_them(fake_home, 
 
 def test_d_twice_takes_a_member_off_and_the_lead_hears(fake_home, tmp_path):
     team, surface = shop(tmp_path), Recorder()
-    keys = teamkeys.TeamKeys(surface)
+    keys = keys_on(surface)
     lead, api, _ = team.members
     assert keys.remove(team, None, None) is None and keys.remove(team, lead, None) is None
     assert [c[2] for c in surface.calls] == ["information", "warning"] and keys.removing is None
@@ -159,3 +159,34 @@ def test_d_twice_takes_a_member_off_and_the_lead_hears(fake_home, tmp_path):
     surface.calls.clear()
     keys.changed(None, members)  # g with the goal as it was
     assert surface.calls == []
+
+
+def test_a_second_press_counts_from_the_newest_first_one(fake_home, tmp_path):
+    """x twice closed the team, x again at 2 s asks again: x at 7 s closes it (5 s after that ask), where
+    the first press's timer used to forget the newer ask at 6 s. Likewise across teams, and for d."""
+    team, surface = shop(tmp_path), Recorder()
+    cafe = teams.new_team("cafe", str(tmp_path), "Coffee", teams.parse_members("api: x"))
+    keys = keys_on(surface)
+    members = {"lead": opened("L"), "api": opened("A"), "ui": None}
+    for moment in (0, 1, 2):
+        surface.now = moment
+        keys.close(team, members)
+    surface.now = 7
+    keys.close(team, members)
+    assert [c[0] for c in surface.calls] == ["say", "close_tabs", "say", "close_tabs"]
+    surface.calls.clear()
+    surface.now = 10
+    keys.close(team, members)
+    surface.now = 13
+    keys.close(cafe, {"lead": opened("CL"), "api": None})  # another team: it is the one held now
+    assert keys.closing == "cafe"
+    surface.now = 18
+    keys.close(cafe, {"lead": opened("CL"), "api": None})
+    assert surface.calls[-1] == ("close_tabs", ["cafe-lead"])
+    _, api, ui = team.members
+    surface.now = 20
+    keys.remove(team, api, None)
+    surface.now = 23
+    keys.remove(team, ui, None)
+    surface.now = 28
+    assert keys.remove(team, ui, None) is not None  # 5 s after d on ui, though 8 s after d on api

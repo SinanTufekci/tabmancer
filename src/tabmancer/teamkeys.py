@@ -4,8 +4,10 @@ a member opens it or goes to its tab; and the dashboard's own: a team's sessions
 message for a member (tell_team), members joining a team at work (join_team). The terminal's team row and
 its team screen both call these; each is a Surface, what the keys ask of the window they run in.
 
-UI thread only, and no clock: the first of two presses says what the second does, and the surface's own
-timer forgets it (Surface.later). Each surface keeps its own presses (a TeamKeys of its own)."""
+UI thread only. The first of two presses says what the second does; a second press counts within so
+many seconds of the first, by the clock it is given (a timer that forgot the first would forget a newer
+one too, when it went off after that one was made). Each surface keeps its own presses (a TeamKeys of its
+own)."""
 
 from __future__ import annotations
 
@@ -31,9 +33,6 @@ class Surface(Protocol):
     """What the team keys ask of the window they run in."""
 
     def say(self, note: Note) -> None:
-        ...
-
-    def later(self, seconds: float, then: Callable[[], None]) -> None:
         ...
 
     def open_team(self, team: teams.Team, launches: list[Launch]) -> None:
@@ -99,13 +98,39 @@ class Dashboard(Surface, Protocol):
 
 class TeamKeys:
     """A surface's team keys, with its presses: the team x was pressed on once (closing), the team a cold
-    start was asked for (cold), the member d was pressed on (removing)."""
+    start was asked for (cold), the member d was pressed on (removing). clock: seconds, time.monotonic."""
 
-    def __init__(self, surface: Surface) -> None:
-        self.surface = surface
-        self.closing: str | None = None
-        self.cold: str | None = None
-        self.removing: str | None = None
+    def __init__(self, surface: Surface, clock: Callable[[], float]) -> None:
+        self.surface, self.clock = surface, clock
+        self.presses: dict[str, tuple[str, float]] = {}  # what was pressed once -> (on what, until when)
+
+    def again(self, what: str, on: str, seconds: float) -> bool:
+        """A press of what on `on`: True when it is the second within seconds of the first (both are
+        done with then); else it is a first press, held until seconds from now."""
+        now = self.clock()
+        held = self.presses.get(what)
+        if held is not None and held[0] == on and now < held[1]:
+            del self.presses[what]
+            return True
+        self.presses[what] = (on, now + seconds)
+        return False
+
+    def held(self, what: str) -> str | None:
+        """What a press of `what` was made on, while a second one would still count."""
+        held = self.presses.get(what)
+        return held[0] if held is not None and self.clock() < held[1] else None
+
+    @property
+    def closing(self) -> str | None:
+        return self.held("close")
+
+    @property
+    def cold(self) -> str | None:
+        return self.held("cold")
+
+    @property
+    def removing(self) -> str | None:
+        return self.held("remove")
 
     def say(self, words: str, seconds: float, severity: str = "information") -> None:
         self.surface.say(Note(words, severity, seconds))
@@ -131,12 +156,12 @@ class TeamKeys:
         press says what going on costs and what a handover saves (cold_note), and a second one within
         COLD_AGAIN_SECONDS starts it."""
         note = actions.cold_note(team, members)
-        if note is None or self.cold == team.name:
-            self.cold = None
+        if note is None:
+            self.presses.pop("cold", None)
             return True
-        self.cold = team.name
+        if self.again("cold", team.name, COLD_AGAIN_SECONDS):
+            return True
         self.say(note, COLD_AGAIN_SECONDS)
-        self.surface.later(COLD_AGAIN_SECONDS, lambda: setattr(self, "cold", None))
         return False
 
     def open_team(self, team: teams.Team, launches: list[Launch]) -> None:
@@ -163,12 +188,9 @@ class TeamKeys:
         if note is None:
             self.say(NOBODY_OPEN, 3)
             return
-        if self.closing != team.name:
-            self.closing = team.name
+        if not self.again("close", team.name, CLOSE_AGAIN_SECONDS):
             self.say(note, CLOSE_AGAIN_SECONDS)
-            self.surface.later(CLOSE_AGAIN_SECONDS, lambda: setattr(self, "closing", None))
             return
-        self.closing = None
         self.surface.close_tabs(actions.open_names(team, members))
 
     def open_member(self, team: teams.Team, member: teams.Member | None, session: Session | None) -> None:
@@ -209,12 +231,9 @@ class TeamKeys:
             if refusal is not None:
                 self.surface.say(refusal)
             return None
-        if self.removing != member.name:
-            self.removing = member.name
+        if not self.again("remove", member.name, REMOVE_AGAIN_SECONDS):
             self.surface.say(actions.removal_ask(member, session))
-            self.surface.later(REMOVE_AGAIN_SECONDS, lambda: setattr(self, "removing", None))
             return None
-        self.removing = None
         return actions.remove_member(team, member.name)
 
     def changed(self, changed: Changed | None, members: dict[str, Session | None]) -> None:

@@ -539,9 +539,6 @@ class ScreenSurface:
         self.screen.notify(note.words, title=getattr(note, "title", ""), severity=note.severity,
                            timeout=note.seconds)
 
-    def later(self, seconds: float, then) -> None:
-        self.screen.set_timer(seconds, then)
-
     def open_team(self, team: teams.Team, launches: list) -> None:
         """Through the dashboard's open_team (members in the background when the team says so)."""
         opener = getattr(self.screen.app, "open_team", None)
@@ -610,7 +607,7 @@ class TeamScreen(Screen):
         super().__init__()
         self.team, self.accent = team, accent
         self.seen: set[tuple[str, str, str]] | None = None
-        self.team_keys = teamkeys.TeamKeys(ScreenSurface(self))  # its keys, and its presses (x, d)
+        self.team_keys = teamkeys.TeamKeys(ScreenSurface(self), clock=time.monotonic)  # its keys, and presses (x, d)
         self.messages: list[teams.Message] = []
         self.sessions: dict[str, Session | None] = {}
         self.picked = False  # ← → pressed: the conversation shows the picked member's messages only
