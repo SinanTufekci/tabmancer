@@ -32,7 +32,7 @@ def test_everything_that_reaches_outside_has_a_stand_in(tmp_path):
         "sessions._agents_json", "app.open_tabs", "app.run_in_background", "focus.focus_tab", "focus.close_tab",
         "toast.show", "typein.write_keys", "rename.rename", "handover.write_itself", "summarize.ask",
         "usage.read_usage", "usage.read_codex", "bgjobs._run", "report.save", "stats.write_files",
-        "app.recent_shutdowns", "gitstate.read", "agy.home", "share.open_page", "share.reveal",
+        "app.recent_shutdowns", "shutdowns.recent_shutdowns", "gitstate.read", "agy.home", "share.open_page", "share.reveal",
         "browsers.places", "actions.close_tabs", "app.close_tabs", "teamview.close_tabs",
     }
 

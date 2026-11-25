@@ -468,6 +468,34 @@ def members_closed(state: TeamState, sessions: dict[str, Session]) -> set[str]:
     return {s.session_id for s in now if tickable(s)}
 
 
+def preselect(sessions: dict[str, Session], open_at_shutdown: Iterable[str],
+              hidden: Callable[[Session], bool]) -> set[str]:
+    """The sessions ticked when the list first shows, for Enter to open them again: those that looked
+    open at the last shutdown (shutdowns.open_at_shutdown, read with the list), still listed, not hidden."""
+    return {sid for sid in open_at_shutdown if sid in sessions and not hidden(sessions[sid])}
+
+
+def untick_open(selected: set[str], preselected: set[str], updates: Iterable[Session]) -> tuple[set[str], set[str]]:
+    """These sessions read again: one that turns out to be open was not left open at the shutdown, so it
+    is unticked if it was ticked for that; one open in a terminal is never ticked (tickable). Returns the
+    ticks and those ticked for the shutdown, as they are now."""
+    updates = list(updates)
+    now_open = {s.session_id for s in updates if s.exit is Exit.RUNNING}
+    gone = (now_open & preselected) | {s.session_id for s in updates if not tickable(s)}
+    return selected - gone, preselected - now_open
+
+
+def ticked_words(selected: set[str], preselected: set[str]) -> str:
+    """How many are ticked; when every one of them was ticked for the shutdown, that too."""
+    shutdown = " · open at the last shutdown" if preselected and selected <= preselected else ""
+    return f"{len(selected)} ticked{shutdown}"
+
+
+def shutdown_hello(preselected: int) -> str:
+    """What Bit says when the list first shows with sessions ticked for the shutdown."""
+    return f"Hi! {preselected} were open when you shut down."
+
+
 def team_view(state: TeamState, tokens: dict, sessions: dict[str, Session], *,
               git_of=None, agy_usage: dict | None = None, bus: tuple[dict, dict] | None = None) -> TeamView:
     """A team as the view carries it. git_of: folder -> its git as MemberView.git has it, or None; agy_usage: the

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from datetime import time as clock_time
 
-from . import accounts, actions, actor, agy, clis, gitstate, marks, teams, tokens, usage
+from . import accounts, actions, actor, agy, clis, gitstate, marks, shutdowns, teams, tokens, usage
 from . import viewmodel as VM
 from .config import read_json
 from .sessions import (
@@ -423,6 +423,7 @@ class DashSnapshot:
     armed: dict[str, datetime] = field(default_factory=dict)  # c: continues when its limit lifts
     queued: dict[str, str] = field(default_factory=dict)  # h on a busy one, in any window: session id -> how
     background: dict[str, dict] = field(default_factory=dict)  # background sessions' jobs: Enter attaches to one
+    open_at_shutdown: set[str] = field(default_factory=set)  # looked open at the last shutdown, read with the list
 
     def with_marks(self, now: marks.Marks) -> DashSnapshot:
         """The same reading with these marks: a window that has just pinned or hidden one shows it
@@ -468,13 +469,17 @@ class DashboardStore(Polled):
         self.shared_emails: set[str] = set()
         self.agy_bar: dict = {}
         self.acting: dict | None = None
+        self.open_at_shutdown: set[str] = set()
         self.polls = 0
 
     # --- what it reads ------------------------------------------------------------------------
 
     def read_listed(self) -> None:
-        """Every session of the last days, as the dashboard lists them when it starts."""
+        """Every session of the last days, as the dashboard lists them when it starts, and which of them
+        looked open at the last shutdown (the window ticks those, as the dashboard does)."""
         self.sessions = {s.session_id: s for s in find_sessions(self.days, self.include_all, quick=True)}
+        listed = list(self.sessions.values())
+        self.open_at_shutdown = shutdowns.open_at_shutdown(listed, shutdowns.recent_shutdowns()) if listed else set()
 
     def read_live(self, full: bool) -> None:
         live, self.background = live_entries(full, self.background)
@@ -551,4 +556,4 @@ class DashboardStore(Polled):
         return DashSnapshot(view.at, view, dict(self.sessions), dict(self.team_states), hidden, pinned, self.report,
                             list(self.accounts), set(self.shared_emails), dict(self.agy_bar), self.acting,
                             list(self.limits), dict(self.git), dict(self.tokens), dict(self.armed), queued,
-                            dict(self.background))
+                            dict(self.background), set(self.open_at_shutdown))

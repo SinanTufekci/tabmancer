@@ -345,6 +345,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         router,
         sessions,
         share,
+        shutdowns,
         stats,
         summarize,
         toast,
@@ -421,6 +422,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         (launch, "open_tabs", opened),  # the desktop window's, which looks them up when it opens
         (launch, "run_in_background", refused("starts in the background")),
         (bgjobs, "_run", refused("is stopped or removed")),
+        (shutdowns, "recent_shutdowns", lambda limit=30: [SHUTDOWN]),  # the desktop window's, which looks it up
         (focus, "focus_tab", lambda title: False),
         (focus, "close_tab", lambda title: False),
         (actions, "close_tabs", would_close),  # the desktop window's x twice, which looks it up when it closes

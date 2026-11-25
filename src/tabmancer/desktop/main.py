@@ -190,6 +190,7 @@ class MainWindow(QMainWindow):
         self.card: str | None = None  # what a card counts (1 2 3),
         self.words = ""  # and words (/)
         self.selected: set[str] = set()  # the sessions ticked (Space), by id
+        self.preselected: set[str] = set()  # of those, the ones ticked at the start: open at the last shutdown
         self.show_hidden = False  # X: the hidden ones listed too
         self.remark: marks.Marks | None = None  # saved while a read was under way: its snapshot gets them too
         self.index: search.Index | None = None  # what was said in each session, read on a thread of its own
@@ -483,10 +484,17 @@ class MainWindow(QMainWindow):
         if self.remark is not None:  # read before the window changed the marks: as they are now (the file
             now = marks.Marks.read(tries=1)  # held or unreadable now: as this window saved them; no wait here)
             snap, self.remark = snap.with_marks(now if now is not None else self.remark), None
-        self.snap, self.agy_first = snap, first
-        self.selected &= {sid for sid, session in snap.sessions.items() if VM.tickable(session)}  # opened: unticked
+        starting, self.snap, self.agy_first = self.snap is None, snap, first
+        if starting:  # the ones open at the last shutdown come ticked, as in the terminal dashboard
+            self.selected = VM.preselect(snap.sessions, snap.open_at_shutdown, lambda s: s.session_id in snap.hidden)
+            self.preselected = set(self.selected)
+        listed = snap.sessions.keys()
+        self.selected, self.preselected = VM.untick_open(self.selected & listed, self.preselected & listed,
+                                                         snap.sessions.values())  # opened: unticked
         self.show_top()
-        if not self.said_timer.isActive():
+        if starting and self.preselected:
+            self.say(VM.shutdown_hello(len(self.preselected)), 6)
+        elif not self.said_timer.isActive():
             self.show_bit()
         came_up = self.opener.seen(snap.sessions)  # opened from here a while ago, and never showed open?
         if came_up is not None:
@@ -645,7 +653,7 @@ class MainWindow(QMainWindow):
         if self.words.strip():
             parts.append(f"“{self.words.strip()}”")
         if self.selected:
-            parts.append(f"{len(self.selected)} ticked")
+            parts.append(VM.ticked_words(self.selected, self.preselected))
         shown = "  ·  ".join(parts)
         if shown != self.pills.text():
             self.pills.setText(shown)

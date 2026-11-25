@@ -1,8 +1,9 @@
 """The seam: the terminal dashboard (run_test) and the desktop window side by side over one made-up world
 (`tabmancer --demo`'s), in one process, as they run beside each other. A pin or a hide made in either
 shows in the other within one poll; the actor lock stays with the terminal dashboard, whatever the window
-does; the window's Table lists the terminal's rows, row for row, in the same words; and once M's monitor
-has taken the keys, the window's keys work again when it is clicked back. Skipped without the desktop
+does; both tick the sessions open at the made-up shutdown when they start; the window's Table lists the
+terminal's rows, row for row, in the same words, ticks and all; and once M's monitor has taken the keys,
+the window's keys work again when it is clicked back. Skipped without the desktop
 extra (pip install "tabmancer[desktop]")."""
 
 from __future__ import annotations
@@ -142,16 +143,34 @@ def same_words(theirs: list[str], ours: list[str]) -> bool:
     return True
 
 
+async def rows_agree(pilot, app, table) -> None:
+    """The two lists, row for row, in the same words, once both have read what the other has (a team's
+    members resting, say: the terminal's own poll of its teams lands a moment after its first rows)."""
+    for _ in range(200):
+        if tui_keys(app) == table.keys and all(same_words(tui_words(app, key), window_words(table, key))
+                                               for key in table.keys):
+            break
+        await pilot.pause(0.05)
+    assert tui_keys(app) == table.keys
+    for key in table.keys:
+        assert same_words(tui_words(app, key), window_words(table, key)), key
+
+
 async def test_pins_and_hides_cross_within_a_poll_and_the_lock_stays_with_the_terminal(qapp, side_by_side):
     window, claims = side_by_side
     app = SessionPicker(days=14)
     async with app.run_test(size=(200, 50)) as pilot:
         await wait_for(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS))
         assert app.engine.state.acts and actor.holds() and claims == [False]  # the terminal's, at its start
-        app.selected = set()  # the ones open at the made-up shutdown come ticked: f and x would take those
         shown = window()
         read(qapp, shown)
+        assert shown.selected == shown.preselected == app.selected == app.preselected != set()  # the same ticks
+        assert shown.bit_line.text() == f"Hi! {len(app.preselected)} were open when you shut down."
+        shown.show_bit()  # after its hello
         assert shown.bit_line.text() == "The terminal dashboard acts: this window watches."
+        app.selected = set()  # f and x take the ticked ones: unticked in both, they take the one picked
+        shown.selected = set()
+        shown.show_ticked()
         login = next(s.session_id for s in shown.snap.sessions.values() if s.title == "Fix the login redirect loop")
         docs = next(s.session_id for s in shown.snap.sessions.values() if s.title == "Rewrite the getting-started guide")
 
@@ -188,33 +207,29 @@ async def test_the_windows_table_lists_the_terminals_rows_row_for_row(qapp, side
     app = SessionPicker(days=14)
     async with app.run_test(size=(280, 50)) as pilot:  # room for the Model column beside the sidebar and preview
         await wait_for(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS))
-        assert app.selected == app.preselected != set()  # open at the made-up shutdown: ticked in the terminal
-        app.selected = set()  # the window ticks none at its start: the rows are compared unticked
-        app.refresh_rows()
         shown = window(1700)  # its Model column too, whatever a runner's monospace font measures
         read(qapp, shown)
+        assert shown.selected == app.selected == app.preselected != set()  # open at the made-up shutdown: ticked
         shown.set_view("table")
         table = shown.table
-        await wait_for(pilot, lambda: tui_keys(app) == table.keys)  # the terminal's first rows land a moment late
+        await rows_agree(pilot, app, table)
         assert any(key.startswith(HEADING) for key in table.keys) and app.model_shown and table.model_shown
-        for key in table.keys:
-            assert same_words(tui_words(app, key), window_words(table, key)), key
         team = next(iter(shown.snap.team_states))
         await cursor_on(pilot, app, f"\x01{team}")
         folded = list(table.keys)
         await pilot.press("e")  # its members unfolded in the terminal, and in the window
         assert table.show_key(VM.TEAM_CARD + team)
         press(shown, "e")
-        await wait_for(pilot, lambda: tui_keys(app) == table.keys)
+        await rows_agree(pilot, app, table)
         assert len(table.keys) > len(folded)
-        for key in table.keys:
-            assert same_words(tui_words(app, key), window_words(table, key)), key
 
 
 def test_after_ms_monitor_took_the_keys_the_window_has_them_again_when_clicked_back(qapp, side_by_side):
     window, _claims = side_by_side
     shown = window()
     read(qapp, shown)
+    shown.selected = set()  # the ones ticked at the start aside: f takes the one picked
+    shown.show_ticked()
     team = next(iter(shown.snap.team_states))
     assert shown.board.reveal(VM.TEAM_CARD + team)
     press(shown, "M")

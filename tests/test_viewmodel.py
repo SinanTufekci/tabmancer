@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -139,3 +140,18 @@ async def test_the_dashboards_info_line_is_the_view_models(fake_home):
         await pilot.pause(0.1)
         assert app.live_mode and app.bar_info == ""
         assert app.sub_title == VM.live_words(list(app.sessions.values()), app_module.LIVE_REFRESH_SECONDS)
+
+
+def test_the_ones_open_at_the_last_shutdown_come_ticked_till_they_show_open():
+    one, two, three, four = (dataclasses.replace(session(), session_id=sid) for sid in ("one", "two", "three", "four"))
+    listed = {s.session_id: s for s in (one, two, three, four)}
+    ticked = VM.preselect(listed, {"one", "two", "three", "gone"}, lambda s: s.session_id == "three")
+    assert ticked == {"one", "two"}  # three hidden, gone no longer listed
+    assert VM.ticked_words(ticked, ticked) == "2 ticked · open at the last shutdown"
+    assert VM.ticked_words(ticked | {"four"}, ticked) == "3 ticked"  # four ticked by hand
+    assert VM.shutdown_hello(2) == "Hi! 2 were open when you shut down."
+    background = dataclasses.replace(one, exit=Exit.RUNNING)  # open after all: not left open at the shutdown
+    terminal = dataclasses.replace(four, status=Status.RUNNING, exit=Exit.RUNNING)  # open in a terminal: never
+    assert VM.untick_open(ticked | {"four"}, ticked, [background, two, terminal]) == ({"two"}, {"two"})
+    by_hand = dataclasses.replace(two, exit=Exit.RUNNING)  # ticked by hand, open in the background: to attach
+    assert VM.untick_open({"two", "four"}, set(), [by_hand]) == ({"two", "four"}, set())

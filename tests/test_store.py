@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from test_team_tree import peer, send, shop, transcript
 
-from tabmancer import accounts, actor, agy, gitstate, marks, sessions, store, teams, tokens, usage
+from tabmancer import accounts, actor, agy, gitstate, marks, sessions, shutdowns, store, teams, tokens, usage
 from tabmancer import viewmodel as VM
 from tabmancer.config import config_dir
 from tabmancer.sessions import Exit, Session
@@ -33,6 +33,12 @@ def quiet(monkeypatch):
     """No git, no plan limits asked: a test that wants them says so."""
     monkeypatch.setattr(gitstate, "read_all", lambda folders: ({}, set()))
     monkeypatch.setattr(usage, "read_all", list)
+
+
+@pytest.fixture(autouse=True)
+def no_shutdown_log(monkeypatch):
+    """Never the system's own log of shutdowns (wevtutil, journalctl, last): a test that wants one says so."""
+    monkeypatch.setattr(shutdowns, "recent_shutdowns", lambda limit=30: [])
 
 
 def members(snap: Snapshot) -> dict:
@@ -489,3 +495,21 @@ def test_the_dashboard_store_keeps_the_dashboards_timings():
     assert (store.FULL_EVERY, store.USAGE_SECONDS, store.TOKENS_SECONDS, store.GIT_SECONDS, store.ACCOUNTS_SECONDS,
             store.ACTOR_SECONDS) == (app_module.FULL_POLL_EVERY, app_module.USAGE_SECONDS, app_module.TOKENS_SECONDS,
                                      app_module.GIT_SECONDS, app_module.ACCOUNTS_SECONDS, app_module.ACTOR_SECONDS)
+
+
+def test_the_dashboard_store_reads_which_looked_open_at_the_last_shutdown_with_the_list(fake_home, monkeypatch, quiet):
+    down = datetime(2026, 11, 24, 23, 0)
+    asked = []
+
+    def open_at_shutdown(listed, times):
+        asked.append((sorted(s.session_id for s in listed), times))
+        return {"two"}
+
+    monkeypatch.setattr(shutdowns, "recent_shutdowns", lambda limit=30: [down])
+    monkeypatch.setattr(shutdowns, "open_at_shutdown", open_at_shutdown)
+    dash = DashboardStore(clock=Clock())
+    assert dash.poll().open_at_shutdown == {"two"} == dash.poll().open_at_shutdown  # the window ticks them at its start
+    assert asked == [(["one", "two"], [down])]  # once, with the list as the dashboard reads it at its start
+    monkeypatch.setattr(store, "find_sessions", lambda *args, **kwargs: [])
+    monkeypatch.setattr(shutdowns, "recent_shutdowns", lambda limit=30: pytest.fail("nothing listed: no log read"))
+    assert DashboardStore(clock=Clock()).poll().open_at_shutdown == set()

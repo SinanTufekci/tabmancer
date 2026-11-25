@@ -38,6 +38,7 @@ from tabmancer import (
     marks,
     rowwords,
     sessions,
+    shutdowns,
     store,
     teambus,
     teams,
@@ -72,6 +73,7 @@ NBSP = chr(0xA0)
 # Times change between two readings a second apart: "2h10m" to "2h09m".
 TIMES = re.compile(r"\b\d+h\d{2}m\b|\b\d+[dm]\b")
 CLOSE_TABS = actions.close_tabs  # the real one: the demo's world stands in for it (nothing closes there)
+OPEN_AT_SHUTDOWN = shutdowns.open_at_shutdown  # the real one: the world below ticks none at the start
 
 
 @pytest.fixture(scope="module")
@@ -88,6 +90,9 @@ def world(tmp_path, monkeypatch):
     told: list[str] = []
     for module, name, value in demo.stand_ins(tmp_path, live, told.append):
         monkeypatch.setattr(module, name, value)
+    # None ticked at the start, as conftest's fake_home has the terminal dashboard's: the keys act on the
+    # one picked. test_the_ones_open_at_the_last_shutdown_come_ticked turns the demo's own back on.
+    monkeypatch.setattr(shutdowns, "open_at_shutdown", lambda listed, times: set())
     return told
 
 
@@ -779,6 +784,25 @@ def titled(snap, title: str):
 
 def saved_marks() -> dict:
     return read_json(marks.FILE) or {"hidden": [], "projects": [], "pinned": []}
+
+
+def test_the_ones_open_at_the_last_shutdown_come_ticked_as_in_the_terminal(qapp, window, monkeypatch):
+    monkeypatch.setattr(shutdowns, "open_at_shutdown", OPEN_AT_SHUTDOWN)  # the demo's made-up shutdown
+    shown = window()
+    read(qapp, shown)
+    snap = shown.snap
+    plane = titled(snap, "Route the power plane on the 4-layer board").session_id
+    login = titled(snap, "Fix the login redirect loop").session_id
+    assert snap.open_at_shutdown == {plane, login}
+    assert shown.selected == shown.preselected == {plane, login} == shown.board.ticked == shown.drawer.ticked
+    assert shown.bit_line.text() == "Hi! 2 were open when you shut down."
+    assert "2 ticked · open at the last shutdown" in shown.pills.text()
+    opened = dataclasses.replace(snap.sessions[plane], exit=sessions.Exit.RUNNING)  # in the background, say
+    shown.take(shown.store, dataclasses.replace(snap, sessions={**snap.sessions, plane: opened}), False, "")
+    assert shown.selected == shown.preselected == {login}  # open after all: not left open at the shutdown
+    assert "1 ticked · open at the last shutdown" in shown.pills.text()
+    read(qapp, shown)  # closed again: not ticked afresh, the start's ticks are the start's
+    assert shown.selected == {login}
 
 
 def test_space_ticks_f_pins_and_x_hides_as_marks_json_keeps_them(qapp, window):
