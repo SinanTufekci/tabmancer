@@ -58,6 +58,8 @@ def test_a_key_works_is_dimmed_or_is_not_there():
     assert allowed("toggle", footer.Row("closed", False, True))[0] is True
     assert allowed("prompt", footer.Row("team", False, True))[0] is None
     assert allowed("monitor", footer.Row("member-open", False, True))[0] is True
+    assert allowed("rename", footer.Row("member-closed", False, True))[0] is None  # members keep their names
+    assert allowed("rename", footer.Row("closed", False, True))[0] is True
     assert allowed("next_waiting", footer.Row("open", False, False))[0] is None
     assert allowed("next_waiting", footer.Row("open", False, True))[0] is True
     assert allowed("quit") == (True, [])  # the row is asked only when a rule needs it

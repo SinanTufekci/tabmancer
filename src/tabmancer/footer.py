@@ -2,7 +2,7 @@
 as plain rules with no UI behind them.
 
 The row at hand (Row) is what the footer depends on: its kind ("team", "team-closed", "open",
-"member-open", "closed", "member", "none", or "ticked" while any are ticked), whether a team is
+"member-open", "closed", "member-closed", "none", or "ticked" while any are ticked), whether a team is
 unfolded (how many are ticked, for "ticked"), and whether anyone waits for you. allowed() says
 whether a key works (True), does nothing on this row but stays in the footer, dimmed (None), or is
 not there at all (False). words() says what a key does here where it is not what its name says.
@@ -27,7 +27,7 @@ IDLE_ON = {
     "hide": {"open", "member-open"},  # open sessions always show
     "pin": TEAM_ROWS,
     "prompt": TEAM_ROWS,
-    "rename": {"member", "member-open", *TEAM_ROWS},  # members keep the names the team finds them by
+    "rename": {"member-closed", "member-open", *TEAM_ROWS},  # members keep the names the team finds them by
     "monitor": {"open", "closed", "none", "ticked"},  # a team's, from its row or a member's
 }
 
