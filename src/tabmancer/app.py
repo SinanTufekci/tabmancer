@@ -342,7 +342,7 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
         with Vertical():
             yield Label(title(*limitwords.title_words(len(self.stopped), self.when)))
             if self.plan:
-                yield Label(self.plan, classes="plan")
+                yield Label(Text(self.plan), classes="plan")  # other accounts' names: never markup
             yield SelectionList(*[Selection(self.line(s), s.session_id, True)
                                   for s in limitwords.biggest(self.stopped)], id="which")
             yield Label(self.cost(), classes="cost")

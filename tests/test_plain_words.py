@@ -1,14 +1,18 @@
 """Anyone's words show as written, never as markup: session titles, projects, member names and errors
-in the dashboard's notes, and the lead's handover in the team handover dialog. A stray closing tag
-('[/b]') once made Textual raise MarkupError where it was drawn, and a word in brackets went missing."""
+in the dashboard's notes, the lead's handover in the team handover dialog, and the other accounts'
+names in the c dialog's plan. A stray closing tag ('[/b]') once made Textual raise MarkupError where it
+was drawn, and a word in brackets went missing."""
 
 from __future__ import annotations
 
-from textual.widgets import Static
+from pathlib import Path
+
+from textual.widgets import Label, Static
 from textual.widgets._toast import Toast
 
-from tabmancer import teams
-from tabmancer.app import SessionPicker
+from tabmancer import actions, teams
+from tabmancer.app import LimitDialog, SessionPicker
+from tabmancer.sessions import Session
 from tabmancer.teamview import TeamHandoverDialog
 
 WORDS = "close the [/b] tag, keep [the] word and [red]this[/red]"
@@ -40,3 +44,16 @@ async def test_the_team_handover_says_the_leads_words_as_written(fake_home):
         await pilot.pause(0.1)
         shown = str(app.screen.query_one("#handover-text", Static).render())
         assert WORDS in shown and "- [x] done" in shown
+
+
+async def test_the_limit_dialogs_plan_says_brackets_as_written(fake_home, monkeypatch):
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        stopped = [Session(session_id="s1", path=Path("C:/nowhere/s1.jsonl"), cwd="C:/work/shop", title="t",
+                           context=120_000)]
+        monkeypatch.setattr(actions, "stopped_at_limit", lambda sessions: stopped)
+        app.other_accounts_words = lambda: [f"me@example.com · {WORDS}: session 1% · read 1h ago"]
+        app.action_continue_at_reset()
+        await until(pilot, lambda: isinstance(app.screen, LimitDialog))
+        await pilot.pause(0.1)
+        assert WORDS in str(app.screen.query_one(".plan", Label).render())
