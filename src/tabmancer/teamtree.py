@@ -13,15 +13,14 @@ from . import teams
 from .teams import TeamState, counts
 from .theme import MUTED, RED, TEXT, mix
 from .tokens import human
+from .viewmodel import FLIGHT_SECONDS, OTHER, lanes_of  # noqa: F401  (named here too)
 
-FLIGHT_SECONDS = 1.8  # as in the team view
 TRAIL = 6  # cells of fading wire behind a message in flight
 CHIP_GAP = "  "
 TIME = 7  # "15:04  " before the lanes of the sequence diagram
 LANES_SHARE = 0.45  # the lanes take at most this much of the width; what was said gets the rest
 LANE_MOST, LANE_LEAST = 14, 7  # a lane's width
 LANE_LINE = "#333333"
-OTHER = "other"  # the lane of sessions outside the team that wrote to it
 SHORTEST = 4  # a name on a team's row is never cut shorter; past that, "+2" stands for the last ones
 
 
@@ -192,16 +191,6 @@ def chips(members: list[tuple[str, bool, str, str, str, int]], width: int, lead_
         if line.cell_len <= width:
             return line
     return drawn(SHORTEST, 1)
-
-
-def lanes_of(team: teams.Team, said: list[teams.Message]) -> list[str]:
-    """The diagram's lanes: you on the left when you (or tabmancer) said anything, then the lead and the
-    members, then one for anyone else who wrote to them."""
-    names = [m.name for m in team.ordered]
-    people = {m.sender for m in said} | {m.receiver for m in said}
-    left = [teams.YOU] if people & {teams.YOU, teams.TABMANCER} else []
-    right = [OTHER] if people - set(names) - {teams.YOU, teams.TABMANCER} else []
-    return [*left, *names, *right]
 
 
 def sequence(team: teams.Team, said: list[teams.Message], colours: dict[str, str], width: int,

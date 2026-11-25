@@ -652,3 +652,38 @@ def to_json(view: View) -> dict:
         return value
 
     return plain(asdict(view))
+
+
+# --- a team's messages: the ones that fly, and the diagram's lanes --------------------------------
+
+FLIGHT_SECONDS = 1.8  # how long a message takes to fly from card to card
+OTHER = "other"  # the lane of sessions outside the team that wrote to it
+
+
+def new_flights(seen: set | None, said: list, members: set[str],
+                you: bool = False) -> tuple[set, list]:
+    """The messages new since the last look (seen: (sender, receiver, text) of each; None before the
+    first), and what is seen now. Those between two members fly; with you, your own to a member too.
+    The first look only takes note: history stays put, nothing flies."""
+    keys = {(m.sender, m.receiver, m.text) for m in said}
+    if seen is None:
+        return keys, []
+    seen, flights = set(seen), []
+    for message in said:
+        key = (message.sender, message.receiver, message.text)
+        if key in seen:
+            continue
+        seen.add(key)
+        if message.receiver in members and (message.sender in members or (you and message.sender == teams.YOU)):
+            flights.append(message)
+    return seen, flights
+
+
+def lanes_of(team: teams.Team, said: list) -> list[str]:
+    """The diagram's lanes: you on the left when you (or tabmancer) said anything, then the lead and the
+    members, then one for anyone else who wrote to them."""
+    names = [m.name for m in team.ordered]
+    people = {m.sender for m in said} | {m.receiver for m in said}
+    left = [teams.YOU] if people & {teams.YOU, teams.TABMANCER} else []
+    right = [OTHER] if people - set(names) - {teams.YOU, teams.TABMANCER} else []
+    return [*left, *names, *right]

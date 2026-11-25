@@ -57,8 +57,8 @@ from .teamforms import (  # noqa: F401  (re-exported)
 from .teamwords import PALETTE, colours  # noqa: F401  (PALETTE re-exported)
 from .theme import AMBER, BLUE, CYAN, DEFAULT_THEME, GREEN, MUTED, RED, TEXT, THEMES, keys, mix
 from .tokens import human
+from .viewmodel import FLIGHT_SECONDS
 
-FLIGHT_SECONDS = 1.8  # how long a message takes to fly from card to card
 CARD_H = 4  # a card's rows: its border, the name and what it does, its context and tokens, its border
 CARD_LEAST, CARD_MOST = 24, 36  # cards grow with the room between these widths
 GAP = 3
@@ -665,18 +665,10 @@ class TeamScreen(Screen):
         for message in said:
             if not message.delivered:
                 self.graph.unread[message.receiver] = self.graph.unread.get(message.receiver, 0) + 1
-        keys = {(m.sender, m.receiver, m.text) for m in said}
-        if self.seen is None:  # the first look: history stays put, nothing flies
-            self.seen = keys
-        else:
-            members = {m.name for m in self.team.members}
-            for message in said:
-                key = (message.sender, message.receiver, message.text)
-                if key in self.seen:
-                    continue
-                self.seen.add(key)
-                if message.sender in members and message.receiver in members:
-                    self.graph.launch_flight(message)
+        # The first look only takes note; then the new messages between members fly (VM.new_flights).
+        self.seen, flights = viewmodel.new_flights(self.seen, said, {m.name for m in self.team.members})
+        for message in flights:
+            self.graph.launch_flight(message)
         self.show_head()
         self.show_log()
 
