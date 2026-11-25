@@ -48,7 +48,7 @@ BLOCKED = ("textual", "PySide6", "shiboken6")
 # agy plugin, teams and the CLI's twins stand on, and what the desktop window reads. Each is used a
 # little on made-up data, in folders of the test's own.
 HEADLESS = """
-import importlib, json, sys
+import json, sys
 
 class Blocked:
     def find_spec(self, name, path=None, target=None):
@@ -56,8 +56,6 @@ class Blocked:
             raise ImportError("blocked: " + name)
 
 sys.meta_path.insert(0, Blocked())
-for name in MODULES:
-    importlib.import_module("tabmancer." + name)
 from tabmancer import agyplugin, handover, keys, mcpserver, router, store, teams
 
 assert keys.KEYS and keys.MONITOR_KEYS
@@ -77,41 +75,91 @@ snap = store.DashboardStore().poll()
 assert snap.view.sessions == [] and snap.view.teams == [] and snap.acting is None
 print(sorted(m for m in sys.modules if m.split(".")[0] in BLOCKED))
 """
-CORE = ("keys", "store", "viewmodel", "actions", "actor", "marks", "search", "teams", "teambus", "codexbus",
-        "mcpserver", "agyplugin", "summarize", "router", "handover", "teamwatch", "launch", "picks", "agy",
-        "palette", "teamwords", "sessionwords", "handoverwords", "accountwords", "limitwords",
-        "engine", "commands", "footer", "rowwords", "openings")
+# The terminal dashboard's own screens and widgets: the only modules that may import Textual. Every
+# other one, the desktop window's included, imports without it (the tests below).
+TUI = frozenset({
+    "accountsview", "app", "background", "cleanup", "clisettings", "dialogs", "handoverview", "keysview",
+    "mascot", "monitorview", "newsessions", "safework", "statsview", "teamtree", "teamview", "theme",
+    "tokenchart", "widgets", "wrappedview",
+})
+FROZEN = ("A module that needs Textual is a feature of the terminal dashboard (TUI), and the TUI is frozen: "
+          "fixes only. Build it on the core, which imports neither Textual nor Qt, with its window under "
+          "tabmancer/desktop (Qt). Add a module to TUI in tests/test_desktop_extra.py only for a fix to "
+          "the terminal dashboard itself.")
+# Each module imported in a process with these blocked; a module that cannot be, with the import chain
+# inside tabmancer that asked for one.
+IMPORTS = """
+import importlib, sys, traceback
+
+class Blocked:
+    def find_spec(self, name, path=None, target=None):
+        if name.split(".")[0] in BLOCKED:
+            raise ModuleNotFoundError("blocked: " + name, name=name)
+
+sys.meta_path.insert(0, Blocked())
+for name in MODULES:
+    try:
+        importlib.import_module(name)
+    except ImportError as error:
+        steps = [f"{frame.filename.rsplit('tabmancer', 1)[-1]}:{frame.lineno} {frame.line}"
+                 for frame in traceback.extract_tb(error.__traceback__) if "tabmancer" in frame.filename]
+        print("NEEDS", name, "<-", " -> ".join(steps) or repr(error))
+print("LOADED", sorted(m for m in sys.modules if m.split(".")[0] in BLOCKED))
+"""
+
+
+def in_isolation(tmp_path: Path) -> dict[str, str]:
+    """The environment of a subprocess that imports tabmancer: a home and config folders of the test's own."""
+    env = {**os.environ, "PYTHONPATH": str(SOURCE.parent)}
+    for name in ("TABMANCER_CONFIG_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "HOME", "USERPROFILE", "APPDATA",
+                 "LOCALAPPDATA"):
+        env[name] = str(tmp_path / name.lower())
+    return env
+
+
+def unimportable(modules: list[str], blocked: tuple[str, ...], tmp_path: Path) -> list[str]:
+    """The modules that cannot be imported with these blocked, each with its import chain."""
+    code = f"BLOCKED = {blocked!r}\nMODULES = {modules!r}\n" + IMPORTS
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=180,
+                         env=in_isolation(tmp_path), cwd=tmp_path, encoding="utf-8", errors="replace", check=False)
+    assert out.returncode == 0, out.stderr[-2000:]
+    lines = out.stdout.splitlines()
+    assert lines[-1] == "LOADED []", out.stdout[-2000:]
+    return [line.removeprefix("NEEDS ") for line in lines if line.startswith("NEEDS ")]
+
+
+def test_the_tui_list_names_modules_that_are_there():
+    gone = sorted(name for name in TUI if not (SOURCE / f"{name}.py").exists())
+    assert gone == [], f"{gone} are no longer in tabmancer: take them out of TUI"
+
+
+def test_every_module_but_the_terminal_dashboards_imports_without_textual_or_qt(tmp_path):
+    modules = sorted(f"tabmancer.{path.stem}" for path in SOURCE.glob("*.py")
+                     if path.stem not in TUI | {"__init__", "__main__"})
+    assert len(modules) > 60 and "tabmancer.store" in modules  # the whole package was read
+    needs = unimportable(["tabmancer", "tabmancer.desktop", *modules], BLOCKED, tmp_path)
+    assert needs == [], "\n".join([*needs, "", FROZEN])
 
 
 def test_the_core_runs_without_textual_or_qt(tmp_path):
-    env = {**os.environ, "PYTHONPATH": str(SOURCE.parent)}
-    for name in ("TABMANCER_CONFIG_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
-        env[name] = str(tmp_path / name.lower())
-    given = {"BLOCKED": BLOCKED, "MODULES": CORE, "FOLDER": str(tmp_path / "shop")}
+    given = {"BLOCKED": BLOCKED, "FOLDER": str(tmp_path / "shop")}
     code = "".join(f"{name} = {value!r}\n" for name, value in given.items()) + HEADLESS
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, env=env,
-                         check=False)
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
+                         env=in_isolation(tmp_path), cwd=tmp_path, check=False)
     assert out.returncode == 0, out.stderr[-2000:]
     assert out.stdout.split() == ["[]"]
 
 
-def test_the_windows_need_no_textual():
-    """The desktop windows load with Qt and without Textual (colours from palette.py, a team's words
-    from teamwords.py), what they will stand on once the terminal dashboard is archived."""
+def test_the_windows_need_no_textual(tmp_path):
+    """Every module of the desktop window loads with Qt and without Textual (colours from palette.py, a
+    team's words from teamwords.py), what they will stand on once the terminal dashboard is archived."""
     if not os.environ.get("TABMANCER_NEEDS_QT"):
         pytest.importorskip("PySide6", reason="the desktop extra is not installed")
-    code = ("import sys\n"
-            "class Blocked:\n"
-            "    def find_spec(self, name, path=None, target=None):\n"
-            "        if name.split('.')[0] == 'textual':\n"
-            "            raise ImportError('blocked: ' + name)\n"
-            "sys.meta_path.insert(0, Blocked())\n"
-            "from tabmancer.desktop import frame, look, main, monitor, table, teamgraph, widgets\n"
-            "print(look.accent(), sorted(m for m in sys.modules if m.split('.')[0] == 'textual'))")
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
-                         env={**os.environ, "PYTHONPATH": str(SOURCE.parent)}, check=False)
-    assert out.returncode == 0, out.stderr[-2000:]
-    assert out.stdout.split()[1:] == ["[]"]
+    modules = sorted(f"tabmancer.desktop.{path.stem}" for path in (SOURCE / "desktop").glob("*.py")
+                     if path.stem not in ("__init__", "__main__"))
+    assert len(modules) > 10 and "tabmancer.desktop.main" in modules
+    needs = unimportable(modules, ("textual",), tmp_path)
+    assert needs == [], "\n".join([*needs, "", FROZEN])
 
 
 def test_the_key_lists_import_nothing():
