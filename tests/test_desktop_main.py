@@ -9,6 +9,7 @@ import re
 import time
 import weakref
 from datetime import datetime, timedelta
+from functools import partial
 
 import pytest
 
@@ -24,12 +25,13 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
 
 from tabmancer import accounts, actor, agy, cli, commands, demo, sessions, store, teambus, teams, usage
+from tabmancer import sessionwords as preview_words
 from tabmancer import viewmodel as VM
 from tabmancer.config import merge_json, read_json
-from tabmancer.desktop import commandbar, frame, look, main, rail, teamgraph, teampanel
+from tabmancer.desktop import commandbar, drawer, frame, look, main, rail, teamgraph, teampanel
 from tabmancer.keys import KEYS
 from tabmancer.search import matches
-from tabmancer.teamwords import colours
+from tabmancer.teamwords import colours, head, one_line
 from tabmancer.tokens import human
 from tabmancer.widgets import bar_text
 
@@ -38,6 +40,7 @@ look.fonts_for_offscreen()
 NBSP = chr(0xA0)
 # Times change between two readings a second apart: "2h10m" to "2h09m".
 TIMES = re.compile(r"\b\d+h\d{2}m\b|\b\d+[dm]\b")
+OPEN = re.compile(r"\b\d+ of(?= \d+ open)")  # "4 of 5 open"
 
 
 @pytest.fixture(scope="module")
@@ -515,6 +518,156 @@ def test_the_rails_week_is_the_terminals_chart_and_follows_the_project(qapp, win
     assert ids and week.days == VM.week_tokens(report, ids) and week.where == "shop"
     assert all(mine.total <= every.total for mine, every in zip(week.days, VM.week_tokens(report), strict=True))
     assert week.tip(len(week.days) - 1).endswith("tokens in shop") and not week.grab().isNull()
+
+
+def flat(rows) -> list:
+    """Preview rows as (label, [(words, style)]), a time read a moment later the same ('2m' or '3m')."""
+    return [(label, [(TIMES.sub("<t>", words), style) for words, style in ([(cell, "")] if isinstance(cell, str)
+                                                                          else cell)]) for label, cell in rows]
+
+
+def kinds_of(listed: dict, team_states: dict) -> dict[str, str]:
+    """The demo's sessions the preview is read for: open, closed, at a limit, in the background, a member."""
+    by_title = {s.title: s.session_id for s in listed.values()}
+    members = {s.session_id for state in team_states.values() for s in state.sessions.values() if s is not None}
+    return {
+        "open": by_title["Add --json output to the list command"],
+        "closed": by_title["Fix the login redirect loop"],
+        "limit": next(sid for sid, s in listed.items() if VM.at_limit(s) and sid not in members),
+        "background": next(sid for sid, s in listed.items() if s.status is sessions.Status.BACKGROUND),
+        "member": next(sid for sid in sorted(members) if VM.counted_by(listed[sid], "waiting")),
+    }
+
+
+async def test_the_drawer_says_what_the_terminals_preview_says(qapp, world, monkeypatch):
+    """The seam: the terminal dashboard's preview on the demo of an open, a closed, an at-limit and a
+    background session, a member and a team; then this window's drawer on the same world. The same
+    facts, what was said asked for with the same inputs, the same member's messages, what Enter does,
+    and the team's first line and goal."""
+    asked: dict[str, tuple[dict, object]] = {}  # session id -> said_rows' inputs but its room, and messages
+    real_said, real_facts = preview_words.said_rows, preview_words.fact_rows
+    facts: dict[str, list] = {}
+
+    def said_rows(session, **inputs):
+        room = {name: value for name, value in inputs.items() if name not in ("room", "more", "messages")}
+        asked[session.session_id] = (room, inputs.get("messages"))
+        return real_said(session, **inputs)
+
+    def fact_rows(session, **inputs):
+        facts[session.session_id] = real_facts(session, **inputs)
+        return facts[session.session_id]
+
+    monkeypatch.setattr(preview_words, "said_rows", said_rows)
+    monkeypatch.setattr(preview_words, "fact_rows", fact_rows)
+    terminal: dict[str, tuple] = {}
+    tui = demo.picker()
+    async with tui.run_test(size=(240, 50)) as pilot:
+        read_so_far, steady = None, 0
+        for _ in range(400):  # the list, its teams, tokens and git read whole (the same a while)
+            await pilot.pause(0.05)
+            now = (len(tui.sessions), len(tui.team_states), len(tui.session_tokens), len(tui.git))
+            steady = steady + 1 if now == read_so_far else 0
+            read_so_far = now
+            if now[0] >= len(demo.SESSIONS) and all(now) and steady >= 10:
+                break
+        kinds = kinds_of(tui.sessions, tui.team_states)
+        tui.action_fold_teams()  # the members' rows under their team's
+        await pilot.pause(0.1)
+        for kind, sid in kinds.items():
+            tui.table.move_cursor(row=tui.table.get_row_index(sid))
+            await pilot.pause(0.05)
+            tui.update_detail()
+            session = tui.sessions[sid]
+            messages = None
+            if kind == "member":  # its line, from the terminal's own team states
+                team, who = tui.member_rows[sid]
+                state = tui.team_states[team]
+                messages = preview_words.messages(state.said, who, colours(state.team, tui.accent()))
+            enter = preview_words.enter_words(session, partial(tui.launch_for, session), set())  # none ticked
+            terminal[kind] = (flat(facts[sid]), asked[sid], enter, messages)
+        name, state = next(iter(tui.team_states.items()))
+        team_head = "".join(words for words, _ in head(state, state.tokens(tui.session_tokens), tui.accent()))
+        team_goal = "Goal  " + one_line(state.team.goal)
+    assert all(terminal[kind][1][1] is None for kind in terminal if kind != "member")  # a member's messages
+    asked.clear()
+    shown = main.MainWindow(start=False)
+    try:
+        shown.resize(1800, 950)
+        shown.show()
+        read(qapp, shown)
+        side = shown.drawer
+        assert kinds_of(shown.snap.sessions, shown.snap.team_states) == kinds
+        for kind, sid in kinds.items():
+            shown.show_pick(sid)
+            said = side.plain().replace(NBSP, " ")
+            facts_seen, (inputs, messages), enter, member_line = terminal[kind]
+            assert flat(side.rows[1]) == facts_seen, kind
+            assert asked[sid][0] == inputs, kind  # the summary, found, the model, the accent: all but the room
+            assert enter in said and preview_words.status_row(shown.snap.sessions[sid])[1] in said, kind
+            if kind == "member":
+                assert flat([("", asked[sid][1])]) == flat([("", member_line)])
+                assert side.rows[0][0][0] == "Messages"
+            assert ("c" in dict(side.offered)) == (kind == "limit"), kind  # Continue: what a limit stopped
+        shown.show_pick(kinds["open"])
+        assert dict(side.offered)["Enter"] == "Its tab" and "goes to its tab" in side.plain()
+        shown.show_pick(kinds["background"])
+        assert "attaches to it" in side.plain()
+        shown.show_pick(VM.TEAM_CARD + name)
+        said = side.plain().replace(NBSP, " ")
+        # How many are open, as the window's team row counts them: the terminal's preview counts its
+        # team reader's copies of the members (0 open on the demo), not the list's own.
+        view = next(team for team in shown.snap.view.teams if team.name == name)
+        assert f"  ·  {view.open} of {len(view.members)} open  ·  " in said and view.open == len(view.members)
+        assert OPEN.sub("<n> of", team_head) in OPEN.sub("<n> of", said) and team_goal in said
+    finally:
+        shown.settle()
+        shown.close()
+        shown.deleteLater()
+
+
+def test_the_drawer_shows_a_teams_card_and_its_buttons_wait_for_the_window(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    snap, side = shown.snap, shown.drawer
+    view = snap.view.teams[0]
+    assert shown.board.reveal(VM.TEAM_CARD + view.name)  # a pick on the board fills the drawer
+    assert side.key == VM.TEAM_CARD + view.name and side.graph.isVisible() and side.graph.view == view
+    said = side.plain()
+    assert f"TEAM {view.name}" in said and all(member.name in said for member in view.members)
+    needing = [member.name for member in view.members if member.needs_you]
+    assert needing and f"needs you: {', '.join(needing)}" in said
+    assert {"Enter": "Team view", "h": "Hand team over", "M": "Monitor", "x": "Close team"}.items() \
+        <= dict(side.offered).items()
+    assert side.rows == ([], []) and not side.facts_heading.isVisible()
+    closed = next(s for s in snap.sessions.values() if s.title == "Fix the login redirect loop")
+    assert shown.board.reveal(closed.session_id)
+    assert side.key == closed.session_id and not side.graph.isVisible() and side.facts_heading.isVisible()
+    buttons = [side.grid.itemAt(n).widget() for n in range(side.grid.count())]
+    assert [b.property("key") for b in buttons] == [key for key, _ in side.offered]
+    assert all(not b.isEnabled() and b.toolTip() == main.ELSEWHERE for b in buttons)  # till the window does them
+    pressed = []
+    side.act.connect(pressed.append)
+    side.set(shown.snap, closed.session_id, None, {key: None for key, _, _ in drawer.BUTTONS})  # all done here
+    button = side.grid.itemAt(0).widget()
+    assert button.isEnabled() and button.property("key") == "Enter" and button.toolTip() == ""
+    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+    assert pressed == ["Enter"]
+    shown.show_pick("")
+    assert drawer.NOTHING in side.plain() and not side.buttons.isVisible() and side.rows == ([], [])
+
+
+def test_the_drawer_says_where_the_filters_words_were_said(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    api = next(s for s in shown.snap.sessions.values() if s.title == "Rate limiting for the public API")
+    QTest.keyClicks(shown.filter_box, "bucket")  # only in what it answered: "a token bucket per API key"
+    wait(qapp, lambda: api.session_id in {s.session_id for s in shown.shown()})
+    shown.show_pick(api.session_id)
+    found = dict(shown.drawer.rows[0])["Found"]
+    assert [style.startswith("bold reverse") for _, style in found] == [False, True, False]
+    assert found[1][0].casefold() == "bucket"
+    shown.filter_box.clear()  # no words: nothing found
+    assert "Found" not in dict(shown.drawer.rows[0])
 
 
 def test_a_closed_window_goes_with_its_last_name(qapp, world):

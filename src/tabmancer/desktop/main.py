@@ -21,6 +21,10 @@ on the rail, rail.py), to what a card counts (1 2 3, or a click on a lane's head
 the box over the board: a project, a title, or anything said in a session, as search.py indexes the
 conversations, on a thread of its own). The top bar says what it is narrowed to. The rail also holds
 each team as a small picture (a click picks its card and its Team panel tab) and the week's tokens.
+
+The Preview panel is the drawer (drawer.py): the picked card as the terminal dashboard's preview says
+it, with a button for each key its footer offers there (greyed, saying why, while this window does
+not do that key).
 """
 
 from __future__ import annotations
@@ -57,6 +61,7 @@ from ..sessions import Session
 from ..store import DashboardStore, DashSnapshot
 from . import commandbar, frame, look, teamgraph
 from .board import Board
+from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
 from .monitor import sequences
 from .rail import Rail
@@ -79,9 +84,6 @@ KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), 
 TONES = {"muted": look.MUTED, "text": look.TEXT, "empty": "#2a2a2a", "ok": look.GREEN, "low": look.AMBER,
          "out": look.RED}
 PANELS = ("Sessions", "Preview", "Projects", "Bit", "Team")
-SOON = {
-    "Preview": "The highlighted session: how it stands, what it said last",
-}
 VIEWS = (("board", "Board"), ("table", "Table"), ("live", "Live"))  # what the Sessions panel shows
 SHOWN_HERE = {"board"}
 BOARD_HINT = f"↑ ↓ ← → pick a card · 1 2 3 or a lane's heading narrows it · / finds · {commandbar.KEY} any command"
@@ -193,6 +195,8 @@ class MainWindow(QMainWindow):
         docks["Sessions"].raise_()
         docks["Team"].visibilityChanged.connect(self.team_panel.wake)  # behind a tab: its picture rests
         self.board.card.connect(self.toggle_card)
+        self.board.picked.connect(self.show_pick)
+        self.drawer.act.connect(self.run_key)
         self.rail.projects.picked.connect(self.set_project)
         self.rail.teams.picked.connect(self.pick_team)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, docks["Preview"])
@@ -299,6 +303,10 @@ class MainWindow(QMainWindow):
             self.rail = Rail(self.accent)
             box.setContentsMargins(6, 0, 0, 0)
             box.addWidget(self.rail)
+        elif title == "Preview":
+            self.drawer = Drawer(self.accent)
+            box.setContentsMargins(12, 10, 6, 0)
+            box.addWidget(self.drawer)
         elif title == "Bit":
             line = QHBoxLayout()
             self.bit = QLabel()
@@ -308,10 +316,6 @@ class MainWindow(QMainWindow):
             line.addWidget(self.bit, 0, Qt.AlignmentFlag.AlignBottom)
             line.addWidget(self.bit_line, 1, Qt.AlignmentFlag.AlignVCenter)
             box.addLayout(line)
-        else:
-            box.addWidget(text_label(SOON[title], look.MUTED, 9.5, wrap=True))
-            box.addWidget(text_label(ELSEWHERE, look.DIM, 9, wrap=True))
-            box.addStretch(1)
         made.setWidget(inside)
         return made
 
@@ -434,7 +438,28 @@ class MainWindow(QMainWindow):
             return
         self.board.set(snap, self.shown(), self.card)
         self.rail.set(snap, self.project)
+        self.show_pick(self.board.pick or "")
         self.show_pills()
+
+    def show_pick(self, key: str) -> None:
+        """The card picked on the board, in the drawer; the filter's words where they were said in it."""
+        found = None
+        words = self.words.strip()
+        if key and len(words) >= search.SHORTEST and self.index is not None and key in self.said_in():
+            found = self.index.snippet(key, words, width=2 * ROOM)
+        why = {button: self.why_not(button) for button, _, _ in BUTTONS}
+        self.drawer.set(self.snap, key or None, found, why)
+
+    def why_not(self, key: str) -> str | None:
+        """None when this window does the key; else why its button is greyed."""
+        action = self.actions_by_key.get(key)
+        return None if action is not None and action.isEnabled() else ELSEWHERE
+
+    def run_key(self, key: str) -> None:
+        """A drawer's button: the window's own action for its key, as the menu runs it."""
+        action = self.actions_by_key.get(key)
+        if action is not None and action.isEnabled():
+            action.trigger()
 
     def show_pills(self) -> None:
         """What the board is narrowed to, in the top bar."""

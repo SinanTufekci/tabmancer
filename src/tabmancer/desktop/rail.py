@@ -184,7 +184,7 @@ class TeamCard(QFrame):
         column.addLayout(top)
         self.graph = TeamGraph(compact=True)
         self.graph.hint = TEAM_HINT  # its clicks go on to the card (mouseReleaseEvent)
-        self.graph.setMinimumSize(150, 172)  # narrower than the panels it was made for: taller, the lead's words clear
+        self.graph.setMinimumSize(150, 200)  # narrower than the panels it was made for: taller, so the words clear
         column.addWidget(self.graph)
 
     def set(self, view: VM.TeamView, state: teams.TeamState | None) -> None:

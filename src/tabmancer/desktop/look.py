@@ -46,6 +46,20 @@ def span(words: str, style: str = "", default: str = TEXT) -> str:
     return f'<span style="color:{colour};{weight}">{text}</span>'
 
 
+def styled(words: str, style: str = "", default: str = TEXT) -> str:
+    """Words as HTML in any style sessionwords and teamwords give: a colour, bold, dim (toward black,
+    or the quiet grey), italic, and reverse (the colour behind black words); a line break kept."""
+    names = (style or "").split()
+    colour, bold = colour_of(style, default)
+    if "dim" in names:
+        colour = palette.mix(colour, BLACK, 0.4) if HEX.search(style) else DIM
+    css = f"color:{colour};" + ("font-weight:600;" if bold else "") + ("font-style:italic;" if "italic" in names else "")
+    if "reverse" in names:
+        css = f"color:{BLACK};background:{colour};" + css.split(";", 1)[1]
+    text = SPACES.sub("&nbsp;", escape(words)).replace("\n", "<br>")
+    return f'<span style="{css}">{text}</span>'
+
+
 def percent_colour(percent: float) -> str:
     """A limit or context used: red from 85%, amber from 60%, as the terminal monitor says it."""
     return RED if percent >= 85 else AMBER if percent >= 60 else TEXT

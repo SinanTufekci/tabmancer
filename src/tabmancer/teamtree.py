@@ -13,7 +13,6 @@ from . import teams, teamwords
 from .teams import TeamState, counts
 from .teamwords import gist, one_line
 from .theme import MUTED, RED, TEXT, mix
-from .tokens import human
 from .viewmodel import FLIGHT_SECONDS, OTHER, lanes_of  # noqa: F401  (named here too)
 
 TRAIL = 6  # cells of fading wire behind a message in flight
@@ -233,12 +232,8 @@ def sequence(team: teams.Team, said: list[teams.Message], colours: dict[str, str
 
 
 def head(state: TeamState, tokens: int, accent: str) -> Text:
-    """'TEAM tabmancer · 3 of 3 open · 12 messages · 14.9M tokens'."""
-    team = state.team
-    said = len(state.between_members())
-    what = f"  ·  {state.open_count()} of {len(team.members)} open  ·  {said} message{'s' if said != 1 else ''}"
-    return Text.assemble(("TEAM ", f"bold {MUTED}"), (team.name, f"bold {accent}"), (what, MUTED),
-                         (f"  ·  {human(tokens)} tokens" if tokens else "", MUTED))
+    """'TEAM tabmancer · 3 of 3 open · 12 messages · 14.9M tokens' (teamwords.head)."""
+    return Text.assemble(*teamwords.head(state, tokens, accent))
 
 
 def latest(state: TeamState, colours: dict[str, str], lines: int, width: int) -> Text:

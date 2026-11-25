@@ -85,6 +85,15 @@ def one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+def head(state: teams.TeamState, tokens: int, accent: str) -> list[Part]:
+    """'TEAM tabmancer · 3 of 3 open · 12 messages · 14.9M tokens': a team's preview, first line."""
+    team = state.team
+    said = len(state.between_members())
+    what = f"  ·  {state.open_count()} of {len(team.members)} open  ·  {said} message{'s' if said != 1 else ''}"
+    return [("TEAM ", f"bold {MUTED}"), (team.name, f"bold {accent}"), (what, MUTED),
+            (f"  ·  {human(tokens)} tokens" if tokens else "", MUTED)]
+
+
 def gist(message: teams.Message, other: str = "") -> str:
     """What a message says, on one line: its summary when it has one. A summary that starts with
     the other side's name ("cad: start once the memory is free") loses it where that name shows."""

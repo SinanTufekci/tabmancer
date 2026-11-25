@@ -417,6 +417,12 @@ class DashSnapshot:
     agy_bar: dict = field(default_factory=dict)  # agy.bar_view(): the chain in the top bar; {} while agy is not in use
     acting: dict | None = None  # the lock of the dashboard that acts, while it runs (actor.json); None: none does
     limits: list[usage.Limit] = field(default_factory=list)  # as read (the view has them as data): the top bar's
+    # What the preview's facts say of a session, as the terminal dashboard has them (sessionwords.fact_rows):
+    git: dict[str, gitstate.GitState] = field(default_factory=dict)  # folder key -> its git now
+    session_tokens: dict[str, tokens.Tokens] = field(default_factory=dict)  # each session over its whole life
+    armed: dict[str, datetime] = field(default_factory=dict)  # c: continues when its limit lifts
+    queued: dict[str, str] = field(default_factory=dict)  # h on a busy one, in any window: session id -> how
+    background: dict[str, dict] = field(default_factory=dict)  # background sessions' jobs: Enter attaches to one
 
 
 class DashboardStore(Polled):
@@ -523,8 +529,10 @@ class DashboardStore(Polled):
         self.armed = read_armed()
         hidden = {sid for sid, s in self.sessions.items() if self.marks.is_hidden(s)}
         pinned = set(self.marks.pinned)
+        queued = actions.read_queued()
         view = VM.build(self.sessions, hidden=hidden, pinned=pinned, git=self.git, team_states=self.team_states,
-                        tokens=self.tokens, limits=self.limits, armed=self.armed, queued=actions.read_queued())
+                        tokens=self.tokens, limits=self.limits, armed=self.armed, queued=queued)
         return DashSnapshot(view.at, view, dict(self.sessions), dict(self.team_states), hidden, pinned, self.report,
                             list(self.accounts), set(self.shared_emails), dict(self.agy_bar), self.acting,
-                            list(self.limits))
+                            list(self.limits), dict(self.git), dict(self.tokens), dict(self.armed), queued,
+                            dict(self.background))
