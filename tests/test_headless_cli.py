@@ -249,6 +249,33 @@ print("LIFTED ok")
 """
 
 
+DEMO = """
+from tabmancer import bgjobs, demo, sessions
+live = demo.prepare(home / "made-up")
+told = []
+replaced = demo.stand_ins(home / "made-up", live, told.append)
+assert not any(module.__name__ == "tabmancer.app" for module, _, _ in replaced)  # no dashboard to stand in for
+for module, name, value in replaced:
+    setattr(module, name, value)
+assert sessions._agents_json() == live
+try:
+    bgjobs.stop("b1")  # the demo's own refusal, not the real CLI
+except OSError:
+    pass
+print("DEMO ok", len(replaced), told)
+print("LOADED", sorted(m for m in sys.modules if m.split(".")[0] in BLOCKED), file=sys.stderr)
+"""
+
+
+def test_the_demo_stands_in_without_textual_or_qt(home):
+    """The desktop window's demo on a core install: the made-up home and every stand-in, with no
+    terminal dashboard whose copies would need standing in for, and nothing real reached."""
+    done = run(home, tail=DEMO)
+    assert "the test " not in done.stderr and "blocked:" not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == 0 and "LOADED []" in done.stderr, done.stderr[-3000:]
+    assert "DEMO ok" in done.stdout
+
+
 def test_the_lifted_modules_work_without_textual_or_qt(home):
     done = run(home, tail=LIFTED)
     assert done.returncode == 0, done.stderr[-3000:]

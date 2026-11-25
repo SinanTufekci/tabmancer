@@ -349,7 +349,12 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         updates,
         usage,
     )
-    from . import app as app_module
+    try:
+        from . import app as app_module  # the terminal dashboard's own copies, where it is installed
+    except ModuleNotFoundError as error:
+        if not (error.name or "").startswith("textual"):
+            raise
+        app_module = None  # a core install (the desktop window's demo): no dashboard copies to stand in for
     from .launch import shell_line
 
     def opened(launches: list) -> list[str]:
@@ -389,11 +394,14 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
     limits = [usage.Limit("session", 34, now + timedelta(hours=2, minutes=10), ""),
               usage.Limit("week", 61, now + timedelta(days=2, hours=5), "")]
     save_report, save_stats = report.save, stats.write_files
-    return [
-        (sessions, "_agents_json", lambda include_finished=False: live),
+    dashboard = [] if app_module is None else [
         (app_module, "recent_shutdowns", lambda: [SHUTDOWN]),
         (app_module, "open_tabs", opened),
         (app_module, "run_in_background", refused("starts in the background")),
+    ]
+    return [
+        (sessions, "_agents_json", lambda include_finished=False: live),
+        *dashboard,
         (bgjobs, "_run", refused("is stopped or removed")),
         (focus, "focus_tab", lambda title: False),
         (focus, "close_tab", lambda title: False),
