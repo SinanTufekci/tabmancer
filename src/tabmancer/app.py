@@ -51,6 +51,7 @@ from . import (
     newsessions,
     openings,
     picks,
+    prompting,
     rename,
     rowwords,
     search,
@@ -248,7 +249,8 @@ class NamePrompt(ModalScreen[str | None]):
 
 
 class PromptDialog(ModalScreen[tuple[str, str] | None]):
-    """Write to a session: Enter opens it in a tab with the prompt, Ctrl+B runs it in the background."""
+    """Write to a session: Enter opens it in a tab with the prompt, Ctrl+B runs it in the background (where
+    its CLI can't, prompting.send opens a tab instead, saying so). Its words are prompting.py's."""
 
     DEFAULT_CSS = frame("PromptDialog") + "PromptDialog Input { margin-top: 1; }"
     BINDINGS: ClassVar[list[Binding]] = [
@@ -262,20 +264,20 @@ class PromptDialog(ModalScreen[tuple[str, str] | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(title("Prompt", (self.session.project, f"bold {CYAN}"), _clip(self.session.title, 50)))
-            yield Input(placeholder="What should Claude do next?")
-            yield Label(keys(("Enter", "open in a new tab"), ("Ctrl+B", "run in the background"), ("Esc", "cancel")),
-                        classes="hint")
+            yield Label(title("Prompt", (self.session.project, f"bold {CYAN}"),
+                              _clip(self.session.title, prompting.TITLE_CHARS)))
+            yield Input(placeholder=prompting.placeholder(self.session))
+            yield Label(keys(*prompting.keys(self.session)), classes="hint")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
         if event.value.strip():
-            self.dismiss(("tab", event.value.strip()))
+            self.dismiss((prompting.TAB, event.value.strip()))
 
     def action_background(self) -> None:
         text = self.query_one(Input).value.strip()
         if text:
-            self.dismiss(("background", text))
+            self.dismiss((prompting.BACKGROUND, text))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1634,15 +1636,17 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         return Text.assemble(*heading), body
 
     def action_prompt(self) -> None:
+        """p: a closed session opened with a prompt (PromptDialog, then sending_prompt); an open one has its
+        tab brought forward (nothing types into it from outside); prompting.py's words."""
         session = self.current()
         if session is None:
             return
         if session.status is Status.RUNNING:
-            # Nothing can type into it from outside, so take you to its tab instead.
             self.go_to_tab(session)
             return
-        if session.status is Status.BACKGROUND:
-            self.notify("This session runs in the background: Enter attaches to it.", severity="warning")
+        refused = prompting.refusal(session)
+        if refused:
+            self.say_note(actions.Note(refused, "warning"))
             return
 
         def send(answer: tuple[str, str] | None) -> None:
@@ -1650,34 +1654,23 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 return
             if self.after_update("it opens with your prompt", lambda: send(answer)):
                 return
-            how, prompt = answer
-            launch = picks.resumed(teams.as_member(session, Launch(
-                title=_clip(f"{session.project}: {session.title}", 48), cwd=session.cwd, mode=Mode.RESUME,
-                session_id=session.session_id, prompt=prompt, cli=session.cli)), context=session.context or 0)
-            if how == "background" and not clis.CLIS[session.cli].can_background:
-                self.notify(f"{clis.label(session.cli)} has no background sessions: opening a tab instead.",
-                            severity="warning")
-                how = "tab"
-            if self.open_elsewhere([launch]):  # opened since the list last looked: write it there
-                self.notify(f"{session.project} is open in another tab now: write to it there.", severity="warning",
-                            timeout=10)
-                self.poll_live()
-                return
-            if how == "tab":
-                try:
-                    leftover = open_tabs([launch])
-                except OSError as error:
-                    self.notify(f"Could not open the tab: {error}", severity="error", timeout=15)
-                    return
-                if leftover:
-                    self.notify("No supported terminal here. Run: " + leftover[0], severity="warning")
-                else:
-                    self.notify(f"Opened {session.project} in a new tab with your prompt.")
-            else:
-                self.notify(f"Starting {session.project} in the background…")
-                self.start_background(launch)
+            self.sending_prompt(session, *answer)
 
         self.push_screen(PromptDialog(session), send)
+
+    @work(thread=True, group="prompt")
+    def sending_prompt(self, session: Session, how: str, prompt: str) -> None:
+        """The prompt sent (prompting.send: a terminal takes seconds to open a tab, a background start
+        longer), then what it came to said; the list looks again where a session opened elsewhere or
+        started in the background (after a moment: Claude registers it first)."""
+        sent = prompting.send(session, how, prompt, lambda: self.call_from_thread(self.live_ids), open_tabs,
+                              run_in_background, lambda note: self.call_from_thread(self.say_note, note))
+        self.call_from_thread(self.say_note, sent.note)
+        if sent.outcome == "elsewhere":
+            self.call_from_thread(self.poll_live)
+        elif sent.outcome == "started":
+            time.sleep(2)
+            self.call_from_thread(self.poll_live, True)
 
     def action_tokens(self) -> None:
         if self.token_report is None:
@@ -2456,17 +2449,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         bar = self.agy_bar
         self.topbar.show_usage(limits, bar.get("parts", []), agy_first=bar != {} and clis.main_cli() == "agy")
         self.engine.usage(limits, bar)  # Bit: a limit at 85% or more; every agy model out, once
-
-    @work(thread=True)
-    def start_background(self, launch: Launch) -> None:
-        try:
-            message, ok = run_in_background(launch), True
-        except OSError as error:
-            message, ok = str(error), False
-        self.call_from_thread(self.notify, message, severity="information" if ok else "error", timeout=8)
-        if ok:
-            time.sleep(2)  # give Claude a moment to register it, then show it as background
-            self.poll_live(full=True)
 
     def place_mascot(self) -> None:
         """Bit walks on the preview's top edge; without Bit, a blank row separates the two."""
