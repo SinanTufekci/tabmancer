@@ -81,6 +81,27 @@ def needs_parts(view: VM.TeamView, palette: dict[str, str], tone_style: Callable
     return [*out, ("   j picks them in turn", MUTED)]
 
 
+def one_line(text: str) -> str:
+    return " ".join(text.split())
+
+
+def gist(message: teams.Message, other: str = "") -> str:
+    """What a message says, on one line: its summary when it has one. A summary that starts with
+    the other side's name ("cad: start once the memory is free") loses it where that name shows."""
+    text = one_line(message.summary or message.text)
+    if other and text.casefold().startswith(f"{other.casefold()}:"):
+        text = text[len(other) + 1:].lstrip()
+    return text
+
+
+def message_parts(message: teams.Message, member: str, colours: dict[str, str]) -> list[Part]:
+    """'→ dash: Heads-up…' when this member said it, '← lead: …' when it was said to it."""
+    out = message.sender == member
+    other = message.receiver if out else message.sender
+    return [("→ " if out else "← ", MUTED), (other, f"bold {colours.get(other, TEXT)}"), (": ", MUTED),
+            (gist(message, other), TEXT)]
+
+
 def model_of(member: VM.MemberView) -> str:
     """'claude · opus 5.5 · high', 'agy · Neon (High)': as the team view and the desktop monitor say it."""
     return f"{member.cli} · {VM.model_words(member)}"

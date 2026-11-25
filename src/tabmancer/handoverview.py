@@ -3,7 +3,6 @@ An open session is closed on the way."""
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import ClassVar
 
 from rich.text import Text
@@ -14,29 +13,17 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
-from . import clis, context, handover
+from . import clis, handover, sessionwords
 from .dialogs import frame, title
 from .sessions import Exit, Session, _shorten
-from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, keys
-from .tokens import duration, human
+from .theme import CYAN, MUTED, TEXT, keys
 
 
 def fill(session: Session, timed: bool = True, cap: int = 0) -> Text:
     """'917K of 1M (92%) · going for 6h 12m', or '240K of a 300K cap (80%)' for a session opened with a
     context cap, coloured by how full it is (without the time, where it has a line of its own)."""
-    if not session.context:
-        return Text("context size not known yet", style=MUTED)
-    share = context.share(session, cap)
-    colour = GREEN if share < context.WARN_SHARE else AMBER if share < 0.85 else RED
-    whole = f"a {human(cap)} cap" if cap else human(context.window(session.model, session.context))
-    out = Text.assemble((f"{human(session.context)} of {whole} ", TEXT), (f"({share:.0%})", f"bold {colour}"))
-    if not timed:
-        return out
-    if session.started and session.exit is Exit.RUNNING:
-        out.append(f" · going for {duration((datetime.now() - session.started).total_seconds())}", style=MUTED)
-    elif session.started:
-        out.append(f" · ran for {duration((session.last_active - session.started).total_seconds())}", style=MUTED)
-    return out
+    parts = sessionwords.fill_parts(session, timed, cap)
+    return Text(*parts[0]) if len(parts) == 1 else Text.assemble(*parts)
 
 
 class HandoverDialog(ModalScreen[str | None]):

@@ -9,8 +9,9 @@ from datetime import date
 
 from rich.text import Text
 
-from . import teams
+from . import teams, teamwords
 from .teams import TeamState, counts
+from .teamwords import gist, one_line
 from .theme import MUTED, RED, TEXT, mix
 from .tokens import human
 from .viewmodel import FLIGHT_SECONDS, OTHER, lanes_of  # noqa: F401  (named here too)
@@ -24,30 +25,14 @@ LANE_LINE = "#333333"
 SHORTEST = 4  # a name on a team's row is never cut shorter; past that, "+2" stands for the last ones
 
 
-def one_line(text: str) -> str:
-    return " ".join(text.split())
-
-
 def last_word(state: TeamState, member: str) -> teams.Message | None:
     """The latest message to or from this member."""
     return next((m for m in reversed(state.said) if member in (m.sender, m.receiver)), None)
 
 
-def gist(message: teams.Message, other: str = "") -> str:
-    """What a message says, on one line: its summary when it has one. A summary that starts with
-    the other side's name ("cad: start once the memory is free") loses it where that name shows."""
-    text = one_line(message.summary or message.text)
-    if other and text.casefold().startswith(f"{other.casefold()}:"):
-        text = text[len(other) + 1:].lstrip()
-    return text
-
-
 def word(message: teams.Message, member: str, colours: dict[str, str]) -> Text:
     """'→ dash: Heads-up…' when this member said it, '← lead: …' when it was said to it."""
-    out = message.sender == member
-    other = message.receiver if out else message.sender
-    return Text.assemble(("→ " if out else "← ", MUTED), (other, f"bold {colours.get(other, TEXT)}"), (": ", MUTED),
-                         (gist(message, other), TEXT))
+    return Text.assemble(*teamwords.message_parts(message, member, colours))
 
 
 def wire(down: int, up: int) -> str:

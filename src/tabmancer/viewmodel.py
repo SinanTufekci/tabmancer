@@ -374,6 +374,16 @@ class View:
     agy_quota: dict = field(default_factory=dict)  # agy.quota_view(): {} without agy
 
 
+def effort_of(session: Session, member: bool) -> str:
+    """The effort a session runs at: as its last reply says (Claude Code writes it there since
+    2.1.319), else as tabmancer started it: a team member's own (member: it is one), or what it was
+    opened with from tabmancer (picks). Others ran on Claude Code's own setting."""
+    if session.effort in picks.EFFORTS:
+        return session.effort
+    found = teams.member_of(session) if member else None
+    return found[1].effort if found else picks.recall(session.session_id).effort
+
+
 def session_view(session: Session, *, hidden: bool, pinned: bool, member: tuple[str, str] | None,
                  lead: bool, git: dict | None, tokens: int | None, armed: datetime | None,
                  queued: str | None, cap: int = 0, default_cap: int = 0) -> SessionView:

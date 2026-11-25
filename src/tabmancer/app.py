@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import gc
 import math
-import subprocess
 import sys
 import textwrap
 import time
@@ -52,6 +51,7 @@ from . import (
     picks,
     rename,
     search,
+    sessionwords,
     sixel,
     store,
     summarize,
@@ -80,7 +80,7 @@ from .actions import clip as _clip
 from .clisettings import CliSettings
 from .config import merge_json, read_json
 from .dialogs import frame, title
-from .handoverview import HandoverDialog, fill
+from .handoverview import HandoverDialog
 from .keysview import KEYS, KeysScreen
 from .launch import Launch, Mode, default_mode, open_tabs, run_in_background, terminal_kind
 from .mascot import Mascot, way_of
@@ -130,7 +130,7 @@ from .theme import (
     use_saved_theme,
 )
 from .tokenchart import TokenChart
-from .tokens import duration, human
+from .tokens import human
 from .widgets import (
     ALL_PROJECTS,
     INTERRUPTED,
@@ -146,13 +146,11 @@ from .widgets import (
 
 # The view model's tones in this terminal's colours: quiet for what needs nothing from you, loud for
 # what does. Amber is what TO CONTINUE counts, red what NEED YOU counts (viewmodel says it all).
-TONE = {"your-turn!": f"bold {RED}", "your-turn": RED, "working": BLUE, "open": GREEN, "aside": CYAN,
-        "to-continue!": f"bold {AMBER}", "to-continue": AMBER, "done": MUTED, "plain": ""}
+TONE = sessionwords.TONE
 STATUS_LABEL = {status: (label, TONE[tone]) for status, (label, tone) in VM.STATUS.items()}
 STATUS_HELP, EXIT_HELP, TOOLTIP_STATUS = VM.STATUS_HELP, VM.EXIT_HELP, VM.OUTCOME
 MODES = [Mode.RESUME, Mode.AUTO, Mode.FORK, Mode.NEW]
-MODE_LABEL = {Mode.RESUME: "resume", Mode.AUTO: "▶ auto", Mode.FORK: "fork", Mode.NEW: "new",
-              Mode.CONTINUE: "continue"}
+MODE_LABEL = sessionwords.MODE_LABEL
 # Raw states from `claude agents --json` -> label, style, sort rank (lowest first).
 LIVE_STATES = {raw: (label, TONE[tone], rank) for raw, (label, tone, rank, _) in VM.LIVE.items()}
 SPINNING = {"busy", "working"}
@@ -215,7 +213,7 @@ OTHER_COLUMNS = {"picker": 72, "live": 84}
 MODEL_COLUMN = 18  # the Model column ('sonnet 5.5·xhigh' and its padding); on a narrow screen it is left empty
 MODEL_ROOM = MODEL_COLUMN - 2  # ...its words
 COLUMNS = ("sel", "project", "title", "status", "model", "exit", "active", "mode")
-EFFORT_SHORT = {"medium": "med"}  # as the Model column says an effort
+EFFORT_SHORT = sessionwords.EFFORT_SHORT  # as the Model column says an effort
 HEADING = "\x00"  # the keys of the rows that head the open sessions and the rest
 TEAM_ROW = "\x01"  # ...and of the row that heads a team in OPEN NOW, which the cursor does stop on
 CONTEXT_BAR = 4     # cells in the bar that shows how full a context is
@@ -425,10 +423,27 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
         self.dismiss(None)
 
 
-def home_short(path: str) -> str:
-    """A folder with the home folder written ~, so it fits beside the preview."""
-    home = str(Path.home())
-    return "~" + path[len(home):] if path and path.lower().startswith(home.lower()) else path
+home_short = sessionwords.home_short
+
+
+def cell(value: sessionwords.Cell) -> str | Text:
+    """A preview's cell (sessionwords) in rich Text: a str as it is, one part as a Text in its style,
+    more assembled."""
+    if isinstance(value, str):
+        return value
+    if len(value) == 1:
+        return Text(value[0][0], style=value[0][1])
+    return Text.assemble(*value)
+
+
+def based(parts: list[tuple[str, str]]) -> Text:
+    """Parts as one Text in the first part's style, the rest appended in theirs."""
+    if not parts:
+        return Text("")
+    out = Text(parts[0][0], style=parts[0][1])
+    for words, style in parts[1:]:
+        out.append(words, style=style)
+    return out
 
 
 class SessionTable(DataTable):
@@ -1329,19 +1344,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         Claude Code wrote it, else as tabmancer opened it); quiet, and left empty where the screen is too
         narrow for it. An amber ↓ after the model: another took over by itself (Session.fell_back), and
         the effort makes room for it where both do not fit."""
-        if not self.model_shown or not session.model or session.model.startswith("<"):
+        if not self.model_shown:
             return Text("")
-        # An agy model's name holds its level ('Hydrogen (High)'): no effort comes after it.
-        model = context.short_model(session.model, MODEL_ROOM if agy.label(session.model) else MODEL_ROOM - 4)
-        fell = bool(session.fell_back) and session.exit is Exit.RUNNING
-        out = Text(model, style=(AMBER if fell else TEXT) if session.exit is Exit.RUNNING else MUTED)
-        if fell:
-            out.append("↓", style=f"bold {AMBER}")
-        effort = self.effort_of(session)
-        word = f"·{EFFORT_SHORT.get(effort, effort)}" if effort else ""
-        if word and out.cell_len + len(word) <= MODEL_ROOM:
-            out.append(word, style=MUTED)
-        return out
+        return based(sessionwords.model_parts(session, self.effort_of(session), MODEL_ROOM))
 
     def process_cell(self, session: Session) -> Text:
         """How the process ended; other CLIs leave no record of that, so it names the CLI."""
@@ -1403,17 +1408,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def mode_cell(self, session: Session, plain: bool = False) -> Text:
         """How it opens; in the list only when not the plain resume (plain=True says it anyway)."""
-        if session.session_id in self.armed:  # c: it continues when its limit lifts
-            return Text(f"▶ at {lifts(self.armed[session.session_id])}", style=f"bold {self.accent()}")
-        if session.session_id in self.queued:  # h on a busy one: handed over once it finishes
-            return Text("▶ hand over", style=f"bold {self.accent()}")
-        if session.status is Status.RUNNING:
-            return Text("")
-        mode = self.mode(session)
-        if mode is Mode.RESUME and not plain:
-            return Text("")
-        accent = THEMES.get(self.theme, THEMES[DEFAULT_THEME])[1]
-        return Text(MODE_LABEL[mode], style=f"bold {accent}" if mode is Mode.AUTO else MUTED)
+        return cell(sessionwords.open_as(session, self.mode(session), armed=self.armed.get(session.session_id),
+                                          queued=session.session_id in self.queued, accent=self.accent(),
+                                          plain=plain))
 
     def flash_background(self, session: Session) -> str:
         """While a row is lit after a change, a background that fades back to black."""
@@ -1850,132 +1847,48 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.inspector.remove_class("team-only")
         self.drop_team_graph()
         head = Text(session.title, style=f"bold {TEXT}")
-        label, style = (STATUS_LABEL[session.status] if session.exit is not Exit.RUNNING
-                        else state_of(session)[:2])
-        agent = clis.label(session.cli).split()[0]  # Claude, Codex, Antigravity
+        words, means = sessionwords.status_row(session)
         status = Table.grid(padding=(0, 2))  # what it means beside the status, wrapped under itself
         status.add_column(no_wrap=True)
         status.add_column(style=MUTED, overflow="fold")
-        if at_limit(session):
-            status.add_row(limit_cell(session), limit_help(session))
-        else:
-            status.add_row(Text(label, style=style), STATUS_HELP[session.status].replace("Claude", agent))
+        status.add_row(cell(words), means)
         enter = Text.assemble(("⏎ ", f"bold {self.accent()}"), (self.enter_words(session), self.accent()))
         # Quiet labels on the left, the words themselves bright and indented beside them,
         # each cut to a few lines of the room there is, so the reply still shows when narrow.
         room = max(24, (detail.content_size.width or 74) - 14)
-        more = 3 if self.split else 1  # beside the list, at full height: more of each
         said = Table.grid(padding=(0, 2))
         said.add_column(style=MUTED, no_wrap=True)
         said.add_column(style=TEXT, overflow="fold")
-        if session.session_id in self.member_rows:
-            said.add_row("Messages", self.member_messages(session, 2 * room))
+        found = None
         if session.session_id in self.said_in():  # the filter's words, where they were said
-            piece, start, end = self.search.snippet(session.session_id, self.filter_text, width=2 * room)
-            if piece:
-                found = Text(piece)
-                found.stylize(f"bold reverse {self.accent()}", start, end)
-                said.add_row("Found", found)
-        summary = self.summaries.get(session.session_id)
-        if session.session_id in self.summarizing:
-            said.add_row("Summary", Text(f"asking Claude ({summarize.MODEL})…", style="dim italic"))
-        elif summary:
-            words = Text(summary.get("summary", ""))
-            if summary.get("size") != session.size:
-                words.append("  (written before the latest activity; s refreshes it)", style="dim")
-            said.add_row("Summary", words)
-        said.add_row("First prompt", _clip(session.first_prompt, more * min(220, 3 * room)))
-        if session.last_prompt and session.last_prompt != session.first_prompt:
-            said.add_row("Last prompt", _clip(session.last_prompt, more * min(220, 2 * room)))
-        if session.last_reply:
-            said.add_row(agent, _clip(session.last_reply, more * min(320, 4 * room)))
-        if session.files:
-            said.add_row("Files edited", _clip(", ".join(session.files), more * 2 * room))
+            found = self.search.snippet(session.session_id, self.filter_text, width=2 * room)
+        for label, value in sessionwords.said_rows(
+                session, messages=[] if session.session_id in self.member_rows else None, found=found,
+                summary=self.summaries.get(session.session_id), summarizing=session.session_id in self.summarizing,
+                summary_model=summarize.MODEL, room=room, more=3 if self.split else 1, accent=self.accent()):
+            # more: beside the list, at full height, more of each; a member's messages cut to the room here
+            said.add_row(label, self.member_messages(session, 2 * room) if label == "Messages" else cell(value))
         detail.update(Group(head, status, enter, Text(""), said))
         self.meta.update(self.meta_table(session))
 
     def enter_words(self, session: Session) -> str:
         """What Enter does with the highlighted session, as it stands: ticked ones go first."""
-        if self.selected:
-            count = len(self.selected)
-            ticked = f"opens the {count} ticked session{'' if count == 1 else 's'}, each in a tab"
-            return ticked if session.session_id in self.selected else ticked + " (not this one: Space ticks it)"
-        if session.status is Status.BACKGROUND:
-            return "attaches to it in a new tab"
-        if session.exit is Exit.RUNNING:
-            return "goes to its tab, to type there"
-        launch = self.launch_for(session)
-        words = {Mode.RESUME: "resumes it in a new tab",
-                 Mode.AUTO: f"resumes it in a new tab and tells {clis.label(session.cli).split()[0]} to carry on",
-                 Mode.FORK: "forks it: a new session in a new tab, from a copy of its history",
-                 Mode.NEW: "starts a fresh session in its folder"}.get(launch.mode, "opens it in a new tab")
-        if launch.options:
-            team, _, member = launch.title.partition(": ")
-            words += f", as {member} of the team {team}"
-        return words + " · m changes how"
+        return sessionwords.enter_words(session, lambda: self.launch_for(session), self.selected)
 
     def meta_table(self, session: Session) -> Table:
         """The facts column next to the preview."""
         grid = Table.grid(padding=(0, 2))
         grid.add_column(style=MUTED, no_wrap=True)
         grid.add_column(overflow="fold")
-        grid.add_row("Folder", Text(home_short(session.cwd) or "(none recorded)", style=TEXT))
-        if session.session_id in self.member_rows:
-            team, member = self.member_rows[session.session_id]
-            grid.add_row("Team", Text.assemble((team, f"bold {self.accent()}"), (f" · {member}", TEXT)))
-        if session.cli != "claude":
-            grid.add_row("CLI", Text(clis.label(session.cli), style=CYAN))
-        elif model := picks.model_name(session.model):
-            effort = self.effort_of(session)
-            grid.add_row("Model", Text.assemble((model, TEXT), (f" · {effort} effort" if effort else "", MUTED)))
-            if session.fell_back and session.exit is Exit.RUNNING:
-                grid.add_row("Fell back", Text(f"{session.fell_back}: /model in its tab picks yours again",
-                                               style=AMBER))
-        if session.git_branch:
-            grid.add_row("Branch", Text(f"⎇ {session.git_branch}", style=CYAN))
-        state = self.git.get(folder_key(session.cwd))
-        if state is not None:  # the folder as it is now, whatever the session left
-            grid.add_row("Git", Text(state.words(), style=AMBER if state.changed or state.ahead else MUTED))
-        if session.started:
-            grid.add_row("Started", f"{session.started:%d %b %H:%M}")
-        grid.add_row("Last active", f"{session.last_active:%d %b %H:%M}  ({ago(session.last_active)} ago)")
-        if session.started:
-            running = session.exit is Exit.RUNNING
-            took = (datetime.now() if running else session.last_active) - session.started
-            grid.add_row("Going for" if running else "Ran for", duration(took.total_seconds()))
-        if session.lines_added is not None:
-            grid.add_row("Lines", Text.assemble((f"+{session.lines_added}", GREEN), "  ",
-                                                (f"−{session.lines_removed or 0}", RED)))
-        use = self.session_tokens.get(session.session_id)
-        if use is not None and use.total:
-            grid.add_row("Tokens", Text.assemble((human(use.total), TEXT), (f"  ·  {human(use.output)} out", MUTED)))
-        if session.context and session.cli == "claude":
-            cap = self.cap_of(session)
-            grid.add_row("Context", fill(session, timed=False, cap=cap))
-            if context.cold(session):  # the cache is gone: the next message pays for all of it again
-                grid.add_row("", Text(f"cache gone after an hour: the next message writes all {human(session.context)} "
-                                      "of it again", style=AMBER))
-            if context.crowded(session, cap, self.default_cap):  # the two ways on: the same work, or a new phase
-                grid.add_row("", Text.assemble(("/compact", f"bold {AMBER}"), (": go on · ", AMBER),
-                                               ("h", f"bold {AMBER}"), (": new phase", AMBER)))
-        if session.exit in (Exit.CLEAN, Exit.KILLED):
-            grid.add_row("Process", Text.assemble(
-                (session.exit.value, AMBER if session.exit is Exit.KILLED else TEXT),
-                (f"  {EXIT_HELP[session.exit]}", MUTED)))
-        if session.status is not Status.RUNNING:
-            launch = self.launch_for(session)
-            grid.add_row("Opens as", self.mode_cell(session, plain=True))
-            try:
-                argv = replace(launch, options=()).argv  # a member's flags are long: said in words below
-            except agy.NoModel as why:  # agy's chain all out of quota: it would not open
-                grid.add_row("", Text(str(why), style=AMBER))
-            else:
-                if launch.mode is Mode.AUTO:  # the prompt is long; its start is enough here
-                    argv = [*argv[:-1], _clip(argv[-1], 28)]
-                grid.add_row("", Text(subprocess.list2cmdline(argv), style=MUTED))
-            if launch.options:
-                grid.add_row("", Text(f"as {launch.title}, with its role and the team's messages let in",
-                                      style=MUTED))
+        for label, value in sessionwords.fact_rows(
+                session, member=self.member_rows.get(session.session_id),
+                effort=self.effort_of(session) if session.cli == "claude" else "",
+                git=self.git.get(folder_key(session.cwd)), tokens=self.session_tokens.get(session.session_id),
+                cap=self.cap_of(session) if session.context and session.cli == "claude" else 0,
+                default_cap=self.default_cap, launch=lambda: self.launch_for(session), mode=self.mode(session),
+                armed=self.armed.get(session.session_id), queued=session.session_id in self.queued,
+                accent=self.accent()):
+            grid.add_row(label, cell(value))
         return grid
 
     def cap_of(self, session: Session) -> int:
@@ -1988,10 +1901,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """The effort a session runs at: as its last reply says (Claude Code writes it there since
         2.1.319), else as tabmancer started it: a team member's own, or what it was opened with from
         here (picks). Others ran on Claude Code's own setting."""
-        if session.effort in picks.EFFORTS:
-            return session.effort
-        found = teams.member_of(session) if session.session_id in self.member_rows else None
-        return found[1].effort if found else picks.recall(session.session_id).effort
+        return VM.effort_of(session, session.session_id in self.member_rows)
 
     def launch_for(self, session: Session, saved: dict[str, teams.Team] | None = None) -> Launch:
         """How a closed session opens: a team member's as that member (teams.as_member), one tabmancer
@@ -2022,19 +1932,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def outcome(self, session: Session) -> tuple[Text, str]:
         """A heading and a few words on what the session came to (shown when a row is opened)."""
-        if session.exit is Exit.RUNNING:
-            heading, style = f"Open now · {state_of(session)[0]}", GREEN
-        else:
-            heading, style = TOOLTIP_STATUS.get(session.status, "Session"), STATUS_LABEL[session.status][1]
-        summary = self.summaries.get(session.session_id, {}).get("summary")
-        if session.status is Status.DONE or session.exit is Exit.RUNNING:
-            body = summary or session.last_reply or session.last_prompt
-        elif session.status in (Status.CUT_OFF, Status.UNANSWERED, Status.LIMIT, Status.DROPPED):
-            body = f"Last asked: {session.last_prompt or session.first_prompt}"
-        else:
-            body = summary or session.last_reply or session.first_prompt
-        title = Text.assemble((heading, f"bold {style}"), (f"  ·  {ago(session.last_active)} ago", MUTED))
-        return title, " ".join((body or "").split())
+        heading, body = sessionwords.outcome(session, self.summaries.get(session.session_id, {}).get("summary"))
+        return Text.assemble(*heading), body
 
     def action_prompt(self) -> None:
         session = self.current()
@@ -2723,12 +2622,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """'3 in · 2 out · ← lead 2m: Heads-up…' for a member's own preview."""
         name, member = self.member_rows[session.session_id]
         state = self.team_states[name]
-        mine = [m for m in state.said if member in (m.sender, m.receiver)]
-        got = sum(m.receiver == member for m in mine)
-        line = Text(f"{got} in · {len(mine) - got} out", style=TEXT)
-        if mine:
-            line.append(f"  ·  {ago(mine[-1].at)} ago  ", style=MUTED)
-            line.append_text(teamtree.word(mine[-1], member, team_colours(state.team, self.accent())))
+        line = based(sessionwords.messages(state.said, member, team_colours(state.team, self.accent())))
         line.truncate(room, overflow="ellipsis")
         return line
 
