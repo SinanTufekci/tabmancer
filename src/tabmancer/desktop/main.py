@@ -93,7 +93,8 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M"}
+        "j", "M", "h"}
+NOT_ON_TEAMS = {"h"}  # done here on a session, on a team's card in the terminal for now (a whole team's handover)
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
@@ -185,8 +186,9 @@ class MainWindow(QMainWindow):
         self.opener = Opener(self, update=not demo)  # Enter, j and m: what they keep, and their threads
         self.opener.said.connect(self.say_note)
         self.opener.opened.connect(self.took_open)
-        self.front = WindowFront(self)  # what each reading turns up, said and drawn: the terminal's one copy decides
-        self.engine = engine.Engine(self.front, datetime.now)  # never acts (state.acts stays False)
+        self.front = WindowFront(self, update=not demo)  # what each reading turns up, and h: the terminal's one copy decides
+        # Never acts (state.acts stays False). What opened from here is one copy: Enter's and the engine's (h's fresh one).
+        self.engine = engine.Engine(self.front, datetime.now, engine.EngineState(openings=self.opener.openings))
         self.view = "board"  # what the Sessions panel shows (VIEWS)
         self.before_live = "board"  # the view l goes back to
         self.project = VM.ALL_PROJECTS  # what the board is narrowed to: a project (the rail),
@@ -221,6 +223,7 @@ class MainWindow(QMainWindow):
         self.said_timer = QTimer(self)
         self.said_timer.setSingleShot(True)
         self.said_timer.timeout.connect(self.show_bit)
+        self.said_timer.timeout.connect(self.front.said)  # after it: Bit's words that waited their turn
         self.after_open = QTimer(self)
         self.after_open.setSingleShot(True)
         self.after_open.timeout.connect(self.poll)
@@ -401,7 +404,8 @@ class MainWindow(QMainWindow):
                  "1": self.only_open, "2": self.only_waiting, "3": self.only_continue, "l": self.toggle_live,
                  "Space": self.toggle, "a": self.toggle_all, "e": self.expand, "E": self.fold_teams, "x": self.hide,
                  "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
-                 "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key}
+                 "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key,
+                 "h": self.handover_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -475,6 +479,7 @@ class MainWindow(QMainWindow):
             if thread is not None:
                 thread.join(seconds)
         self.opener.settle(seconds)
+        self.front.settle(seconds)
         for shown in self.monitors.values():
             shown.settle(seconds)  # a read of its own (Python's: there after the window is deleted too)
 
@@ -592,9 +597,11 @@ class MainWindow(QMainWindow):
         self.drawer.set(self.snap, key or None, found, why)
 
     def why_not(self, key: str) -> str | None:
-        """None when this window does the key; else why its button is greyed."""
+        """None when this window does the key on what is picked; else why its button is greyed."""
         action = self.actions_by_key.get(key)
-        return None if action is not None and action.isEnabled() else ELSEWHERE
+        if action is None or not action.isEnabled() or (key in NOT_ON_TEAMS and self.picked_team() is not None):
+            return ELSEWHERE
+        return None
 
     def run_key(self, key: str) -> None:
         """A drawer's button: the window's own action for its key, as the menu runs it."""
@@ -1139,6 +1146,23 @@ class MainWindow(QMainWindow):
             self.say("m changes how a closed session opens: pick one.")
             return
         self.refilter()
+
+    def handover_key(self) -> None:
+        """h: the picked session handed over to a fresh one that starts from a full handover, as the terminal
+        dashboard's h does it (Engine.handover: the checks, the dialog, a busy one queued till it finishes,
+        the handover written on a thread). h again on one queued from here: not after all. A whole team's
+        handover is the terminal dashboard's for now."""
+        snap = self.snap
+        if snap is None:
+            return
+        if self.picked_team() is not None:
+            self.say(f"h on a team hands the whole team over. {ELSEWHERE}", 6)
+            return
+        session = snap.sessions.get(self.picked_now())
+        if session is None:
+            self.say("h hands a session over to a fresh one: pick one.")
+            return
+        self.engine.handover(session)
 
     def next_waiting(self) -> None:
         """j: the next open session that needs you, else the next one waiting for you: picked in the list

@@ -407,11 +407,11 @@ def test_a_greyed_command_says_why_and_does_nothing(qapp, window):
     read(qapp, shown)
     shown.open_commands()
     bar = shown.command_bar
-    QTest.keyClicks(bar.line, "hand")
-    assert bar.picked().key == "h" and not bar.picked().enabled  # Hand over first, greyed here
+    QTest.keyClicks(bar.line, "renam")
+    assert bar.picked().key == "r" and not bar.picked().enabled  # Rename first, greyed here
     assert bar.note.text() == main.ELSEWHERE
     ran = []
-    shown.actions_by_key["h"].triggered.connect(lambda *_: ran.append(1))
+    shown.actions_by_key["r"].triggered.connect(lambda *_: ran.append(1))
     QTest.keyClick(bar.line, Qt.Key.Key_Return)
     assert bar.isVisible() and ran == []
     QTest.keyClicks(bar.line, "zzqqx")
@@ -721,7 +721,7 @@ def test_the_drawer_shows_a_teams_card_and_its_buttons_wait_for_the_window(qapp,
     for b in buttons:  # the window's own keys work; the rest wait till it does them
         here = b.property("key") in main.HERE
         assert b.isEnabled() is here and b.toolTip() == ("" if here else main.ELSEWHERE)
-    assert {b.property("key") for b in buttons if b.isEnabled()} == {"Enter", "f", "x"}
+    assert {b.property("key") for b in buttons if b.isEnabled()} == {"Enter", "h", "f", "x"}
     pressed = []
     side.act.connect(pressed.append)
     side.set(shown.snap, closed.session_id, None, {key: None for key, _, _ in drawer.BUTTONS})  # all done here

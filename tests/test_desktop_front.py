@@ -188,7 +188,17 @@ def test_events_say_their_note_else_bits_words_in_bits_tone(qapp, window):
     shown.front.tell(alerts.Event(alerts.DONE, "x", note, alerts.Bit("celebrate", "cli-tool")))
     assert shown.bit_line.text() == "cli-tool: waiting for you"  # one line: the note says more
     shown.front.tell(alerts.Event("idle", "", None, alerts.Bit("say", "3 background sessions are idle", tone="green")))
+    assert shown.bit_line.text() == "cli-tool: waiting for you"  # Bit's words wait their turn: the note stays
+    for words in ("a", "b", "c"):
+        shown.front.show_bit(alerts.Bit("say", words))
+    assert [said[0] for said in shown.front.waiting] == ["a", "b", "c"]  # the newest few wait
+    shown.front.waiting[0] = ("3 background sessions are idle", 4.0, look.GREEN)
+    shown.said_timer.start(1)  # the note had its time
+    QTest.qWait(50)
     assert shown.bit_line.text() == "3 background sessions are idle" and look.GREEN in shown.bit_line.styleSheet()
-    shown.front.show_bit(alerts.Bit("say", "plain words", tone="plain"))
+    assert [said[0] for said in shown.front.waiting] == ["b", "c"]
+    shown.said_timer.stop()
+    shown.front.waiting.clear()
+    shown.front.show_bit(alerts.Bit("say", "plain words", tone="plain"))  # nothing said: at once
     assert look.TEXT in shown.bit_line.styleSheet()
     assert shown.front.monitoring() is False and shown.front.tell_desktop([]) is None
