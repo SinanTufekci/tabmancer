@@ -755,7 +755,8 @@ class TeamScreen(Screen):
 
     def action_start_team(self) -> None:
         getattr(self.app, "kept_handovers", {}).pop(self.team.name, None)  # going on as it was, not handed over
-        start = actions.start_team(self.team, self.sessions)
+        openings = getattr(self.app, "openings", None)  # the members opened a moment ago are left out
+        start = actions.start_team(self.team, self.sessions, openings.recent() if openings is not None else None)
         if not start.launches:
             self.notify(start.words, timeout=3)
             return
