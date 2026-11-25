@@ -872,7 +872,7 @@ def print_stats(days: float | None, as_json: bool, as_csv: bool) -> None:
 
     from . import usage
     from .palette import DEFAULT_THEME, THEMES
-    from .statsview import plain_text
+    from .statstext import plain_text
 
     usage.record(usage.read_all())  # a fresh reading for the limits part
     before = None if days is None else stats.before(history.collect(report.days * 2), report.days, sessions)
@@ -903,7 +903,7 @@ def print_tokens(days: float, as_json: bool) -> None:
     from rich.console import Console
 
     from .palette import DEFAULT_THEME, THEMES
-    from .statsview import render
+    from .statstext import render
 
     sessions = {s.session_id: s for s in find_sessions(days, include_all=True, quick=True)}
     Console().print(render(report, sessions, THEMES[DEFAULT_THEME][1]))
