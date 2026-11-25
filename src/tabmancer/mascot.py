@@ -31,6 +31,7 @@ from textual.geometry import Region
 from textual.widget import Widget
 
 from . import bitart, bitmoves, sixel
+from .bitart import way_of  # noqa: F401  (named here for the dashboard)
 from .bitmoves import TRAITS
 from .blocks import BACKGROUND, octant_cell
 from .theme import AMBER, GREEN, MUTED, RED, TEXT, mix
@@ -132,15 +133,6 @@ TIPS = [
     "e opens a row", "w saves a workspace", "l shows only open sessions",
     "/ filters the list", "b changes how I look, or sends me away", "T shows your teams",
 ]
-
-
-def way_of(saved: object) -> str:
-    """How Bit is shown, from config.json's "mascot" (b chooses): "pixels" (where the terminal
-    draws them; block characters elsewhere), "calm" (the same, with fewer moves), "blocks" or
-    "away". False, from before, is away."""
-    if saved is False or saved == "away":
-        return "away"
-    return saved if saved in ("blocks", "calm") else "pixels"
 
 
 def _rgb(colour: str) -> bitart.Colour:

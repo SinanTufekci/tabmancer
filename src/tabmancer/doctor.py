@@ -15,9 +15,9 @@ import sys
 from datetime import datetime, timedelta
 
 from . import __version__, accounts, claudeupdate, clis, sixel, summarize, tokens, updates, workspaces
+from .bitart import way_of
 from .config import config_dir, read_json
 from .launch import clean_env, terminal_kind
-from .mascot import way_of
 from .sessions import (
     CACHE_FILE,
     UNREADABLE,

@@ -11,6 +11,7 @@ import shutil
 from dataclasses import dataclass
 
 from .config import merge_json, read_json, write_json
+from .palette import CYAN, GREEN, MUTED, TEXT
 
 CONFIG_KEY = "clis"
 DEFAULT = ("claude",)
@@ -97,3 +98,29 @@ def set_main(name: str) -> str:
 def label(name: str) -> str:
     cli = CLIS.get(name)
     return cli.label if cli else name
+
+
+# What the , dialog says of each CLI and of the main one, as (words, style) parts: a palette colour,
+# with 'bold ' before it where the words stand out (teamwords' Part). The terminal's dialog
+# (clisettings.py) puts them into rich Text, a desktop window into its own; both say the same.
+Part = tuple[str, str]
+
+
+def option_parts(name: str, on: bool) -> list[Part]:
+    """[x] or [ ] in front, as in the session list (a dimmed X read as a tick), the CLI, whether it is
+    installed, and what tabmancer can tell of its sessions."""
+    cli = CLIS[name]
+    found = installed(name)
+    return [("[x] " if on else "[ ] ", f"bold {CYAN}" if on else MUTED), (f"{cli.label:<13}", f"bold {TEXT}"),
+            ("installed" if found else "not found", GREEN if found else MUTED), (f"\n    {cli.reads}", MUTED)]
+
+
+def main_parts(main: str) -> list[Part]:
+    """The main CLI and what it costs: tabmancer's own calls run on it."""
+    return [("Main CLI: ", MUTED), (label(main), f"bold {CYAN}"),
+            (" (starts by default, runs tabmancer's own calls)\n", MUTED), (MAIN_COST[main], MUTED)]
+
+
+def next_main(main: str) -> str:
+    """The main CLI after this one, in turn (m in the , dialog)."""
+    return MAINS[(MAINS.index(main) + 1) % len(MAINS)] if main in MAINS else MAINS[0]

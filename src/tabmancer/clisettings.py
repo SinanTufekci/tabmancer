@@ -14,7 +14,7 @@ from textual.widgets.option_list import Option
 
 from . import clis
 from .dialogs import frame, title
-from .theme import CYAN, GREEN, MUTED, TEXT, keys
+from .theme import MUTED, keys
 
 
 class CliSettings(ModalScreen[list[str] | None]):
@@ -47,23 +47,16 @@ class CliSettings(ModalScreen[list[str] | None]):
                         classes="hint")
 
     def prompt(self, cli: clis.Cli) -> Text:
-        """[x] or [ ] in front, as in the session list: a dimmed X read as a tick."""
-        on = cli.name in self.on
-        found = clis.installed(cli.name)
-        return Text.assemble(("[x] " if on else "[ ] ", f"bold {CYAN}" if on else MUTED),
-                             (f"{cli.label:<13}", f"bold {TEXT}"),
-                             ("installed" if found else "not found", GREEN if found else MUTED),
-                             (f"\n    {cli.reads}", MUTED))
+        """[x] or [ ] in front, as in the session list: the words are clis.option_parts'."""
+        return Text.assemble(*clis.option_parts(cli.name, cli.name in self.on))
 
     def main_words(self) -> Text:
-        """The main CLI and what it costs: tabmancer's own calls run on it."""
-        return Text.assemble(("Main CLI: ", MUTED), (clis.label(self.main), f"bold {CYAN}"),
-                             (" (starts by default, runs tabmancer's own calls)\n", MUTED),
-                             (clis.MAIN_COST[self.main], MUTED))
+        """The main CLI and what it costs (clis.main_parts): tabmancer's own calls run on it."""
+        return Text.assemble(*clis.main_parts(self.main))
 
     def action_main(self) -> None:
         """Claude Code and agy in turn; agy as main is turned on in the list too."""
-        self.main = clis.MAINS[(clis.MAINS.index(self.main) + 1) % len(clis.MAINS)]
+        self.main = clis.next_main(self.main)
         self.query_one("#main-cli", Label).update(self.main_words())
         if self.main not in self.on:
             self.toggle(self.main)

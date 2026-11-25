@@ -35,20 +35,27 @@ sys.meta_path.insert(0, Blocked())
 home = Path(HOME)
 forbidden = [os.path.normcase(os.path.join(REAL_HOME, name)) for name in (".claude", ".codex", ".gemini")]
 
+def stop(said):
+    # Said before it is raised: code that takes an OSError in its stride would swallow it unseen.
+    sys.__stderr__.write(said + chr(10))
+    sys.__stderr__.flush()
+    raise PermissionError(said)
+
 def audit(event, args):
     if event == "open" and isinstance(args[0], (str, bytes, os.PathLike)):
         path = os.path.normcase(os.path.abspath(os.fsdecode(args[0])))
         if any(path.startswith(root) for root in forbidden) or (
                 path.endswith(".credentials.json") and not path.startswith(os.path.normcase(str(home)))):
-            raise PermissionError("the test opened a real file: " + path)
+            stop("the test opened a real file: " + path)
     elif event == "subprocess.Popen":
-        raise PermissionError("the test started a program: " + repr(args[1]))
+        stop("the test started a program: " + repr(args[1]))
 
 sys.addaudithook(audit)
 from tabmancer import demo
 if not (home / "claude").exists():
     demo.prepare(home)
-from tabmancer import agy, sessions, summarize, usage
+from tabmancer import agy, sessions, shutdowns, summarize, usage
+shutdowns.recent_shutdowns = lambda limit=30: []  # nor the system's own log (wevtutil, journalctl, last)
 sessions._agents_json = lambda include_finished=False: []  # never the real `claude agents`
 usage.read_usage = list  # nor `claude -p /usage`
 usage.read_codex = lambda now=None: []
@@ -119,6 +126,16 @@ def test_a_command_runs_without_textual_or_qt(home, name):
         assert word in done.stdout, done.stdout[-3000:]
 
 
+def test_doctor_checks_without_textual_or_qt(home):
+    """With no claude on PATH it finds a fault (exit 1) and says so, and checks the rest: the
+    transcripts, and how Bit is drawn (bitart.way_of, not the mascot's widget)."""
+    done = run(home, "doctor")
+    assert "blocked:" not in done.stderr and "the test " not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == 1 and "LOADED []" in done.stderr
+    assert "Claude Code CLI (claude) is not on PATH" in done.stdout
+    assert "Endings readable" in done.stdout and "Bit" in done.stdout
+
+
 def test_wrapped_saves_its_picture_without_textual_or_qt(home, tmp_path):
     out = tmp_path / "week.png"
     done = run(home, "wrapped", "--out", str(out))
@@ -158,6 +175,10 @@ else:
 items = diskclean.collect()
 assert items and all(item.size > 0 and item.files for item in items)
 assert diskclean.human(2048) == "2 KB"
+from tabmancer import bitart, clis
+assert bitart.way_of("calm") == "calm" and bitart.way_of(False) == "away"
+words = "".join(text for text, _ in clis.option_parts("agy", True) + clis.main_parts(clis.next_main("claude")))
+assert words.startswith("[x] Antigravity") and "Main CLI: Antigravity" in words and "never Claude" in words
 print("LIFTED ok")
 """
 

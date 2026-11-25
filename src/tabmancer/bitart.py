@@ -894,3 +894,14 @@ def between(a: Pose, b: Pose, t: float) -> Pose:
         left=arm_between(-1, a.left, b.left, t), right=arm_between(1, a.right, b.right, t),
         look=(_towards(a.look[0], b.look[0], t), _towards(a.look[1], b.look[1], t)),
         beacon=_towards(a.beacon, b.beacon, t), chest=_towards(a.chest, b.chest, t))
+
+
+# How Bit is shown is a choice of its own, with no drawing in it: the dashboard, `tabmancer doctor`
+# and a desktop window read it alike.
+def way_of(saved: object) -> str:
+    """How Bit is shown, from config.json's "mascot" (b chooses): "pixels" (where the terminal
+    draws them; block characters elsewhere), "calm" (the same, with fewer moves), "blocks" or
+    "away". False, from before, is away."""
+    if saved is False or saved == "away":
+        return "away"
+    return saved if saved in ("blocks", "calm") else "pixels"
