@@ -361,6 +361,8 @@ def test_a_new_message_flies_in_the_picture(qapp, window):
     shown.take(shown.store, snap, {}, "")
     assert [(f.sender, f.receiver, f.words) for f in graph.flights] == [("api", "ui", new.text)]
     assert graph.frames.isActive()
+    assert shown.lanes.drawing is not None and shown.lanes.drawing[0] is new  # and draws itself below
+    assert shown.lanes.rows[-1].message is new
 
 
 def test_view_says_how_much_moves(qapp, window):
@@ -389,6 +391,7 @@ def test_another_team_starts_the_picture_afresh(qapp, window):
     assert graph.view is not None and graph.seen is not None
     shown.switch_team("other")
     assert (graph.view, graph.seen, graph.flights, graph.names, graph.drawn) == (None, None, [], [], {})
+    assert (shown.lanes.team, shown.lanes.rows, shown.lanes.keys) == (None, [], None)
     wait(qapp, lambda: not shown.waiting)
 
 

@@ -43,11 +43,11 @@ from ..sessions import Exit, Status
 from ..store import Snapshot, TeamStore
 from ..tokens import human
 from . import frame, look, teamgraph
+from .conversation import Conversation
 from .frame import DEMO_ENV, LAYOUT_FILE, LAYOUT_VERSION, KeysDialog, made_up_world  # noqa: F401  (the first two: named here for the tests)
 from .widgets import (
     HourChart,
     KeyBar,
-    Lanes,
     LimitRing,
     MemberCard,
     Pill,
@@ -246,7 +246,7 @@ class MonitorWindow(QMainWindow):
         box.addLayout(floor)
         self.setCentralWidget(central)
 
-        self.lanes = Lanes()
+        self.lanes = Conversation()
         self.messages = QTextBrowser()
         self.messages.setFont(look.font(9))
         self.messages.setOpenLinks(False)
@@ -419,11 +419,13 @@ class MonitorWindow(QMainWindow):
         if needs is not None:
             self.needs.setText("".join(look.span(words, style) for words, style in needs))
         self.show_pills(snap)
-        self.graph.set_motion(teamgraph.motion())  # b in the dashboard calms it, as it calms Bit
+        motion = teamgraph.motion()  # b in the dashboard calms them, as it calms Bit
+        self.graph.set_motion(motion)
+        self.lanes.set_motion(motion)
         self.graph.set(view, snap.state.said, self.colours, self.picked)
         self.show_cards(view)
         self.show_picked()
-        self.lanes.set(view, self.colours, self.picked)
+        self.lanes.set(snap.state.team, snap.state.said, view, self.colours, self.picked)
         self.show_messages(view)
         self.hours.set(snap.hours)
         self.show_rings(snap)
@@ -573,8 +575,9 @@ class MonitorWindow(QMainWindow):
             return
         self.show_cards(self.snap.view)
         self.show_picked()
-        self.lanes.set(self.snap.view, self.colours, self.picked)
-        self.graph.set(self.snap.view, self.snap.state.said, self.colours, self.picked)
+        state = self.snap.state
+        self.lanes.set(state.team, state.said, self.snap.view, self.colours, self.picked)
+        self.graph.set(self.snap.view, state.said, self.colours, self.picked)
 
     def click_member(self, name: str) -> None:
         """A click on a member in the picture: picked, and its tab to the front (Enter)."""
@@ -620,6 +623,7 @@ class MonitorWindow(QMainWindow):
     def pick_motion(self, mode: str) -> None:
         teamgraph.save_motion(mode)
         self.graph.set_motion(teamgraph.motion())
+        self.lanes.set_motion(teamgraph.motion())
         self.show_motions()
 
     def go_to_tab(self) -> None:
@@ -662,6 +666,7 @@ class MonitorWindow(QMainWindow):
             return
         self.team, self.store, self.snap, self.picked, self.needs_turn = name, self.make_store(name), None, None, -1
         self.graph.clear()  # the new team's messages so far stay put
+        self.lanes.clear()
         for card in self.cards.values():
             card.deleteLater()
         self.cards, self.columns = {}, 0

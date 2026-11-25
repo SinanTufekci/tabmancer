@@ -3,19 +3,20 @@
 The lead in the middle, the members around it, a wire for each pair that has talked, thicker the
 more it carried. A new message flies along its wire from the sender to the receiver with its first
 words riding along, the receiver ripples when it lands, and the wire glows in the sender's colour,
-then fades. Working members breathe, a member that needs you pulses red, one at rest is quiet, a
+then fades; in the wide picture what it said shows over the receiver for a moment (a bubble). Working members breathe, a member that needs you pulses red, one at rest is quiet, a
 closed one dim. A member that joins grows in where it belongs while the others make room; one that
 leaves shrinks away. Hover says the words; a click asks for the member's tab and a right-click for
 its actions, which the window holding the widget answers (signals).
 
 Motion (config.json "motion", the windows' View menu): full; calm, fewer moves (a message still
-travels, as a plain dot; nothing breathes, ripples or grows), also whenever Bit is calm (b); off,
-nothing moves (a message lights its wire for a moment). The same facts in each.
+travels, as a plain dot; nothing breathes, ripples or grows, a bubble just shows), also whenever Bit
+is calm (b); off, nothing moves (a message lights its wire for a moment, no bubble). The same facts in
+each.
 
 Nothing runs while nothing moves: one clock ticks 30 times a second while a message flies, a wire
 fades or a member comes or goes, and stops after. Breathing, the one lasting move, ticks ten times a
 second and draws only the moving rings over a still picture, and not at all while the window is hidden
-or minimized. A wire lit in calm or off goes out with one more paint.
+or minimized. A wire lit, or a bubble shown, in calm or off goes with one more paint.
 Which messages fly is the dashboard's rule (viewmodel.new_flights): none on the first look, then each
 new one.
 """
@@ -28,7 +29,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFontMetricsF,
+    QPainter,
+    QPainterPath,
+    QPainterPathStroker,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from .. import teams
@@ -44,6 +54,7 @@ MOST_FLYING = 6  # a burst read at once (after a sleep): its newest fly, the res
 GLOW_SECONDS = 1.6  # a wire's glow fading after its message lands
 LIT_SECONDS = 2.0  # calm and off: a wire lit, then not
 RIPPLE_SECONDS = 0.7
+BUBBLE_SECONDS = 1.5  # what a message said, over its receiver once it lands (the wide picture)
 MOVE_SECONDS = 0.5  # members making room, growing in, shrinking away
 FRAME_MS = 33
 BREATH_MS = 100
@@ -284,7 +295,10 @@ class TeamGraph(QWidget):
                     self.breaths.start()
             else:
                 self.breaths.stop()
-        left = [f.lands + LIT_SECONDS - now for f in self.flights if f.lands + LIT_SECONDS > now]
+        ends = [f.lands + LIT_SECONDS for f in self.flights]
+        if self.mode == "calm" and not self.compact:
+            ends += [f.lands + BUBBLE_SECONDS for f in self.flights]
+        left = [end - now for end in ends if end > now]
         if self.mode != "full" and left and not self.frames.isActive():
             self.lights.start(int(min(left) * 1000) + 30)
 
@@ -402,6 +416,7 @@ class TeamGraph(QWidget):
             if member.name in spots:
                 self.draw_aura(p, member, spots[member.name], grow.get(member.name, 1.0), now)
         self.draw_riders(p, spots, centre, now)
+        self.draw_bubbles(p, spots, now)
 
     def still_picture(self, spots: dict[str, QPointF], centre: QPointF, now: float) -> QPixmap:
         """The picture while only members breathe: drawn once for each set(), size and motion."""
@@ -531,6 +546,64 @@ class TeamGraph(QWidget):
             p.setFont(font)
             p.setPen(tinted(look.TEXT, 255 * fade))
             p.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+
+    def bubbles(self, now: float) -> list[tuple[Flight, float]]:
+        """The messages landed a moment ago, the newest for each receiver, with how long ago: what the
+        wide picture shows over them (not in the narrow one, not with motion off)."""
+        if self.compact or self.mode == "off":
+            return []
+        newest: dict[str, tuple[Flight, float]] = {}
+        for flight in self.flights:
+            since = now - flight.lands
+            # flights come oldest first: on a tie (calm starts them together) the later one is the newer
+            if 0 <= since < BUBBLE_SECONDS and (flight.receiver not in newest or since <= newest[flight.receiver][1]):
+                newest[flight.receiver] = (flight, since)
+        return list(newest.values())
+
+    def draw_bubbles(self, p: QPainter, spots: dict[str, QPointF], now: float) -> None:
+        """Each bubble pops up over its receiver, its tail at it, and fades as it goes (calm: it just shows)."""
+        font = look.font(8.8)
+        metrics = QFontMetricsF(font)
+        for flight, since in self.bubbles(now):
+            spot = spots.get(flight.receiver)
+            if spot is None:
+                continue
+            full = self.mode == "full"
+            pop = ease_out(since / 0.25) if full else 1.0
+            fade = 1 - ease((since - (BUBBLE_SECONDS - 0.3)) / 0.3) if full else 1.0
+            words = metrics.elidedText(flight.words, Qt.TextElideMode.ElideRight, 540)
+            width = min(300.0, metrics.horizontalAdvance(words) + 22)
+            lines = 1 if metrics.horizontalAdvance(words) + 22 <= 300 else 2
+            height = 12 + 16 * lines
+            r = self.radius.get(flight.receiver, 20)
+            box = QRectF(spot.x() - width / 2, spot.y() - r - 12 - height, width, height)
+            tail = QPointF(spot.x(), spot.y() - r - 3)
+            if box.top() < 4:  # no room over it: under its words instead
+                box.moveTop(spot.y() + r + 44)
+                tail = QPointF(spot.x(), spot.y() + r + 40)
+            box.moveLeft(max(4.0, min(box.left(), self.width() - width - 4)))
+            p.save()
+            p.setOpacity(clamp(fade) * min(1.0, pop * 1.4))
+            middle = box.center()
+            scale = 0.6 + 0.4 * pop
+            p.translate(middle)
+            p.scale(scale, scale)
+            p.translate(-middle)
+            outline = QPainterPath()
+            outline.addRoundedRect(box, 8, 8)
+            below = tail.y() > box.bottom()
+            edge = box.bottom() if below else box.top()
+            base = min(max(tail.x(), box.left() + 16), box.right() - 16)
+            point = QPainterPath()
+            point.addPolygon(QPolygonF([QPointF(base - 7, edge), tail, QPointF(base + 7, edge)]))
+            outline = outline.united(point)
+            p.setPen(QPen(tinted(flight.colour, 200), 1.2))
+            p.setBrush(QColor("#191919"))
+            p.drawPath(outline)
+            p.setFont(font)
+            p.setPen(QColor(look.TEXT))
+            p.drawText(box.adjusted(10, 6, -10, -6), Qt.TextFlag.TextWordWrap, words)
+            p.restore()
 
     def draw_you(self, p: QPainter, spot: QPointF) -> None:
         r = self.radius.get(YOU, 12)

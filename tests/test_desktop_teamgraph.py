@@ -266,3 +266,57 @@ def test_peers_have_no_middle(graph):
     centre = g.stands()[1]
     assert all((spot - centre).manhattanLength() > 40 for spot in g.drawn.values())
     assert isinstance(centre, QPointF)
+
+
+def bubble_pixels(g):
+    """How many pixels the bubbles' fill covers (nothing else in the picture is this colour)."""
+    image = g.grab().toImage()
+    want = QColor("#191919").rgb()
+    return sum(image.pixel(x, y) == want for y in range(0, image.height(), 2) for x in range(0, image.width(), 2))
+
+
+def test_a_bubble_shows_what_it_said_for_a_moment_once_it_lands(graph):
+    g = graph()
+    g.set(resting_team(), [], COLOURS)
+    g.set(resting_team(), [teams.Message(T0, "lead", "ui", "Take the cart page")], COLOURS)
+    flight = g.flights[0]
+    assert g.bubbles(g.clock.at) == []  # on its way
+    g.clock.at = flight.lands - 0.05
+    before = bubble_pixels(g)
+    g.clock.at = flight.lands + 0.5
+    assert [(f.words, round(since, 2)) for f, since in g.bubbles(g.clock.at)] == [("Take the cart page", 0.5)]
+    assert bubble_pixels(g) > before + 300  # drawn (counted on every other pixel each way)
+    g.clock.at = flight.lands + teamgraph.BUBBLE_SECONDS
+    assert g.bubbles(g.clock.at) == []
+    assert bubble_pixels(g) <= before
+    assert teamgraph.BUBBLE_SECONDS <= teamgraph.GLOW_SECONDS  # the glow's frames carry the bubble's
+
+
+def test_one_bubble_a_member_the_newest(graph):
+    for mode in ("full", "calm"):
+        g = graph(mode=mode)
+        g.set(resting_team(), [], COLOURS)
+        g.set(resting_team(), [teams.Message(T0, "lead", "api", "first"),
+                               teams.Message(T0 + timedelta(seconds=1), "ui", "api", "second"),
+                               teams.Message(T0 + timedelta(seconds=2), "lead", "tests", "third")], COLOURS)
+        g.clock.at = g.flights[-1].lands + 0.1
+        assert sorted(f.words for f, _ in g.bubbles(g.clock.at)) == ["second", "third"], mode
+
+
+def test_no_bubble_in_the_drawer_or_with_motion_off(graph):
+    for g in (graph(compact=True), graph(mode="off")):
+        g.set(resting_team(), [], COLOURS)
+        g.set(resting_team(), said(("lead", "api")), COLOURS)
+        g.clock.at = g.flights[0].lands + 0.1
+        assert g.bubbles(g.clock.at) == []
+
+
+def test_calm_paints_once_more_when_its_bubble_goes(graph):
+    calm = graph(mode="calm")
+    calm.set(resting_team(), [], COLOURS)
+    calm.set(resting_team(), said(("lead", "api")), COLOURS)
+    calm.clock.at = calm.flights[0].lands + 0.01
+    calm.on_frame()
+    assert not calm.frames.isActive()  # nothing moves in calm once landed
+    gone_ms = (teamgraph.BUBBLE_SECONDS - 0.01) * 1000
+    assert calm.lights.isActive() and gone_ms <= calm.lights.interval() <= gone_ms + 50

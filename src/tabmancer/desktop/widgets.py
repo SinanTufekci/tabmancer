@@ -1,13 +1,11 @@
-"""The desktop monitor's parts, drawn with QPainter: member cards, the conversation's lanes, the
-hours chart, the limit rings, the key bar and Bit. Charts are painted by hand: Qt Charts and Qt
-Graphs are GPL add-ons, not in the extra."""
+"""The desktop monitor's parts, drawn with QPainter: member cards, the hours chart, the limit
+rings, the key bar and Bit (the conversation's lanes: conversation.py). Charts are painted by
+hand: Qt Charts and Qt Graphs are GPL add-ons, not in the extra."""
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from .. import bitart, teamwords
@@ -188,99 +186,6 @@ class MemberCard(QFrame):
         self.facts.setVisible(bool(facts))
         self.last.setText(last_words(member, colours))
         self.last.setToolTip(member.last.text if member.last else "")
-
-
-class Lanes(QWidget):
-    """The conversation as lanes: a line a member, an arrow a message, the newest on the right."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.view: VM.TeamView | None = None
-        self.colours: dict[str, str] = {}
-        self.picked: str | None = None
-        self.setMinimumHeight(170)
-
-    def set(self, view: VM.TeamView, colours: dict[str, str], picked: str | None) -> None:
-        self.view, self.colours, self.picked = view, colours, picked
-        self.update()
-
-    def names(self) -> list[str]:
-        if self.view is None:
-            return []
-        out = [m.name for m in self.view.members]
-        for said in self.view.latest:  # you, or a session not in the team, on lanes of their own below
-            for name in (said.sender, said.receiver):
-                if name not in out:
-                    out.append(name)
-        return out
-
-    def paintEvent(self, event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor(look.SUNKEN))
-        names = self.names()
-        if self.view is None or not names:
-            return
-        w, h = self.width(), self.height()
-        left, top, bottom = 84, 14, h - 22
-        gap = (bottom - top) / max(1, len(names) - 1)
-        y_of = {name: top + i * gap for i, name in enumerate(names)}
-        p.setFont(look.font(9, True))
-        for name in names:
-            dim = self.picked is not None and name != self.picked
-            colour = QColor(self.colours.get(name, look.MUTED))
-            if dim:
-                colour.setAlpha(110)
-            p.setPen(colour)
-            p.drawText(QRectF(4, y_of[name] - 9, left - 12, 18),
-                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, name)
-            p.setPen(QPen(QColor("#2a2a2a"), 1, Qt.PenStyle.DashLine))
-            p.drawLine(QPointF(left, y_of[name]), QPointF(w - 12, y_of[name]))
-        said = [m for m in self.view.latest if m.at is not None]
-        if not said:
-            p.setPen(QColor(look.DIM))
-            p.setFont(look.font(9))
-            p.drawText(QRectF(left, 0, w - left, h), Qt.AlignmentFlag.AlignCenter, "Nothing said yet.")
-            return
-        now = datetime.now()
-        first = min(m.at for m in said)
-        span = max(60.0, (now - first).total_seconds())
-        right = w - 24
-
-        def x_of(moment: datetime) -> float:
-            return left + 16 + (right - left - 16) * ((moment - first).total_seconds() / span)
-
-        p.setFont(look.font(8))
-        p.setPen(QColor(look.DIM))
-        for share in (0.0, 0.5, 1.0):
-            moment = first + (now - first) * share
-            words = "now" if share == 1.0 else f"{moment:%H:%M}"
-            p.drawText(QRectF(left + 16 + (right - left - 16) * share - 30, bottom + 6, 60, 14),
-                       Qt.AlignmentFlag.AlignHCenter, words)
-        last_x = -99.0
-        for message in said:
-            x = x_of(message.at)
-            if x - last_x < 5:  # messages a moment apart side by side, not on top of each other
-                x = last_x + 5
-            last_x = x
-            y1, y2 = y_of.get(message.sender), y_of.get(message.receiver)
-            if y1 is None or y2 is None or y1 == y2:
-                continue
-            colour = QColor(self.colours.get(message.sender, look.MUTED))
-            if self.picked is not None and self.picked not in (message.sender, message.receiver):
-                colour.setAlpha(60)
-            down = 1 if y2 > y1 else -1
-            p.setPen(QPen(colour, 1.6))
-            p.drawLine(QPointF(x, y1), QPointF(x, y2 - 6 * down))
-            head = QPainterPath()
-            head.moveTo(x, y2)
-            head.lineTo(x - 4, y2 - 7 * down)
-            head.lineTo(x + 4, y2 - 7 * down)
-            head.closeSubpath()
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(colour)
-            p.drawPath(head)
-            p.drawEllipse(QPointF(x, y1), 3, 3)
 
 
 class HourChart(QWidget):
