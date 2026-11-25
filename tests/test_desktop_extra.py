@@ -106,7 +106,7 @@ def test_the_windows_need_no_textual():
             "        if name.split('.')[0] == 'textual':\n"
             "            raise ImportError('blocked: ' + name)\n"
             "sys.meta_path.insert(0, Blocked())\n"
-            "from tabmancer.desktop import frame, look, main, monitor, teamgraph, widgets\n"
+            "from tabmancer.desktop import frame, look, main, monitor, table, teamgraph, widgets\n"
             "print(look.accent(), sorted(m for m in sys.modules if m.split('.')[0] == 'textual'))")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
                          env={**os.environ, "PYTHONPATH": str(SOURCE.parent)}, check=False)
