@@ -25,7 +25,7 @@ from .sessions import INTERRUPTED, Exit, Session, Status, _shorten, folder_key  
 from .theme import AMBER, CYAN, GREEN, MUTED, RED, TEXT, mix
 from .tokenchart import PixelPicture, draw_hours
 from .usage import Limit
-from .viewmodel import ALL_PROJECTS  # one copy, the list's filters'
+from .viewmodel import ALL_PROJECTS  # noqa: F401  (re-exported: one copy, the list's filters')
 
 # A 3x5 pixel font drawn with half blocks: three rows high and bolder than Digits' thin lines.
 FONT = {
@@ -388,6 +388,9 @@ def project_line(mark: tuple[str, str], name: Text, count: int, git: str = "", i
     return line
 
 
+PROJECT_MARKS = {"waiting": ("● ", RED), "open": ("● ", GREEN), "continue": ("▲ ", AMBER)}  # VM.ProjectRow.mark
+
+
 class ProjectList(OptionList):
     """All projects first, a rule, then one line per project, in a stable alphabetical order. As high
     as its projects are many, so the legend under it follows it up (fit says how high it may grow)."""
@@ -417,22 +420,11 @@ class ProjectList(OptionList):
         so the list jumped under the mouse. Now the order is alphabetical and, while
         the set of projects stays the same, only the labels are replaced in place.
         """
-        groups: dict[str, list[Session]] = {}
-        for session in sessions:
-            groups.setdefault(folder_key(session.cwd) or "?", []).append(session)
-        entries = [(ALL_PROJECTS, project_line(("", ""), Text("All projects", style="bold"), len(sessions),
-                                               inset=self.INSET))]
-        for key, items in sorted(groups.items(), key=lambda item: item[1][0].project.casefold()):
-            if any(s.session_id in waiting for s in items):
-                mark = ("● ", RED)
-            elif any(s.exit is Exit.RUNNING for s in items):
-                mark = ("● ", GREEN)
-            elif any(s.status in INTERRUPTED for s in items):
-                mark = ("▲ ", AMBER)
-            else:
-                mark = ("  ", "")
-            entries.append((key, project_line(mark, Text(_shorten(items[0].project, 18)), len(items),
-                                              (git or {}).get(key, ""), self.INSET)))
+        every, *rows = VM.project_rows(sessions, set(waiting), git)  # the lines' rules, one copy
+        entries = [(every.key, project_line(("", ""), Text(every.name, style="bold"), every.count, inset=self.INSET))]
+        for row in rows:
+            entries.append((row.key, project_line(PROJECT_MARKS.get(row.mark, ("  ", "")), Text(_shorten(row.name, 18)),
+                                                  row.count, row.git, self.INSET)))
         ids = [key for key, _ in entries]
         if ids == [self.get_option_at_index(i).id for i in range(self.option_count)]:
             for key, prompt in entries:

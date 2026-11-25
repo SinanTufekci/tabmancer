@@ -14,7 +14,12 @@ limit or an account, opens, starts or closes a session. The panels fill in slice
 then a key not done here is greyed in its menu and in the key bar, and done in the terminal
 dashboard (tabmancer). The Team panel (teampanel), a tab beside the list, shows each team's
 picture over its conversation; T brings it to the front. Ctrl+K finds any command by a few of its
-words (commandbar): every key as the menus name it, and a team or a session by name, to pick its card.
+words (commandbar): every key as the menus name it, and a team, a project or a session by name.
+
+The board narrows as the terminal dashboard's list does (viewmodel.visible): to a project (a click
+on the rail, rail.py), to what a card counts (1 2 3, or a click on a lane's heading) and to words (/,
+the box over the board: a project, a title, or anything said in a session, as search.py indexes the
+conversations, on a thread of its own). The top bar says what it is narrowed to.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenuBar,
     QPushButton,
@@ -42,15 +48,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, bitart, clis, commands
+from .. import __version__, bitart, clis, commands, search
 from .. import viewmodel as VM
 from ..keys import KEYS
 from ..palette import mix
+from ..sessions import Session
 from ..store import DashboardStore, DashSnapshot
 from . import commandbar, frame, look, teamgraph
 from .board import Board
 from .frame import KeysDialog, made_up_world
 from .monitor import sequences
+from .rail import Rail
 from .teampanel import TeamPanel
 from .widgets import KeyBar, bit_pixmap, text_label
 
@@ -60,7 +68,7 @@ INFO_LEAST = 20  # characters the info line keeps before the accounts give way
 LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
-HERE = {"?", "q", "T"}
+HERE = {"?", "q", "T", "/", "1", "2", "3"}
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
 KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), ("c", "continue"), ("M", "monitor"),
@@ -72,11 +80,11 @@ TONES = {"muted": look.MUTED, "text": look.TEXT, "empty": "#2a2a2a", "ok": look.
 PANELS = ("Sessions", "Preview", "Projects", "Bit", "Team")
 SOON = {
     "Preview": "The highlighted session: how it stands, what it said last",
-    "Projects": "The projects, with where each stands in git, and the week's tokens",
 }
 VIEWS = (("board", "Board"), ("table", "Table"), ("live", "Live"))  # what the Sessions panel shows
 SHOWN_HERE = {"board"}
-BOARD_HINT = f"↑ ↓ ← → pick a card · a click on DONE opens it · {commandbar.KEY} any command"
+BOARD_HINT = f"↑ ↓ ← → pick a card · 1 2 3 or a lane's heading narrows it · / finds · {commandbar.KEY} any command"
+FILTER_WORDS = "Find by project, title or anything said  ( / )"
 
 
 def parts_html(parts: list[tuple[str, str]]) -> str:
@@ -99,6 +107,24 @@ class Relay(QObject):
     """Brings what the worker thread read back to the window's thread."""
 
     polled = Signal(object, object, bool, str)  # the store asked, its DashSnapshot, agy first in the bar, an error
+    indexed = Signal(object, bool)  # the conversations' search.Index (None: it failed), whether it read more
+
+
+class FilterBox(QLineEdit):
+    """The words the board is narrowed to (/): Esc clears them, Enter or ↓ goes back to the board."""
+
+    left = Signal()
+
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self.clear()
+            self.left.emit()
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Down):
+            self.left.emit()
+            return
+        super().keyPressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -114,6 +140,14 @@ class MainWindow(QMainWindow):
         self.brand_words = brand
         self.relay = Relay()
         self.relay.polled.connect(self.take)
+        self.relay.indexed.connect(self.take_index)
+        self.project = VM.ALL_PROJECTS  # what the board is narrowed to: a project (the rail),
+        self.card: str | None = None  # what a card counts (1 2 3),
+        self.words = ""  # and words (/)
+        self.index: search.Index | None = None  # what was said in each session, read on a thread of its own
+        self.finder: search.Finder | None = None
+        self.indexing = False
+        self.indexer: threading.Thread | None = None
         self.door = QLocalServer(self)  # `tabmancer desktop` again knocks here instead of opening a second window
         self.door.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
         self.door.newConnection.connect(self.answer_door)
@@ -157,6 +191,8 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(docks["Sessions"], docks["Team"])  # a tab beside the list: T, or its tab
         docks["Sessions"].raise_()
         docks["Team"].visibilityChanged.connect(self.team_panel.wake)  # behind a tab: its picture rests
+        self.board.card.connect(self.toggle_card)
+        self.rail.projects.picked.connect(self.set_project)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, docks["Preview"])
         self.resizeDocks([docks["Projects"], docks["Sessions"], docks["Preview"]], [210, 900, 390],
                          Qt.Orientation.Horizontal)
@@ -208,6 +244,16 @@ class MainWindow(QMainWindow):
         self.hint = text_label(BOARD_HINT, look.DIM, 9)
         row.addWidget(self.hint)
         row.addStretch(1)
+        self.filter_box = FilterBox()
+        self.filter_box.setObjectName("filter")
+        self.filter_box.setFont(look.font(9))
+        self.filter_box.setPlaceholderText(FILTER_WORDS)
+        self.filter_box.setClearButtonEnabled(True)
+        self.filter_box.setMinimumWidth(360)
+        self.filter_box.textChanged.connect(self.words_changed)
+        self.filter_box.left.connect(self.back_to_board)
+        row.addWidget(self.filter_box)
+        row.addSpacing(12)
         self.views = QButtonGroup(self)
         for name, words in VIEWS:
             button = QPushButton(words)
@@ -247,6 +293,10 @@ class MainWindow(QMainWindow):
             self.board = Board(self.accent)
             box.setContentsMargins(0, 0, 0, 0)
             box.addWidget(self.board)
+        elif title == "Projects":
+            self.rail = Rail(self.accent)
+            box.setContentsMargins(6, 0, 0, 0)
+            box.addWidget(self.rail)
         elif title == "Bit":
             line = QHBoxLayout()
             self.bit = QLabel()
@@ -269,7 +319,8 @@ class MainWindow(QMainWindow):
         bar = self.menus
         bar.setFont(look.font(9.5))
         self.actions_by_key: dict[str, QAction] = {}
-        doing = {"?": self.show_keys, "q": self.close, "T": self.show_teams}
+        doing = {"?": self.show_keys, "q": self.close, "T": self.show_teams, "/": self.find_words,
+                 "1": self.only_open, "2": self.only_waiting, "3": self.only_continue}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -339,8 +390,9 @@ class MainWindow(QMainWindow):
 
     def settle(self, seconds: float = 10) -> None:
         """Wait for a read under way (on closing, and in tests before what it reads goes)."""
-        if self.reader is not None:
-            self.reader.join(seconds)
+        for thread in (self.reader, self.indexer):
+            if thread is not None:
+                thread.join(seconds)
 
     def take(self, store: DashboardStore, snap: DashSnapshot | None, first: bool, error: str) -> None:
         self.waiting = False
@@ -351,8 +403,124 @@ class MainWindow(QMainWindow):
         self.snap, self.agy_first = snap, first
         self.show_top()
         self.show_bit()
-        self.board.set(snap)
+        self.refilter()
         self.team_panel.set(snap)
+        if len(self.words.strip()) >= search.SHORTEST:
+            self.index_words()  # what the sessions said since
+
+    # --- narrowing --------------------------------------------------------------------------------
+
+    def shown(self) -> list[Session]:
+        """The sessions the board shows: the terminal dashboard's list over the same filters."""
+        snap = self.snap
+        if snap is None:
+            return []
+        return VM.visible(snap.sessions.values(), lambda s: s.session_id in snap.hidden, text=self.words,
+                          said_in=self.said_in, project=self.project, card=self.card)
+
+    def said_in(self) -> set[str]:
+        if self.finder is None or self.snap is None:
+            return set()
+        return self.finder.said_in(self.words, self.snap.sessions.keys())
+
+    def narrowed(self) -> bool:
+        return self.project != VM.ALL_PROJECTS or self.card is not None or bool(self.words.strip())
+
+    def refilter(self) -> None:
+        snap = self.snap
+        if snap is None:
+            return
+        self.board.set(snap, self.shown(), self.card)
+        self.rail.set(snap, self.project)
+        self.show_pills()
+
+    def show_pills(self) -> None:
+        """What the board is narrowed to, in the top bar."""
+        parts = []
+        if self.project != VM.ALL_PROJECTS:
+            name = next((row.name for row in self.rail.projects.rows if row.key == self.project), self.project)
+            parts.append(f"in {name}")
+        if self.card is not None:
+            key, title = VM.CARDS[self.card]
+            parts.append(f"only {title} · {key} shows all")
+        if self.words.strip():
+            parts.append(f"“{self.words.strip()}”")
+        shown = "  ·  ".join(parts)
+        if shown != self.pills.text():
+            self.pills.setText(shown)
+            self.fit_accounts()
+
+    def set_project(self, key: str) -> None:
+        """A click on the rail: only that project's sessions, or every project again."""
+        self.project = key or VM.ALL_PROJECTS
+        self.refilter()
+
+    def toggle_card(self, card: str) -> None:
+        """1 2 3, or a click on a lane's heading: only what that card counts; the same again shows all."""
+        self.card = VM.toggle_card(self.card, card)
+        self.refilter()
+
+    def only_open(self) -> None:
+        self.toggle_card("open")
+
+    def only_waiting(self) -> None:
+        self.toggle_card("waiting")
+
+    def only_continue(self) -> None:
+        self.toggle_card("continue")
+
+    def find_words(self) -> None:
+        """/: the box over the board, its words picked to type over."""
+        self.filter_box.setFocus()
+        self.filter_box.selectAll()
+
+    def words_changed(self, words: str) -> None:
+        self.words = words
+        self.refilter()
+        if len(words.strip()) >= search.SHORTEST:
+            self.index_words()
+
+    def back_to_board(self) -> None:
+        self.board.setFocus()
+
+    def clear_filters(self) -> None:
+        self.project, self.card = VM.ALL_PROJECTS, None
+        self.filter_box.clear()  # its words too, and the board again
+        self.refilter()
+
+    def index_words(self) -> None:
+        """What was said in each session, read on a thread of its own (only what was added since the last
+        time, search.json keeps the rest); the board narrows again when it is read."""
+        if self.indexing or self.snap is None:
+            return
+        self.indexing = True
+        self.indexer = threading.Thread(target=self.read_index, args=(self.index, list(self.snap.sessions.values())),
+                                        daemon=True, name="tabmancer-search")
+        self.indexer.start()
+
+    def read_index(self, index: search.Index | None, sessions: list[Session]) -> None:
+        try:
+            index = index if index is not None else search.Index.load()
+            more = index.update(sessions)
+        except Exception:  # noqa: BLE001 - the words are still found in titles and prompts
+            index, more = None, False
+        try:
+            self.relay.indexed.emit(index, more)
+        except RuntimeError:
+            pass  # the window has gone meanwhile
+
+    def take_index(self, index: search.Index | None, more: bool) -> None:
+        self.indexing = False
+        if index is None:
+            return
+        if index is not self.index:
+            self.index, self.finder = index, search.Finder(index)
+        elif more and self.finder is not None:
+            self.finder.renew()
+        else:
+            return
+        if len(self.words.strip()) >= search.SHORTEST:
+            self.refilter()
 
     # --- showing ----------------------------------------------------------------------------------
 
@@ -411,17 +579,19 @@ class MainWindow(QMainWindow):
 
     def open_commands(self) -> None:
         """Ctrl+K: the palette, over every key of the dashboard (the ones done in the terminal dashboard
-        greyed, saying so), the teams and the sessions in sight."""
+        greyed, saying so), the teams, the projects and the sessions in sight."""
         entries = commands.commands(KEYS, HERE, ELSEWHERE)
         sessions = {}
         if self.snap is not None:
             entries += commands.team_jumps(self.snap.view.teams)
+            entries += commands.project_jumps(self.rail.projects.rows[1:])
             entries += commands.session_jumps(view for view in self.snap.view.sessions if not view.hidden)
             sessions = self.snap.sessions
         self.command_bar.offer(entries, sessions)
 
     def run_command(self, command: commands.Command) -> None:
-        """What the palette picked: a key runs its menu action; a team or a session picks its card."""
+        """What the palette picked: a key runs its menu action; a project narrows the board to it; a
+        team or a session picks its card (the filters cleared if they kept it out)."""
         if command.kind == "key":
             action = self.actions_by_key.get(command.key)
             if action is not None and action.isEnabled():
@@ -430,7 +600,13 @@ class MainWindow(QMainWindow):
         dock = self.docks["Sessions"]
         dock.show()
         dock.raise_()
-        self.board.reveal(VM.TEAM_CARD + command.target if command.kind == "team" else command.target)
+        if command.kind == "project":
+            self.set_project(command.target)
+        else:
+            card = VM.TEAM_CARD + command.target if command.kind == "team" else command.target
+            if not self.board.reveal(card) and self.narrowed():
+                self.clear_filters()
+                self.board.reveal(card)
         self.board.setFocus()
 
     def motion_changed(self) -> None:

@@ -114,6 +114,9 @@ def sheet(accent_colour: str) -> str:
     QLineEdit#commandline {{ background: {SUNKEN}; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 4px;
                              padding: 6px 10px; selection-background-color: {accent_colour}; selection-color: {BLACK}; }}
     QListWidget#commands {{ background: transparent; border: none; outline: none; }}
+    QLineEdit#filter {{ background: {BLACK}; color: {TEXT}; border: 1px solid {BORDER}; border-radius: 4px;
+                        padding: 3px 8px; selection-background-color: {accent_colour}; selection-color: {BLACK}; }}
+    QLineEdit#filter:focus {{ border-color: {accent_colour}; }}
     QStatusBar {{ background: {SURFACE}; border-top: 1px solid {BORDER}; }}
     QStatusBar::item {{ border: none; }}
     QScrollArea, QTextBrowser {{ background: {SUNKEN}; border: none; }}

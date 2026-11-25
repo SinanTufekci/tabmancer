@@ -18,7 +18,7 @@ else:
     pytest.importorskip("PySide6", reason="the desktop extra is not installed")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
@@ -26,8 +26,9 @@ from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
 from tabmancer import accounts, actor, agy, cli, commands, demo, sessions, store, teambus, teams, usage
 from tabmancer import viewmodel as VM
 from tabmancer.config import merge_json, read_json
-from tabmancer.desktop import commandbar, frame, look, main, teamgraph, teampanel
+from tabmancer.desktop import commandbar, frame, look, main, rail, teamgraph, teampanel
 from tabmancer.keys import KEYS
+from tabmancer.search import matches
 from tabmancer.widgets import bar_text
 
 look.fonts_for_offscreen()
@@ -365,6 +366,114 @@ def test_a_session_or_a_team_by_name_picks_its_card(qapp, window):
     member = next(m.session for m in team.members if m.session)
     shown.run_command(commands.Command("session", "a member", target=member))
     assert board.pick == VM.TEAM_CARD + team.name  # a member's session is on its team's card
+
+
+def lanes(board) -> list[tuple[str, list[str], int]]:
+    return [(lane.key, list(lane.items), lane.count) for lane in board.lanes]
+
+
+def lanes_over(snap, **filters) -> list[tuple[str, list[str], int]]:
+    """The board over the terminal dashboard's list with these filters (its visible(): VM.visible)."""
+    shown = VM.visible(snap.sessions.values(), lambda s: s.session_id in snap.hidden, **filters)
+    return [(lane.key, list(lane.items), lane.count) for lane in VM.board(shown, snap.team_states, snap.pinned)]
+
+
+def click_project(qapp, shown, key: str) -> None:
+    projects = shown.rail.projects
+    index = next(i for i, row in enumerate(projects.rows) if row.key == key)
+    QTest.mouseClick(projects, Qt.MouseButton.LeftButton, pos=QPoint(30, int(projects.top_of(index) + rail.ROW / 2)))
+    qapp.processEvents()
+
+
+def test_the_rail_lists_the_projects_and_a_click_narrows_every_lane(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    snap, projects = shown.snap, shown.rail.projects
+    in_sight = [s for s in snap.sessions.values() if s.session_id not in snap.hidden]
+    assert projects.rows == VM.project_rows(in_sight, None, VM.project_signs(snap.view.projects))  # the sidebar's
+    assert projects.rows[0] == VM.ProjectRow(VM.ALL_PROJECTS, "All projects", len(in_sight))
+    names = [row.name for row in projects.rows[1:]]
+    assert names == sorted(names, key=str.casefold)
+    assert {row.mark for row in projects.rows[1:]} >= {"waiting", "open", "continue"}  # the demo has each
+    assert any(row.git for row in projects.rows) and not projects.grab().isNull()
+    shop = next(row for row in projects.rows if row.name == "shop")
+    click_project(qapp, shown, shop.key)
+    assert shown.project == projects.pick == shop.key
+    assert lanes(shown.board) == lanes_over(snap, project=shop.key)  # the terminal dashboard's rows
+    assert {s.project for s in shown.shown()} == {"shop"} and shown.pills.text() == "in shop"
+    assert "a click shows every project again" in projects.tip(shop)
+    click_project(qapp, shown, shop.key)  # the same again: every project
+    assert shown.project == VM.ALL_PROJECTS and lanes(shown.board) == lanes_over(snap)
+    assert shown.pills.text() == ""
+    click_project(qapp, shown, shop.key)
+    click_project(qapp, shown, VM.ALL_PROJECTS)
+    assert shown.project == VM.ALL_PROJECTS
+
+
+def test_1_2_3_and_a_lane_heading_narrow_the_board_as_the_cards_count(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    board = shown.board
+    for key, card in (("1", "open"), ("2", "waiting"), ("3", "continue")):
+        QTest.keyClick(shown, key)
+        assert shown.card == card and board.on == card
+        assert lanes(board) == lanes_over(shown.snap, card=card)
+        title = VM.CARDS[card][1]
+        assert shown.pills.text() == f"only {title} · {key} shows all"
+        assert board.views[card].heading.on and "every lane again" in board.views[card].heading.toolTip()
+        if card == "open":  # the open ones: those that need you too
+            counts = {lane[0]: lane[2] for lane in lanes(board)}
+            assert counts["waiting"] and counts["open"] and not counts["continue"] and not counts["done"]
+        QTest.keyClick(shown, key)  # again: everything
+        assert shown.card is None and lanes(board) == lanes_over(shown.snap)
+    heading = board.views["waiting"].heading
+    QTest.mouseClick(heading, Qt.MouseButton.LeftButton)
+    assert shown.card == "waiting" and heading.on
+    QTest.mouseClick(heading, Qt.MouseButton.LeftButton)
+    assert shown.card is None and not heading.on
+    board.fold("done", False)  # DONE's heading still folds it: it is no card
+    QTest.mouseClick(board.views["done"].heading, Qt.MouseButton.LeftButton)
+    assert shown.card is None and next(lane for lane in board.lanes if lane.key == "done").folded
+
+
+def test_slash_finds_by_words_and_by_what_was_said(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    snap, box = shown.snap, shown.filter_box
+    QTest.keyClick(shown, Qt.Key.Key_Slash)
+    assert box.hasFocus()
+    QTest.keyClicks(box, "login 2")  # typed into the box, not the window's keys
+    assert shown.words == "login 2" and shown.card is None
+    box.clear()
+    QTest.keyClicks(box, "login")
+    assert lanes(shown.board) == lanes_over(snap, text="login", said_in=shown.said_in)
+    assert "Fix the login redirect loop" in {s.title for s in shown.shown()}
+    assert shown.pills.text() == "“login”"
+    api = next(s.session_id for s in snap.sessions.values() if s.title == "Rate limiting for the public API")
+    box.clear()
+    QTest.keyClicks(box, "bucket")  # only in what it answered: "a token bucket per API key"
+    wait(qapp, lambda: api in {s.session_id for s in shown.shown()})  # once the conversations are read
+    assert not matches(snap.sessions[api], "bucket")  # not in its title or prompts
+    assert lanes(shown.board) == lanes_over(snap, text="bucket", said_in=shown.said_in)
+    QTest.keyClick(box, Qt.Key.Key_Escape)  # clears it, and the board has the keys again
+    assert shown.words == "" and box.text() == "" and shown.board.hasFocus()
+    assert lanes(shown.board) == lanes_over(snap)
+
+
+def test_a_project_by_name_narrows_the_board_and_a_jump_brings_back_a_card_it_hid(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    bar = shown.command_bar
+    shown.open_commands()
+    QTest.keyClicks(bar.line, "project nightly")
+    picked = bar.picked()
+    assert picked.kind == "project" and picked.words == "nightly-reports"
+    QTest.keyClick(bar.line, Qt.Key.Key_Return)
+    assert shown.project == picked.target and {s.project for s in shown.shown()} == {"nightly-reports"}
+    api = next(s.session_id for s in shown.snap.sessions.values() if s.title == "Rate limiting for the public API")
+    shown.toggle_card("continue")
+    shown.run_command(commands.Command("session", "Rate limiting", target=api))  # kept out: the filters go
+    assert shown.board.pick == api and not shown.narrowed() and shown.pills.text() == ""
 
 
 def test_a_closed_window_goes_with_its_last_name(qapp, world):

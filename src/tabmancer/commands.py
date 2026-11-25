@@ -3,7 +3,7 @@
 
 A command is a key of keys.py, named as the menus name it (short) and with what keys.py says it does;
 one the window does not do is greyed and says why (where it is done for now, or what to pick first). A
-jump goes to a team, a session or a team's member by name. find() ranks them all for the words typed: the
+jump goes to a team, a project, a session or a team's member by name. find() ranks them all for the words typed: the
 key itself, then names that start with the words, then a word in them that does (a jump's kind counts:
 "team shop"), then the words anywhere in the name, then in what a key does or a jump's project, then their
 letters in order; a session also by its folder and prompts, as the list's / finds it (search.matches). At
@@ -21,9 +21,9 @@ from . import search
 
 if TYPE_CHECKING:
     from .sessions import Session
-    from .viewmodel import MemberView, SessionView, TeamView
+    from .viewmodel import MemberView, ProjectRow, SessionView, TeamView
 
-KINDS = ("team", "session", "member", "key")  # their order at an equal rank: a name typed is usually meant
+KINDS = ("team", "project", "session", "member", "key")  # their order at an equal rank: a name typed is usually meant
 MOST = 60  # what the palette lists at most
 
 
@@ -34,7 +34,7 @@ class Command:
     said: str = ""  # what a key does in full (keys.py), or a jump's state and project
     key: str = ""  # a key as keys.py writes it
     group: str = ""  # a key's group in keys.py; a jump's project, or a member's part
-    target: str = ""  # a jump's session id, team or member name
+    target: str = ""  # a jump's session id, team or member name, or project's folder key
     enabled: bool = True
     why: str = ""  # why it is greyed
 
@@ -66,6 +66,12 @@ def commands(keys: list[tuple[str, list[tuple[str, str, str]]]], here: Iterable[
 
 def team_jumps(teams: Iterable[TeamView]) -> list[Command]:
     return [Command("team", team.name, team.goal, group=team.project, target=team.name) for team in teams]
+
+
+def project_jumps(rows: Iterable[ProjectRow]) -> list[Command]:
+    """The projects' lines (viewmodel.project_rows, but All projects): a jump narrows the list to one."""
+    return [Command("project", row.name, f"{row.count} session{'s' if row.count != 1 else ''} in sight",
+                    target=row.key) for row in rows]
 
 
 def session_jumps(views: Iterable[SessionView]) -> list[Command]:

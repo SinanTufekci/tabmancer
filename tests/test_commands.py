@@ -79,6 +79,10 @@ def test_teams_sessions_and_members_are_jumps_found_by_name_or_where_they_are():
     by_prompt = commands.find(entries, "handshake", sessions)  # by what was asked in it, as / finds it
     assert [c.target for c in by_prompt if c.kind == "session"] == ["s2"]
     assert "s2" not in [c.target for c in commands.find(entries, "handshake")]  # without the sessions: names only
+    rows = VM.project_rows(list(sessions.values()))
+    projects = commands.project_jumps(rows[1:])  # every project but All projects
+    assert projects[0] == commands.Command("project", "api-server", "1 session in sight", target=rows[1].key)
+    assert commands.find(entries + projects, "project web")[0] == projects[1]  # its kind is a word of it too
     member = VM.MemberView("api", False, "endpoints", "s1", "working", "working", "working")
     found = commands.member_jumps([member])
     assert found == [commands.Command("member", "api", "working · endpoints", group="member", target="api")]

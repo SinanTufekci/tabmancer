@@ -4,7 +4,10 @@ Lanes by the cards' rules (viewmodel.board): NEED YOU, OPEN NOW, TO CONTINUE, an
 strip a click opens. A lane's heading has its card's number and what they are (the projects; the open
 ones by what they do). A team is one card, in the lane of its most urgent member, with its members
 as chips. The arrows and the mouse move the pick, one card, kept across reads as the list keeps its
-row (viewmodel.kept_row). It only shows: what a card does (Enter and the rest) comes with the keys.
+row (viewmodel.kept_row). It shows the sessions the window narrowed the list to (viewmodel.visible: a
+project, a card, words); a click on a lane's heading asks for only what its card counts (1 2 3), and
+that heading is lit while it is so. It only shows: what a card does (Enter and the rest) comes with the
+keys.
 """
 
 from __future__ import annotations
@@ -303,22 +306,34 @@ class Column(QWidget):
 
 class Heading(QWidget):
     """A lane's title and number in its tone, what they are under it, and those of them on a team's
-    card in another lane. A click on a lane that folds (DONE) folds it again."""
+    card in another lane. A click on a lane that folds (DONE) folds it again; on a card's lane, it asks
+    for only what the card counts, or for every lane again while it is lit (on)."""
 
     clicked = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, accent: str = look.ORANGE) -> None:
         super().__init__()
+        self.accent = accent
         self.lane: VM.Lane | None = None
         self.folds = False
+        self.on = False  # the list is narrowed to its card
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-    def set(self, lane: VM.Lane, folds: bool) -> None:
-        self.lane, self.folds = lane, folds
+    def set(self, lane: VM.Lane, folds: bool, on: bool = False) -> None:
+        self.lane, self.folds, self.on = lane, folds, on
         lines = 2 + bool(lane.away)
         self.setFixedHeight(int(metrics((9, True)).height() + (lines - 1) * metrics(META).height() + 14))
-        self.setToolTip("a click folds it" if folds else "")
-        self.setCursor(Qt.CursorShape.PointingHandCursor if folds else Qt.CursorShape.ArrowCursor)
+        card = VM.CARDS.get(lane.key)
+        if folds:
+            tip = "a click folds it"
+        elif card is None:
+            tip = ""
+        elif on:
+            tip = f"only what {card[1]} counts: a click (or {card[0]}) shows every lane again"
+        else:
+            tip = f"a click (or {card[0]}): only what {card[1]} counts"
+        self.setToolTip(tip)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if tip else Qt.CursorShape.ArrowCursor)
         self.update()
 
     def lines(self) -> list[str]:
@@ -332,7 +347,7 @@ class Heading(QWidget):
         return out
 
     def mousePressEvent(self, event) -> None:
-        if self.folds:
+        if self.folds or (self.lane is not None and self.lane.key in VM.CARDS):
             self.clicked.emit()
         super().mousePressEvent(event)
 
@@ -341,6 +356,8 @@ class Heading(QWidget):
         if lane is None:
             return
         p = QPainter(self)
+        if self.on:  # the list is narrowed to its card: a bar in the accent under the heading
+            p.fillRect(QRectF(4, self.height() - 2, self.width() - 8, 2), QColor(self.accent))
         colour = tone_colour(lane.tone) if lane.count else look.MUTED
         big, small = look.font(9, True), look.font(*META)
         fm_big, fm_small = QFontMetricsF(big), QFontMetricsF(small)
@@ -405,12 +422,14 @@ class LaneView(QFrame):
 
     clicked = Signal(str)  # a card's key
     fold = Signal(str, bool)  # the lane's key, folded
+    card = Signal(str)  # its heading clicked: the lane's key, a card's (VM.CARDS)
 
     def __init__(self, key: str, accent: str) -> None:
         super().__init__()
         self.key = key
+        self.folds = False
         self.setObjectName("lane")
-        self.heading = Heading()
+        self.heading = Heading(accent)
         self.column = Column(accent)
         self.scroller = QScrollArea()
         self.scroller.setWidgetResizable(True)
@@ -428,15 +447,19 @@ class LaneView(QFrame):
         column.addWidget(self.strip, 1)
         self.column.clicked.connect(self.clicked)
         self.strip.clicked.connect(self.unfold)
-        self.heading.clicked.connect(self.fold_up)
+        self.heading.clicked.connect(self.heading_clicked)
 
     def unfold(self) -> None:
         self.fold.emit(self.key, False)
 
-    def fold_up(self) -> None:
-        self.fold.emit(self.key, True)
+    def heading_clicked(self) -> None:
+        if self.folds:
+            self.fold.emit(self.key, True)
+        else:
+            self.card.emit(self.key)
 
-    def set(self, lane: VM.Lane, cards: list[Card], picked: str | None, folds: bool) -> None:
+    def set(self, lane: VM.Lane, cards: list[Card], picked: str | None, folds: bool, on: bool = False) -> None:
+        self.folds = folds
         folded = lane.folded
         self.heading.setVisible(not folded)
         self.scroller.setVisible(not folded)
@@ -449,7 +472,7 @@ class LaneView(QFrame):
             return
         self.setMinimumWidth(150)
         self.setMaximumWidth(16777215)
-        self.heading.set(lane, folds)
+        self.heading.set(lane, folds, on)
         self.column.set(cards, picked)
 
     def show_card(self, key: str) -> None:
@@ -463,11 +486,13 @@ class Board(QWidget):
     """The lanes side by side, a card picked in them. picked: the key of the card picked now."""
 
     picked = Signal(str)
+    card = Signal(str)  # a lane's heading clicked: its card (VM.CARDS), to narrow the list to or back
 
     def __init__(self, accent: str) -> None:
         super().__init__()
         self.accent = accent
         self.snap: DashSnapshot | None = None
+        self.on: str | None = None  # the card the list is narrowed to: its heading is lit
         self.lanes: list[VM.Lane] = []
         self.cards: dict[str, Card] = {}
         self.pick: str | None = None
@@ -481,14 +506,17 @@ class Board(QWidget):
             lane = LaneView(key, accent)
             lane.clicked.connect(self.click)
             lane.fold.connect(self.fold)
+            lane.card.connect(self.card)
             self.views[key] = lane
             row.addWidget(lane, 1)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-    def set(self, snap: DashSnapshot) -> None:
-        """The board as the store read it: the sessions in sight (the hidden ones are not)."""
-        self.snap = snap
-        shown = VM.visible(snap.sessions.values(), lambda s: s.session_id in snap.hidden)
+    def set(self, snap: DashSnapshot, shown: list[Session] | None = None, on: str | None = None) -> None:
+        """The board as the store read it, over the sessions shown (VM.visible: the window's filters);
+        without them, every one in sight (the hidden ones are not). on: the card they are narrowed to."""
+        self.snap, self.on = snap, on
+        if shown is None:
+            shown = VM.visible(snap.sessions.values(), lambda s: s.session_id in snap.hidden)
         self.lanes = VM.board(shown, snap.team_states, snap.pinned)
         self.show_lanes()
 
@@ -519,7 +547,7 @@ class Board(QWidget):
         self.pick = keys[place] if place is not None else (keys[0] if keys else None)
         self.row = keys.index(self.pick) if self.pick is not None else 0
         for lane in self.lanes:
-            self.views[lane.key].set(lane, by_lane[lane.key], self.pick, lane.key in self.opened)
+            self.views[lane.key].set(lane, by_lane[lane.key], self.pick, lane.key in self.opened, lane.key == self.on)
         if self.pick != before:
             self.picked.emit(self.pick or "")
 

@@ -775,6 +775,53 @@ def back_step(search_open: bool, card: str | None) -> str:
     return "search" if search_open else "card" if card else "quit"
 
 
+# --- the projects' lines (the terminal's sidebar, the desktop window's rail) -----------------------
+
+@dataclass(frozen=True)
+class ProjectRow:
+    key: str  # its folder key; ALL_PROJECTS for the first line
+    name: str
+    count: int  # its sessions in sight
+    mark: str = ""  # its most urgent session: "waiting" (for you), else "open", else "continue", else ""
+    git: str = ""  # where its folder stands in git: "±" changes not committed, "↑" commits not pushed
+
+
+def git_signs(changed: object, ahead: object) -> str:
+    """A folder's git as the projects' lines show it: ± changes not committed, ↑ commits not pushed."""
+    return ("±" if changed else "") + ("↑" if ahead else "")
+
+
+def project_signs(projects: Iterable[ProjectView]) -> dict[str, str]:
+    """Folder key -> its git signs, from the view's projects."""
+    return {project.folder: git_signs(project.git.get("changed"), project.git.get("ahead"))
+            for project in projects if project.git}
+
+
+def project_rows(sessions: list[Session], waiting: set[str] | None = None,
+                 git: dict[str, str] | None = None) -> list[ProjectRow]:
+    """All projects first, then a line per project in a stable alphabetical order (a live update never
+    reshuffles them under the mouse), each marked by its most urgent session: waiting for you (the ids
+    in waiting; by default the ones NEED YOU counts), else open, else cut off or unanswered. git: folder
+    key -> its signs (git_signs)."""
+    if waiting is None:
+        waiting = {s.session_id for s in sessions if counted_by(s, "waiting")}
+    groups: dict[str, list[Session]] = {}
+    for session in sessions:
+        groups.setdefault(folder_key(session.cwd) or "?", []).append(session)
+    rows = [ProjectRow(ALL_PROJECTS, "All projects", len(sessions))]
+    for key, items in sorted(groups.items(), key=lambda item: item[1][0].project.casefold()):
+        if any(s.session_id in waiting for s in items):
+            mark = "waiting"
+        elif any(s.exit is Exit.RUNNING for s in items):
+            mark = "open"
+        elif any(s.status in INTERRUPTED for s in items):
+            mark = "continue"
+        else:
+            mark = ""
+        rows.append(ProjectRow(key, items[0].project, len(items), mark, (git or {}).get(key, "")))
+    return rows
+
+
 # --- the board's lanes (the desktop window's Board) ------------------------------------------------
 
 # A lane for each card, by its rule (counted_by), and one for the rest: (key, title, tone, what it

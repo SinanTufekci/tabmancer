@@ -1,4 +1,5 @@
-"""The board's lanes (viewmodel.board): the cards' rules, a team as one card, pinned first."""
+"""The board's lanes (viewmodel.board): the cards' rules, a team as one card, pinned first; and the
+projects' lines beside it (viewmodel.project_rows), as the terminal dashboard's sidebar has them."""
 
 from __future__ import annotations
 
@@ -6,7 +7,7 @@ from datetime import datetime, timedelta
 
 from tabmancer import teams
 from tabmancer import viewmodel as VM
-from tabmancer.sessions import Exit, Session, Status
+from tabmancer.sessions import Exit, Session, Status, folder_key
 
 
 def made(sid: str, status: Status = Status.DONE, exit: Exit = Exit.CLEAN, live: str = "", project: str = "",
@@ -97,6 +98,28 @@ def test_a_team_whose_members_are_all_hidden_has_no_card():
     shown = VM.visible([lead, api, *world()], lambda s: s.session_id in {"lead-1", "api-1"})
     assert not any(item.startswith(VM.TEAM_CARD) for lane in VM.board(shown, shop(lead, api), set())
                    for item in lane.items)
+
+
+def test_the_projects_lines_stay_in_order_each_marked_by_its_most_urgent_session():
+    sessions = [running("asks", "blocked", project="web"), made("old", project="web"), running("busy", "busy", project="cli"),
+                made("cut", Status.CUT_OFF, project="api"), made("done", project="docs")]
+    docs = folder_key("C:/work/docs")
+    rows = VM.project_rows(sessions, git={docs: "±↑"})
+    assert [(row.name, row.mark, row.count, row.git) for row in rows] == [
+        ("All projects", "", 5, ""), ("api", "continue", 1, ""), ("cli", "open", 1, ""), ("docs", "", 1, "±↑"),
+        ("web", "waiting", 2, "")]  # alphabetical, so a live update never moves them under the mouse
+    assert rows[0].key == VM.ALL_PROJECTS and rows[4].key == folder_key("C:/work/web")
+    assert VM.project_rows(sessions, waiting=set())[4].mark == "open"  # the terminal says which ones wait
+    assert VM.project_rows([]) == [VM.ProjectRow(VM.ALL_PROJECTS, "All projects", 0)]
+
+
+def test_a_folders_git_is_two_signs():
+    assert (VM.git_signs(3, 0), VM.git_signs(0, 2), VM.git_signs(1, 1), VM.git_signs(0, 0)) == ("±", "↑", "±↑", "")
+    now = datetime.now()
+    projects = [VM.ProjectView("a", "a", now, 1, 0, 0, {"changed": True, "ahead": False}),
+                VM.ProjectView("b", "b", now, 1, 0, 0, None), VM.ProjectView("c", "c", now, 1, 0, 0,
+                                                                            {"changed": False, "ahead": True})]
+    assert VM.project_signs(projects) == {"a": "±", "c": "↑"}
 
 
 def test_no_sessions_no_cards():
