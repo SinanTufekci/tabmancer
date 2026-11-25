@@ -3,6 +3,7 @@ does what you ask there, never the list, never anything by itself."""
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -31,6 +32,16 @@ async def settle(pilot, app, tries: int = 60) -> None:
         await pilot.pause(0.05)
         if isinstance(app.screen, TeamMonitor) and app.screen.view is not None:
             return
+
+
+async def workers_done(pilot, app, *groups: str, seconds: float = 20) -> None:
+    """Till no worker of these groups is at work, by the clock. Not workers.wait_for_complete(): a
+    group is exclusive, so a refresh asked for while the mount's own still runs (under load) cancels
+    that one, and waiting on a cancelled worker raises WorkerCancelled."""
+    end = time.monotonic() + seconds
+    while busy := [worker.name for worker in app.workers if worker.group in groups and not worker.is_finished]:
+        assert time.monotonic() < end, busy
+        await pilot.pause(0.05)
 
 
 @pytest.mark.parametrize("size", [(120, 30), (200, 50)])
@@ -430,7 +441,7 @@ async def test_a_monitor_reads_neither_usage_nor_other_folders_twice(fake_home, 
         await settle(pilot, app)
         app.refresh_usage()
         app.refresh_git()
-        await app.workers.wait_for_complete()
+        await workers_done(pilot, app, "usage", "git")
         assert read == [] and [lim.percent for lim in app.limits] == [40]
     outside = [s.cwd for s in app.sessions.values() if s.cwd and not teams.in_team_folder(shop, s.cwd)]
     assert outside and folders and not any(f in outside for found in folders for f in found)
