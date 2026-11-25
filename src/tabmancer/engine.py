@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Protocol
 
-from . import accounts, actions, actor, alerts, store
+from . import accounts, actions, actor, alerts, claudeupdate, store, toast, wrapped
 from .actions import Note
 from .sessions import Exit, Session
 
@@ -167,6 +167,19 @@ class Front(Protocol):
         """Which dashboard acts (held: its lock), and that this one watches."""
         ...
 
+    def update_claude(self) -> None:
+        """Run claude update off the UI thread (alerts.run_claude_update), its outcome to
+        Engine.claude_updated."""
+        ...
+
+    def show_newer(self, version: str) -> None:
+        """A newer tabmancer, kept in sight while the front is open (the top bar's name)."""
+        ...
+
+    def send_toast(self, title: str, body: str) -> None:
+        """A desktop note (toast.show): only from the one that acts."""
+        ...
+
 
 @dataclass
 class EngineState:
@@ -189,6 +202,9 @@ class EngineState:
     told_limit: set[str] = field(default_factory=set)  # sessions Bit has said are stopped at a limit
     actor_misses: int = 0  # looks in a row that found no lock it could read (seen)
     told_alone: bool = False  # a monitor said no dashboard is open
+    told_update: str | None = None  # the newer tabmancer already told of
+    updating_claude: bool = False  # claude update running: sessions asked for wait for it
+    after_claude_update: list[Callable[[], None]] = field(default_factory=list)  # what waits for it
 
 
 FORWARDED = tuple(f.name for f in fields(EngineState))
@@ -418,6 +434,8 @@ class Engine:
         """At its start: a dashboard takes the lock when it is free; a monitor never acts, nor asks."""
         if not self.front.monitoring():
             self.state.acts = actor.claim()
+        if not self.state.acts:
+            claudeupdate.leave_to_dashboard()  # the one that acts runs it: two at once would race
 
     def seen(self, look: Look) -> None:
         """What a look at the lock found (every ACTOR_SECONDS). The one that acts: it steps back when a
@@ -442,6 +460,17 @@ class Engine:
         else:
             self.show_armed(look.armed)
 
+    def started(self) -> None:
+        """It acts (at its start, or taken over): claude update is its to run again, and the sessions
+        to continue are as saved."""
+        claudeupdate.take_back()
+        self.load_armed()
+
+    def stopped(self) -> None:
+        """It no longer acts: claude update is left to the one that does (two at once would race)."""
+        self.state.acts = False
+        claudeupdate.leave_to_dashboard()
+
     def took_over(self) -> None:
         """The one that acted is gone and this one holds the lock now: it acts."""
         if self.state.acts:
@@ -462,3 +491,52 @@ class Engine:
         """At its end: the lock goes, for another to take."""
         if self.state.acts:
             actor.release()
+
+    # --- claude update, a newer tabmancer, Wrapped -------------------------------------------------------
+
+    def update_due(self, clis: Iterable[str] | None = None) -> None:
+        """Today's claude update, when it is due: at the start of acting (clis None), or before
+        sessions of these CLIs open (one of them Claude Code, none running already). The front runs it
+        in a worker; what is asked for meanwhile waits (after_update)."""
+        due = claudeupdate.due() if clis is None else alerts.update_due(self.state.updating_claude, clis)
+        if due:
+            self.state.updating_claude = True
+            self.front.update_claude()
+
+    def after_update(self, what: str, then: Callable[[], None]) -> bool:
+        """While claude update runs: then, once it is done, and a word that it waits. False (and
+        nothing kept) when no update is running."""
+        if not self.state.updating_claude:
+            return False
+        self.state.after_claude_update.append(then)
+        self.front.say_note(alerts.updating_note(what))
+        return True
+
+    def claude_updated(self, outcome: claudeupdate.Outcome, missing: list[str] | None) -> None:
+        """claude update is done: how it went, then what waited for it, in the order asked."""
+        state = self.state
+        state.updating_claude = False
+        waiting, state.after_claude_update = state.after_claude_update, []
+        for note in alerts.update_notes(outcome, missing, bool(waiting)):
+            self.front.say_note(note)
+        for then in waiting:
+            then()
+
+    def newer(self, version: str, command: str) -> None:
+        """A newer tabmancer (found off the UI thread: alerts.newer_tabmancer, told_update read there):
+        in sight while open, and told once with the command that upgrades it."""
+        self.state.told_update = version
+        self.front.show_newer(version)
+        self.tell(alerts.newer_event(version, command))
+
+    def wrapped(self) -> None:
+        """On Fridays from noon, or the weekend after, once a week: the week is ready (W)."""
+        at = self.clock()
+        event = alerts.wrapped_event(at)
+        if event is None:
+            return
+        wrapped.told(at)
+        self.front.show_bit(event.bit)
+        self.front.say_note(event.note)
+        if event.desktop and toast.enabled():
+            self.front.send_toast(*event.desktop)

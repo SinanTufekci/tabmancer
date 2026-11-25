@@ -14,10 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from tabmancer import accounts, actions, actor, alerts, engine
+from tabmancer import accounts, actions, actor, alerts, claudeupdate, engine, store, toast, wrapped
 from tabmancer.sessions import Exit, Session, Status
 
 NOW = datetime(2026, 11, 25, 12, 0)
+WRAPPED_DUE = wrapped.due  # conftest turns the week's word off; its tests here want the real one
 
 
 def s(sid, state="busy", exit=Exit.RUNNING, context=50_000, **kw) -> Session:
@@ -193,7 +194,8 @@ def test_the_dashboards_state_is_the_engines():
     app = SessionPicker(days=14)
     assert engine.FORWARDED == ("acts", "sessions", "queued", "unasked", "notes", "told_crowded", "told_idle",
                                 "opening", "came_up", "full_poll_due", "full_polls", "armed", "armed_unsaved",
-                                "told_limit", "actor_misses", "told_alone")
+                                "told_limit", "actor_misses", "told_alone", "told_update", "updating_claude",
+                                "after_claude_update")
     for name in engine.FORWARDED:
         value = object()
         setattr(app, name, value)
@@ -433,3 +435,91 @@ def test_one_that_watches_continues_nothing_whatever_runs_due(kept):
     eng = made(front, sessions={"l1": lim("l1")}, armed={"l1": LIFTS - timedelta(hours=2)})
     eng.due()
     assert front.calls == [] and eng.state.armed == {"l1": LIFTS - timedelta(hours=2)} and kept["armed"] == []
+
+
+# --- claude update, a newer tabmancer, Wrapped (E4) ------------------------------------------------------
+
+
+def test_claude_update_at_the_start_of_acting_and_before_a_claude_session_opens(monkeypatch):
+    due = [True]
+    monkeypatch.setattr(claudeupdate, "due", lambda today=None: due[0])
+    front = Front()
+    eng = made(front, acts=True)
+    eng.update_due(["agy"])  # no Claude Code among them: nothing to wait for
+    assert front.calls == [] and not eng.state.updating_claude
+    eng.update_due()
+    assert front.calls == [("update_claude",)] and eng.state.updating_claude
+    eng.update_due(["claude"])  # running already: not twice
+    assert front.calls == [("update_claude",)]
+    eng.state.updating_claude, due[0] = False, False
+    eng.update_due(["claude"])
+    eng.update_due()
+    assert front.calls == [("update_claude",)]
+
+
+def test_what_waits_for_claude_update_runs_after_its_notes_in_the_order_asked():
+    front = Front()
+    eng = made(front, acts=True)
+    ran: list[str] = []
+    assert not eng.after_update("the session opens", lambda: ran.append("x"))  # none running: nothing kept
+    assert front.calls == [] and eng.state.after_claude_update == []
+    eng.state.updating_claude = True
+    assert eng.after_update("the session opens", lambda: ran.append("open"))
+    assert eng.after_update("it opens with your prompt", lambda: ran.append("prompt"))
+    assert front.calls == [("say_note", alerts.updating_note("the session opens")),
+                           ("say_note", alerts.updating_note("it opens with your prompt"))]
+    front.calls.clear()
+    front.say_note = lambda note: ran.append(note.words)
+    outcome = claudeupdate.Outcome(True, "2.1.0", "2.2.0")
+    eng.claude_updated(outcome, ["--advisor"])
+    assert ran == [note.words for note in alerts.update_notes(outcome, ["--advisor"], True)] + ["open", "prompt"]
+    assert not eng.state.updating_claude and eng.state.after_claude_update == []
+
+
+def test_a_newer_tabmancer_in_sight_and_told():
+    front = Front()
+    eng = made(front)
+    eng.newer("9.9.9", "uv tool upgrade tabmancer")
+    assert eng.state.told_update == "9.9.9"
+    assert front.calls == [("show_newer", "9.9.9"), ("tell", alerts.newer_event("9.9.9", "uv tool upgrade tabmancer"))]
+
+
+@pytest.mark.parametrize("desktop", [True, False])
+def test_wrapped_once_a_week_by_the_clock_given(monkeypatch, desktop):
+    monkeypatch.setattr(wrapped, "due", WRAPPED_DUE)
+    monkeypatch.setattr(toast, "enabled", lambda: desktop)
+    front = Front()
+    eng = made(front, acts=True)
+    eng.wrapped()  # a Wednesday: not yet
+    assert front.calls == []
+    friday = datetime(2026, 11, 27, 13, 0)
+    eng.clock = lambda: friday
+    eng.wrapped()
+    eng.wrapped()  # told this week
+    event = alerts.wrapped_event(friday - timedelta(days=7))
+    assert event is not None
+    assert front.calls == [("show_bit", event.bit), ("say_note", event.note)] + (
+        [("send_toast", *event.desktop)] if desktop else [])
+    eng.clock = lambda: friday + timedelta(days=7)
+    eng.wrapped()  # the next week's
+    assert front.names().count("show_bit") == 2
+
+
+def test_claude_update_is_the_ones_that_acts(monkeypatch):
+    done: list[str] = []
+    monkeypatch.setattr(claudeupdate, "take_back", lambda: done.append("take_back"))
+    monkeypatch.setattr(claudeupdate, "leave_to_dashboard", lambda: done.append("leave"))
+    monkeypatch.setattr(store, "read_armed", lambda: done.append("read_armed") or {})
+    monkeypatch.setattr(actor, "claim", lambda: False)
+    monkeypatch.setattr(actor, "release", lambda: None)
+    for monitor in (True, False):
+        made(Front(monitor=monitor)).mount()  # a monitor, and a dashboard that only watches
+    assert done == ["leave", "leave"]
+    done.clear()
+    monkeypatch.setattr(actor, "claim", lambda: True)
+    eng = made(Front())
+    eng.mount()
+    assert done == [] and eng.state.acts
+    eng.started()
+    eng.stopped()
+    assert done == ["take_back", "read_armed", "leave"] and not eng.state.acts

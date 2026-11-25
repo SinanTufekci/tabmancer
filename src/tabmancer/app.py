@@ -708,9 +708,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.last_row = 0  # where the cursor was, so it steps over a heading the same way
         self.waiting_turn = 0  # j goes round the sessions waiting for you
         self.waiting_group = ""  # j: "needs" while some session needs you, else "waiting"
-        self.told_update: str | None = None  # the newer tabmancer already told of
-        self.updating_claude = False  # claude update running: sessions asked for wait for it
-        self.after_claude_update: list[Callable[[], None]] = []
         # The Claude account Claude Code is signed in with, as last read; signed_as is its key
         # (account and organisation: one email can be in more than one organisation).
         self.account: accounts.Account | None = None
@@ -830,8 +827,6 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.fit_split()
         self.engine.mount()  # a monitor never acts, nor asks for the lock
         self.set_interval(ACTOR_SECONDS, self.tick_actor)
-        if not self.acts:
-            claudeupdate.leave_to_dashboard()  # the one that acts runs it: two at once would race
         self.set_interval(SPIN_SECONDS, self.spin)
         self.refresh_usage()
         self.set_interval(USAGE_SECONDS, self.refresh_usage)
@@ -860,13 +855,10 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """This dashboard holds the actor lock: what happens by itself is its to do. At its start, or
         later when it takes the lock over from a dashboard that closed (then Wrapped's word too, which
         the first load starts otherwise)."""
-        claudeupdate.take_back()
-        self.load_armed()
+        self.engine.started()
         self.check_updates()
         self.actor_timers.append(self.set_interval(UPDATES_SECONDS, self.check_updates))
-        if claudeupdate.due():  # today's claude update, before any session opens
-            self.updating_claude = True
-            self.update_claude()
+        self.engine.update_due()  # today's claude update, before any session opens
         self.actor_timers.append(self.set_interval(DUE_SECONDS, self.continue_due))
 
     def start_wrapped(self) -> None:
@@ -877,8 +869,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         for timer in self.actor_timers:
             timer.stop()
         self.actor_timers.clear()
-        self.acts = False
-        claudeupdate.leave_to_dashboard()
+        self.engine.stopped()
 
     def say_who_acts(self, held: dict | None = None) -> None:
         held = held if held is not None else (actor.holder() or {})
@@ -1914,14 +1905,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def tell_wrapped(self) -> None:
         """On Fridays from noon, or the weekend after, once a week: the week is ready (W)."""
-        event = alerts.wrapped_event()
-        if event is None:
-            return
-        wrapped.told()
-        self.show_bit(event.bit)
-        self.say_note(event.note)
-        if event.desktop and toast.enabled():
-            self.send_toast(*event.desktop)
+        self.engine.wrapped()
 
     # --- handing over -----------------------------------------------------------------
 
@@ -2813,37 +2797,21 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """A newer tabmancer on PyPI (updates.news: asked once a day at most), told once."""
         found = alerts.newer_tabmancer(self.told_update)
         if found:
-            self.call_from_thread(self.tell_update, *found)
+            self.call_from_thread(self.engine.newer, *found)
 
     @work(thread=True, exclusive=True, group="claude-update")
     def update_claude(self) -> None:
         """claude update (claudeupdate.py), and with a new version, whether it still takes every flag
         tabmancer runs it with (doctor's check)."""
-        self.call_from_thread(self.claude_updated, *alerts.run_claude_update())
-
-    def claude_updated(self, outcome: claudeupdate.Outcome, missing: list[str] | None) -> None:
-        self.updating_claude = False
-        waiting, self.after_claude_update = self.after_claude_update, []
-        for note in alerts.update_notes(outcome, missing, bool(waiting)):
-            self.notify(note.words, severity=note.severity, timeout=note.seconds)
-        for then in waiting:
-            then()
+        self.call_from_thread(self.engine.claude_updated, *alerts.run_claude_update())
 
     def after_update(self, what: str, then: Callable[[], None]) -> bool:
-        """While claude update runs: then, once it is done, and a word that it waits. False (and
-        nothing kept) when no update is running."""
-        if not self.updating_claude:
-            return False
-        self.after_claude_update.append(then)
-        self.say_note(alerts.updating_note(what))
-        return True
+        """While claude update runs: then, once it is done (Engine.after_update)."""
+        return self.engine.after_update(what, then)
 
-    def tell_update(self, version: str, command: str) -> None:
-        """A newer tabmancer: beside the name in the top bar while the dashboard is open, and once in
-        a note with the command that upgrades it, which Bit announces too."""
-        self.told_update = version
+    def show_newer(self, version: str) -> None:
+        """Beside the name in the top bar while the dashboard is open."""
         self.topbar.put("brand", Text.assemble("◆ tabmancer", (f"  ↑ {version}", f"bold {GREEN}")))
-        self.tell(alerts.newer_event(version, command))
 
     def show_usage(self, limits: list[usage.Limit]) -> None:
         self.limits = limits
@@ -3527,9 +3495,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.open_in_dashboard_window(launches)
             return
         if not updated:
-            if alerts.update_due(self.updating_claude, (launch.cli for launch in launches)):
-                self.updating_claude = True
-                self.update_claude()
+            self.engine.update_due(launch.cli for launch in launches)
             if self.after_update("the session opens" if len(launches) == 1
                                  else f"the {len(launches)} sessions open",
                                  lambda: self.open_sessions(launches, window, True)):
