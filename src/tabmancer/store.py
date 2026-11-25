@@ -424,6 +424,22 @@ class DashSnapshot:
     queued: dict[str, str] = field(default_factory=dict)  # h on a busy one, in any window: session id -> how
     background: dict[str, dict] = field(default_factory=dict)  # background sessions' jobs: Enter attaches to one
 
+    def with_marks(self, now: marks.Marks) -> DashSnapshot:
+        """The same reading with these marks: a window that has just pinned or hidden one shows it
+        before the next poll (and over a poll that read marks.json before it changed)."""
+        view, hidden, pinned = marked(self.sessions, now, team_states=self.team_states, git=self.git,
+                                      tokens=self.session_tokens, limits=self.limits, armed=self.armed,
+                                      queued=self.queued)
+        return replace(self, at=view.at, view=view, hidden=hidden, pinned=pinned)
+
+
+def marked(sessions: dict[str, Session], now: marks.Marks, **facts) -> tuple[VM.View, set[str], set[str]]:
+    """The dashboard's view of these sessions under these marks (facts: the rest VM.build takes), and
+    which are hidden and pinned."""
+    hidden = {sid for sid, s in sessions.items() if now.is_hidden(s)}
+    pinned = set(now.pinned)
+    return VM.build(sessions, hidden=hidden, pinned=pinned, **facts), hidden, pinned
+
 
 class DashboardStore(Polled):
     """The whole dashboard, read again at each poll(): what the terminal dashboard reads, as often as
@@ -525,13 +541,13 @@ class DashboardStore(Polled):
             self.read_accounts()
         if self.is_due("actor", ACTOR_SECONDS):
             self.read_acting()
-        self.marks = marks.Marks.load()  # pinned and hidden in any dashboard show here at the next poll
+        now = marks.Marks.read()  # pinned and hidden in any dashboard show here at the next poll
+        if now is not None:  # held or unreadable this time: the marks read last, not none at all
+            self.marks = now
         self.armed = read_armed()
-        hidden = {sid for sid, s in self.sessions.items() if self.marks.is_hidden(s)}
-        pinned = set(self.marks.pinned)
         queued = actions.read_queued()
-        view = VM.build(self.sessions, hidden=hidden, pinned=pinned, git=self.git, team_states=self.team_states,
-                        tokens=self.tokens, limits=self.limits, armed=self.armed, queued=queued)
+        view, hidden, pinned = marked(self.sessions, self.marks, git=self.git, team_states=self.team_states,
+                                      tokens=self.tokens, limits=self.limits, armed=self.armed, queued=queued)
         return DashSnapshot(view.at, view, dict(self.sessions), dict(self.team_states), hidden, pinned, self.report,
                             list(self.accounts), set(self.shared_emails), dict(self.agy_bar), self.acting,
                             list(self.limits), dict(self.git), dict(self.tokens), dict(self.armed), queued,

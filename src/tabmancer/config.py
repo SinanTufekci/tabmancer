@@ -53,15 +53,19 @@ def _for_good(path: Path, write: bool = False) -> bool:
     return not os.access(path, os.R_OK)
 
 
-def read_json(name: str) -> object:
+def read_json(name: str, tries: int | None = None) -> object:
+    """The file's JSON; None when there is none, or it could not be read. tries: how often a file another
+    process holds is tried, BUSY_WAIT apart (None: BUSY_TRIES; 1, no wait at all, for a UI thread that
+    reads it again soon)."""
     path = config_dir() / name
-    for attempt in range(BUSY_TRIES):
+    tries = BUSY_TRIES if tries is None else max(1, tries)
+    for attempt in range(tries):
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except PermissionError:
             if _for_good(path):
                 return None
-            if attempt + 1 < BUSY_TRIES:
+            if attempt + 1 < tries:
                 time.sleep(BUSY_WAIT)
         except (OSError, ValueError):
             return None

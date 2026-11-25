@@ -71,6 +71,22 @@ async def settled(tui, pilot) -> None:
     raise AssertionError("the demo never settled")
 
 
+async def resized(tui, pilot, width: int, live: bool) -> None:
+    """The terminal at this width, and the list laid out again for it, the same a while: by the clock, not
+    a fixed pause, as a loaded machine takes its time."""
+    await pilot.resize_terminal(width, 50)
+    so_far, steady = None, 0
+    for _ in range(400):
+        await pilot.pause(0.05)
+        now = tui.table.size.width
+        landed = tui.size.width == width and (tui.title_width, tui.model_shown) == rowwords.title_room(now, live)
+        steady = steady + 1 if landed and now == so_far else 0
+        so_far = now
+        if steady >= 3:
+            return
+    raise AssertionError(f"the list never settled at {width} columns")
+
+
 def listing_of(tui) -> rowwords.Listing:
     """What the terminal dashboard has now, as a Listing: its list grouped as it groups it (groups())."""
     grouped = VM.group(tui.visible(), tui.marks.pinned, tui.team_states, teams_too=not tui.live_mode)
@@ -193,8 +209,7 @@ async def test_the_lists_room_headings_and_motion_are_the_terminals(in_demo, mon
             if live:
                 tui.action_toggle_live()
             for width in (240, 170, 130, 104):
-                await pilot.resize_terminal(width, 50)
-                await pilot.pause(0.2)
+                await resized(tui, pilot, width, live)
                 assert (tui.title_width, tui.model_shown) == rowwords.title_room(tui.table.size.width, live), width
                 assert tuple(str(column.label) for column in tui.table.columns.values()) == \
                     rowwords.labels(live, tui.model_shown)

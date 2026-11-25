@@ -13,6 +13,7 @@ from test_team_tree import peer, send, shop, transcript
 
 from tabmancer import accounts, actor, agy, gitstate, marks, sessions, store, teams, tokens, usage
 from tabmancer import viewmodel as VM
+from tabmancer.config import config_dir
 from tabmancer.sessions import Exit, Session
 from tabmancer.store import DashboardStore, Snapshot, TeamStore
 
@@ -419,6 +420,22 @@ def test_the_dashboard_store_shows_who_acts_and_the_marks_of_any_dashboard(fake_
     assert (snap.pinned, snap.hidden, snap.acting) == ({"one"}, {"two"}, held)
     by_id = {s.id: s for s in snap.view.sessions}
     assert by_id["one"].pinned and by_id["two"].hidden
+    (config_dir() / marks.FILE).write_text('{"pinned": ["one", "tw', encoding="utf-8")  # half a file
+    assert (dash.poll().pinned, dash.poll().hidden) == ({"one"}, {"two"})  # unreadable now: the last ones stay
+
+
+def test_a_reading_with_new_marks_is_what_the_next_poll_shows(fake_home, tmp_path, monkeypatch, quiet):
+    """A window that has just pinned or hidden one shows it at once (DashSnapshot.with_marks), as its next
+    poll will: the same view, built by the same code."""
+    shop(fake_home, tmp_path, monkeypatch)
+    dash = DashboardStore(clock=Clock())
+    before = dash.poll()
+    now = marks.Marks(hidden={"two"}, pinned={"one"})
+    now.save()
+    marked, polled = before.with_marks(now), dash.poll()
+    assert (marked.pinned, marked.hidden) == (polled.pinned, polled.hidden) == ({"one"}, {"two"})
+    assert comparable(marked.view) == comparable(polled.view) != comparable(before.view)
+    assert before.pinned == set()  # the reading it came from is left as it was
 
 
 def test_the_dashboard_store_reads_as_often_as_the_dashboard(fake_home, tmp_path, monkeypatch, quiet):
