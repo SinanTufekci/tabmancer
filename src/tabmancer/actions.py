@@ -161,10 +161,11 @@ def team_handover_problem(team: teams.Team, sessions: dict[str, Session | None])
 
 
 def handing_note(team: teams.Team, sessions: dict[str, Session | None]) -> str:
-    """What h once says: what a second h does."""
+    """What h once says: what a second h does. With members open it closes them first; with none
+    open, the lead writes straight away."""
     names = open_names(team, sessions)
-    closing = f"closes {len(names)} open member{'s' if len(names) != 1 else ''}, " if names else ""
-    return (f"h again hands {team.name} over: it {closing}its lead writes the handover and the line-up the rest of "
+    closing = f"it closes {len(names)} open member{'s' if len(names) != 1 else ''}, then " if names else ""
+    return (f"h again hands {team.name} over: {closing}its lead writes the handover and the line-up the rest of "
             "the work needs, and you see both before the new team opens.")
 
 

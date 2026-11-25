@@ -119,6 +119,20 @@ def member(name, running=True, state="idle"):
                    exit=Exit.RUNNING if running else Exit.CLEAN, live_state=state)
 
 
+@pytest.mark.parametrize("running, closing", [
+    ((), ""),  # none open: the lead writes straight away (once read "it its lead writes")
+    (("api",), "it closes 1 open member, then "),
+    (("lead", "api", "ui"), "it closes 3 open members, then "),
+])
+def test_what_a_second_h_does_is_said_whoever_is_open(running, closing):
+    team = shop_team()
+    sessions = {m.name: member(m.name, running=m.name in running) for m in team.members}
+    assert actions.handing_note(team, sessions) == (
+        f"h again hands shop over: {closing}its lead writes the handover and the line-up the rest of the work "
+        "needs, and you see both before the new team opens.")
+    assert actions.handing_note(team, {}) == actions.handing_note(team, {m: None for m in ("lead", "api", "ui")})
+
+
 @pytest.fixture
 def team_calls(monkeypatch):
     said: list = []
