@@ -71,6 +71,7 @@ look.fonts_for_offscreen()
 NBSP = chr(0xA0)
 # Times change between two readings a second apart: "2h10m" to "2h09m".
 TIMES = re.compile(r"\b\d+h\d{2}m\b|\b\d+[dm]\b")
+CLOSE_TABS = actions.close_tabs  # the real one: the demo's world stands in for it (nothing closes there)
 
 
 @pytest.fixture(scope="module")
@@ -1095,6 +1096,7 @@ def test_x_twice_on_a_team_with_members_open_closes_their_tabs(qapp, window, mon
         return True
 
     monkeypatch.setattr(focus, "close_tab", close_tab)
+    monkeypatch.setattr(actions, "close_tabs", CLOSE_TABS)  # as outside the demo: the tabs are looked for
     shown = window()
     read(qapp, shown)
     state = next(state for state in shown.snap.team_states.values()
@@ -1114,6 +1116,25 @@ def test_x_twice_on_a_team_with_members_open_closes_their_tabs(qapp, window, mon
     settled(qapp, shown)
     assert closed == names and shown.closing_team is None and saved_marks()["hidden"] == []
     assert shown.bit_line.text() == f"The team's members: closed {len(names)} tabs." and shown.after_open.isActive()
+
+
+def test_x_twice_in_the_demo_says_which_tabs_would_have_closed_and_looks_for_none(qapp, window, monkeypatch):
+    asked = []
+    monkeypatch.setattr(focus, "close_tab", asked.append)
+    shown = window()
+    read(qapp, shown)
+    state = next(state for state in shown.snap.team_states.values()
+                 if VM.members_open(state, shown.snap.sessions))
+    members = {name: shown.snap.sessions.get(s.session_id, s) if s is not None else None
+               for name, s in state.sessions.items()}
+    names = actions.open_names(state.team, members)
+    assert len(names) > 1 and shown.board.reveal(VM.TEAM_CARD + state.team.name)
+    press(shown, "x")
+    press(shown, "x")
+    settled(qapp, shown)
+    tabs = f"{', '.join(names[:-1])} and {names[-1]}"
+    assert shown.bit_line.text() == (f"Nothing closes in the demo. For real, the tabs of {tabs} would close, as on "
+                                      "/exit; the sessions stay.") and asked == []
 
 
 def test_m_opens_the_picked_teams_monitor_and_again_brings_it_to_the_front(qapp, window):

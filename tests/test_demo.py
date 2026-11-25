@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from conftest import box_has_focus
 
-from tabmancer import cli, demo, launch
+from tabmancer import actions, app, cli, demo, focus, launch, teamview
 from tabmancer.app import SessionPicker
 from tabmancer.launch import Launch, Mode
 
@@ -33,8 +33,21 @@ def test_everything_that_reaches_outside_has_a_stand_in(tmp_path):
         "toast.show", "typein.write_keys", "rename.rename", "handover.write_itself", "summarize.ask",
         "usage.read_usage", "usage.read_codex", "bgjobs._run", "report.save", "stats.write_files",
         "app.recent_shutdowns", "gitstate.read", "agy.home", "share.open_page", "share.reveal",
-        "browsers.places",
+        "browsers.places", "actions.close_tabs", "app.close_tabs", "teamview.close_tabs",
     }
+
+
+def test_x_twice_in_the_demo_says_which_tabs_would_have_closed_and_closes_none(tmp_path, monkeypatch):
+    for module, name, value in demo.stand_ins(tmp_path, [], print):
+        monkeypatch.setattr(module, name, value)
+    asked = []
+    monkeypatch.setattr(focus, "close_tab", asked.append)  # never reached: nothing is looked for
+    note = actions.closed_note(["api", "ui", "tests"])  # the desktop window's x twice
+    assert note.words == ("Nothing closes in the demo. For real, the tabs of api, ui and tests would close, as on "
+                          "/exit; the sessions stay.") and note.severity == "information"
+    assert actions.closed_note(["api"], app.close_tabs).words.startswith("Nothing closes in the demo. For real, the "
+                                                                         "tab of api would close")  # the dashboard's
+    assert teamview.close_tabs is app.close_tabs is actions.close_tabs and asked == []  # the monitor's: the same
 
 
 async def test_the_demo_sets_the_dashboard_up_once(in_demo, monkeypatch):

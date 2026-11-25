@@ -328,9 +328,11 @@ def prepare(home: Path) -> list[dict]:
 
 def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list[tuple[object, str, object]]:
     """What the demo puts in place of everything that reaches outside it, as (module, name, value):
-    tabs, background sessions, tab focus, toasts, typing into consoles, renames, models, plan
-    limits, git, the shutdown log, and saves to your Downloads. tell() says what would have happened."""
+    tabs, background sessions, tab focus and closing, toasts, typing into consoles, renames, models,
+    plan limits, git, the shutdown log, and saves to your Downloads. tell() says what would have
+    happened."""
     from . import (
+        actions,
         agy,
         bgjobs,
         browsers,
@@ -352,10 +354,11 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
     )
     try:
         from . import app as app_module  # the terminal dashboard's own copies, where it is installed
+        from . import teamview
     except ModuleNotFoundError as error:
         if not (error.name or "").startswith("textual"):
             raise
-        app_module = None  # a core install (the desktop window's demo): no dashboard copies to stand in for
+        app_module = teamview = None  # a core install (the desktop window's demo): no dashboard copies
     from .launch import shell_line
 
     def opened(launches: list) -> list[str]:
@@ -367,6 +370,13 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         more = f" (and {len(launches) - 1} more)" if len(launches) > 1 else ""
         tell(f"Nothing opens in the demo. For real, a new tab would run: {line}{more}")
         return []
+
+    def would_close(names: list[str]) -> tuple[str, str]:
+        """x twice on a team, as close_tabs says what it did: which tabs would have closed (none does)."""
+        tabs = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+        said = (f"Nothing closes in the demo. For real, the tab{'s' if len(names) != 1 else ''} of {tabs} would "
+                "close, as on /exit; the sessions stay.")
+        return said, "information"
 
     def refused(what: str) -> Callable:
         def refuse(*args, **kwargs):
@@ -402,6 +412,8 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         (app_module, "recent_shutdowns", lambda: [SHUTDOWN]),
         (app_module, "open_tabs", opened),
         (app_module, "run_in_background", refused("starts in the background")),
+        (app_module, "close_tabs", would_close),  # the dashboard's x twice and the team's handover
+        (teamview, "close_tabs", would_close),  # the team monitor's x twice
     ]
     return [
         (sessions, "_agents_json", lambda include_finished=False: live),
@@ -411,6 +423,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         (bgjobs, "_run", refused("is stopped or removed")),
         (focus, "focus_tab", lambda title: False),
         (focus, "close_tab", lambda title: False),
+        (actions, "close_tabs", would_close),  # the desktop window's x twice, which looks it up when it closes
         (toast, "show", lambda title, body, dashboard: toast.FAILED),
         (typein, "write_keys", lambda pid, text: False),
         (rename, "rename", refused("is renamed")),
