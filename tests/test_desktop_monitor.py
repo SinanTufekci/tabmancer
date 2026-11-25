@@ -6,7 +6,7 @@ import importlib
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -16,15 +16,15 @@ else:
     pytest.importorskip("PySide6", reason="the desktop extra is not installed")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QTextDocument
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
+from PySide6.QtGui import QContextMenuEvent, QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from tabmancer import actor, agy, cli, demo, teambus, teams
 from tabmancer import viewmodel as VM
-from tabmancer.config import read_json
-from tabmancer.desktop import look, monitor, widgets
+from tabmancer.config import merge_json, read_json
+from tabmancer.desktop import look, monitor, teamgraph, widgets
 from tabmancer.keys import MONITOR_KEYS
 
 look.fonts_for_offscreen()
@@ -284,6 +284,112 @@ def test_a_read_of_the_team_left_is_dropped(qapp, window):
     assert shown.snap is None and shown.cards == {}
     assert "no team other" in shown.bit_line.text()
     assert "team watch other" in shown.actions_by_key["s"][0].toolTip()
+
+
+def test_the_orbit_in_the_middle_and_the_cards_a_panel(qapp, window):
+    """The team as the picture that moves, in the middle; the cards a tab behind the messages, in as
+    many columns as the panel has room for."""
+    shown = window()
+    read(qapp, shown)
+    graph = shown.graph
+    assert shown.centralWidget().isAncestorOf(graph) and graph.isVisible()
+    assert graph.view is shown.snap.view and graph.names == ["lead", "api", "ui", "tests"]
+    members = shown.docks["members"]
+    assert members.isAncestorOf(shown.cards_area) and members.windowTitle() == "Members"
+    assert shown.tabifiedDockWidgets(members) == [shown.docks["messages"]]
+    assert shown.cards_area.visibleRegion().isEmpty()  # the messages in front (a tab behind: off the screen)
+    members.raise_()
+    shown.resizeDocks([members], [400], Qt.Orientation.Horizontal)
+    qapp.processEvents()
+    assert not shown.cards_area.visibleRegion().isEmpty() and shown.columns == 1
+    shown.resizeDocks([members], [1000], Qt.Orientation.Horizontal)
+    qapp.processEvents()
+    assert shown.columns == shown.cards_area.viewport().width() // monitor.CARD_WIDTH >= 2  # the panel, not the window
+
+
+def test_a_click_on_a_member_picks_it_and_brings_its_tab(qapp, window, monkeypatch):
+    shown = window()
+    read(qapp, shown)
+    asked = []
+    monkeypatch.setattr(monitor.focus, "focus_tab", lambda title: asked.append(title) or True)
+    graph = shown.graph
+    wait(qapp, lambda: "api" in graph.drawn)  # painted once: where each one stands
+    QTest.mouseClick(graph, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, graph.drawn["api"].toPoint())
+    assert shown.picked == "api" == graph.picked
+    assert "api" in shown.picked_lines.text()
+    wait(qapp, lambda: "Switched" in shown.bit_line.text())
+    assert asked == [shown.snap.state.sessions["api"].title]
+    QTest.mouseClick(graph, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(1, graph.height() - 2))
+    qapp.processEvents()
+    assert shown.picked == "api" and len(asked) == 1  # nobody there: nothing happens
+
+
+def test_a_right_click_on_a_member_offers_its_actions(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    graph = shown.graph
+    wait(qapp, lambda: "ui" in graph.drawn)
+    spot = graph.drawn["ui"].toPoint()
+    qapp.sendEvent(graph, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, spot, graph.mapToGlobal(spot)))
+    menu = shown.member_popup
+    assert menu is not None and menu.isVisible() and shown.picked == "ui" == graph.picked
+    title, *offered = [a for a in menu.actions() if not a.isSeparator()]
+    assert title.text() == "ui" and not title.isEnabled()
+    assert offered == [a for key in monitor.MEMBER_KEYS for a in shown.actions_by_key[key]]
+    assert [a.isEnabled() for a in offered] == [key in monitor.HERE for key in monitor.MEMBER_KEYS]
+    assert all("tabmancer team watch shop" in a.toolTip() for a in offered if not a.isEnabled())  # where it is done
+    other = graph.drawn["api"].toPoint()
+    qapp.sendEvent(graph, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, other, graph.mapToGlobal(other)))
+    qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)  # the first one deleted
+    again = shown.member_popup
+    assert again is not None and again is not menu and again.isVisible() and shown.picked == "api"
+    again.close()
+    assert shown.member_popup is None
+    corner = QPoint(1, graph.height() - 2)
+    qapp.sendEvent(graph, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, corner, graph.mapToGlobal(corner)))
+    assert shown.member_popup is None  # nobody there: no menu
+
+
+def test_a_new_message_flies_in_the_picture(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    graph = shown.graph
+    assert graph.flights == []  # the first look: what was said before stays put
+    said = list(shown.snap.state.said)
+    new = teams.Message(said[-1].at + timedelta(seconds=1), "api", "ui", "made-up: the endpoint is in")
+    snap = dataclasses.replace(shown.snap, state=dataclasses.replace(shown.snap.state, said=[*said, new]))
+    shown.take(shown.store, snap, {}, "")
+    assert [(f.sender, f.receiver, f.words) for f in graph.flights] == [("api", "ui", new.text)]
+    assert graph.frames.isActive()
+
+
+def test_view_says_how_much_moves(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    view = next(a.menu() for a in shown.menuBar().actions() if a.text() == "&View")
+    assert "Reduce motion" in [a.text() for a in view.actions()]
+    picks = {str(a.data()): a for a in shown.motions.actions()}
+    assert list(picks) == list(teamgraph.MOTIONS) and picks["full"].isChecked() and shown.graph.mode == "full"
+    picks["off"].trigger()
+    assert read_json("config.json")["motion"] == "off" and shown.graph.mode == "off"
+    assert picks["off"].isChecked() and not picks["full"].isChecked()
+    picks["full"].trigger()
+    assert shown.graph.mode == "full" and picks["full"].text() == teamgraph.MOTIONS["full"]
+    merge_json("config.json", mascot="calm")  # b in the dashboard: Bit calm
+    read(qapp, shown)
+    assert shown.graph.mode == "calm"  # calm with it
+    shown.show_motions()
+    assert picks["full"].isChecked() and "calm while Bit is calm" in picks["full"].text()
+
+
+def test_another_team_starts_the_picture_afresh(qapp, window):
+    shown = window()
+    read(qapp, shown)
+    graph = shown.graph
+    assert graph.view is not None and graph.seen is not None
+    shown.switch_team("other")
+    assert (graph.view, graph.seen, graph.flights, graph.names, graph.drawn) == (None, None, [], [], {})
+    wait(qapp, lambda: not shown.waiting)
 
 
 def test_the_layout_is_kept(qapp, window):

@@ -95,6 +95,11 @@ def sheet(accent_colour: str) -> str:
     QDockWidget {{ color: {MUTED}; }}
     QDockWidget::title {{ background: {PANEL}; padding: 5px 10px; text-align: left;
                           border-bottom: 1px solid {BORDER}; }}
+    QMainWindow > QTabBar {{ background: {SUNKEN}; }}
+    QMainWindow > QTabBar::tab {{ background: {SUNKEN}; color: {MUTED}; padding: 4px 14px; border: none;
+                                  border-top: 2px solid transparent; }}
+    QMainWindow > QTabBar::tab:selected {{ background: {PANEL}; color: {TEXT}; border-top: 2px solid {accent_colour}; }}
+    QMainWindow > QTabBar::tab:hover {{ color: {TEXT}; }}
     QStatusBar {{ background: {SURFACE}; border-top: 1px solid {BORDER}; }}
     QStatusBar::item {{ border: none; }}
     QScrollArea, QTextBrowser {{ background: {SUNKEN}; border: none; }}

@@ -220,6 +220,15 @@ class TeamGraph(QWidget):
         self.wake()
         self.update()
 
+    def clear(self) -> None:
+        """Another team: nothing seen yet (its messages so far stay put), nothing flying, nobody drawn."""
+        self.view, self.seen, self.flights, self.names = None, None, [], []
+        self.came, self.went, self.was, self.drawn = set(), {}, {}, {}
+        self.moved_at = -math.inf
+        self.version += 1
+        self.wake()
+        self.update()
+
     def set_motion(self, mode: str) -> None:
         if mode != self.mode:
             self.mode = mode

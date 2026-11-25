@@ -1,14 +1,16 @@
 """The team monitor in a desktop window: `tabmancer desktop --monitor [team]`.
 
-The terminal monitor's team (`tabmancer team watch`) in the dashboard's black, with room: a card a
-member, the conversation as lanes, the messages, the team's hours and the plan limits as rings,
-each a panel you can drag, split, float and close (View puts them back). The menus name every key
-of the monitor and the key bar stays under the window.
+The terminal monitor's team (`tabmancer team watch`) in the dashboard's black, with room: the team
+as a picture that moves in the middle (teamgraph: messages fly along the wires, members breathe),
+and as panels you can drag, split, float and close (View puts them back): a card a member, the
+conversation as lanes, the messages, the team's hours and the plan limits as rings. The menus name
+every key of the monitor and the key bar stays under the window; View also says how much moves.
 
 It only watches. The team is read through the one-team store on a thread of its own, every two
 seconds; nothing here claims the actor lock, opens, starts, sends or closes a session. Enter goes
-to a member's open tab, as in the terminal monitor; what changes the team (s a d g h H x p, and D
-for the dashboard) is named in the menus and done in the terminal monitor for now.
+to a member's open tab, as in the terminal monitor, and so does a click on it in the picture (a
+right-click: its actions); what changes the team (s a d g h H x p, and D for the dashboard) is named
+in the menus and done in the terminal monitor for now.
 """
 
 from __future__ import annotations
@@ -17,8 +19,8 @@ import threading
 from collections.abc import Callable
 from datetime import datetime
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
@@ -28,6 +30,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QScrollArea,
     QTextBrowser,
     QVBoxLayout,
@@ -39,7 +42,7 @@ from ..keys import MONITOR_KEYS
 from ..sessions import Exit, Status
 from ..store import Snapshot, TeamStore
 from ..tokens import human
-from . import frame, look
+from . import frame, look, teamgraph
 from .frame import DEMO_ENV, LAYOUT_FILE, LAYOUT_VERSION, KeysDialog, made_up_world  # noqa: F401  (the first two: named here for the tests)
 from .widgets import (
     HourChart,
@@ -60,6 +63,7 @@ SAID_MS = 7000  # how long Bit says what just happened before it says how the te
 CARD_WIDTH = 340  # a card's least width: as many columns as fit
 # The monitor's keys that work here (MONITOR_KEYS names them all); the rest are the terminal monitor's.
 HERE = {"← →", "Enter", "j", "Esc", "T", "?", "q"}
+MEMBER_KEYS = ("Enter", "p", "H", "d")  # what a right-click on a member offers: what acts on the picked one
 MENUS = {"Members": "&Members", "The team": "&Team", "Windows": "&Windows"}
 KEY_BAR = [("← →", "member"), ("Enter", "its tab"), ("j", "needs you"), ("Esc", "everyone"), ("T", "teams"),
            ("?", "keys"), ("q", "quit")]
@@ -104,6 +108,16 @@ class Relay(QObject):
 
     polled = Signal(object, object, object, str)  # the store asked, its Snapshot (None: no such team), agy's bar, an error
     said = Signal(str, str)  # words, colour
+
+
+class CardsArea(QScrollArea):
+    """The members' cards in a panel: says when it is resized, so they fill as many columns as fit."""
+
+    resized = Signal()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.resized.emit()
 
 
 def bit_pose(snap: Snapshot | None) -> bitart.Pose:
@@ -207,13 +221,18 @@ class MonitorWindow(QMainWindow):
         self.grid.setSpacing(8)
         column.addLayout(self.grid)
         column.addStretch(1)  # the cards as tall as they need, the room left under them
-        scroll = QScrollArea()
+        scroll = CardsArea()
+        scroll.resized.connect(self.reflow_cards)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(self.grid_host)
         scroll.setStyleSheet(f"QScrollArea {{ background:{look.BLACK}; }} QWidget {{ background:{look.BLACK}; }}")
         self.cards_area = scroll
-        box.addWidget(scroll, 1)
+        self.graph = teamgraph.TeamGraph()
+        self.graph.member_clicked.connect(self.click_member)
+        self.graph.member_menu.connect(self.member_menu)
+        self.member_popup: QMenu | None = None
+        box.addWidget(self.graph, 1)
         self.picked_lines = text_label(size=9.5, wrap=True)
         self.picked_lines.setTextFormat(Qt.TextFormat.RichText)
         self.picked_lines.setStyleSheet(f"background:{look.SURFACE}; border-radius:4px; padding:6px 10px;")
@@ -241,10 +260,13 @@ class MonitorWindow(QMainWindow):
         self.rings.setSpacing(4)
         usage_box.addLayout(self.rings)
         self.docks = {
+            "members": self.dock("Members", scroll, Qt.DockWidgetArea.RightDockWidgetArea),
             "conversation": self.dock("Conversation", self.lanes, Qt.DockWidgetArea.BottomDockWidgetArea),
             "messages": self.dock("Messages", self.messages, Qt.DockWidgetArea.RightDockWidgetArea),
             "usage": self.dock("Usage", usage, Qt.DockWidgetArea.RightDockWidgetArea),
         }
+        self.tabifyDockWidget(self.docks["members"], self.docks["messages"])  # the cards a tab behind the messages
+        self.docks["messages"].raise_()
         self.resizeDocks([self.docks["messages"]], [560], Qt.Orientation.Horizontal)
         self.resizeDocks([self.docks["conversation"]], [240], Qt.Orientation.Vertical)
         self.build_menus()
@@ -293,6 +315,18 @@ class MonitorWindow(QMainWindow):
         reset = QAction("Put the panels back", self)
         reset.triggered.connect(self.reset_layout)
         view.addAction(reset)
+        view.addSeparator()
+        moves = view.addMenu("Reduce motion")
+        self.motions = QActionGroup(self)
+        for mode, words in teamgraph.MOTIONS.items():
+            made = QAction(words, self)
+            made.setCheckable(True)
+            made.setData(mode)
+            made.triggered.connect(lambda _checked=False, mode=mode: self.pick_motion(mode))
+            self.motions.addAction(made)
+            moves.addAction(made)
+        moves.aboutToShow.connect(self.show_motions)
+        self.show_motions()
         helping = bar.addMenu("&Help")
         keys = QAction("All keys…", self)
         keys.triggered.connect(self.show_keys)
@@ -385,6 +419,8 @@ class MonitorWindow(QMainWindow):
         if needs is not None:
             self.needs.setText("".join(look.span(words, style) for words, style in needs))
         self.show_pills(snap)
+        self.graph.set_motion(teamgraph.motion())  # b in the dashboard calms it, as it calms Bit
+        self.graph.set(view, snap.state.said, self.colours, self.picked)
         self.show_cards(view)
         self.show_picked()
         self.lanes.set(view, self.colours, self.picked)
@@ -538,6 +574,53 @@ class MonitorWindow(QMainWindow):
         self.show_cards(self.snap.view)
         self.show_picked()
         self.lanes.set(self.snap.view, self.colours, self.picked)
+        self.graph.set(self.snap.view, self.snap.state.said, self.colours, self.picked)
+
+    def click_member(self, name: str) -> None:
+        """A click on a member in the picture: picked, and its tab to the front (Enter)."""
+        self.picked = name
+        self.refresh_pick()
+        self.go_to_tab()
+
+    def member_menu(self, name: str, at: QPoint) -> None:
+        """A right-click on a member: picked, and what can be done to it, as the menus name it (the
+        ones done in the terminal monitor greyed, saying so)."""
+        self.picked = name
+        self.refresh_pick()
+        if self.member_popup is not None:
+            self.member_popup.close()
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        menu.setToolTipsVisible(True)
+        title = menu.addAction(name)
+        title.setEnabled(False)
+        menu.addSeparator()
+        for key in MEMBER_KEYS:
+            for action in self.actions_by_key.get(key, []):
+                menu.addAction(action)
+        menu.aboutToHide.connect(lambda menu=menu: self.popup_gone(menu))  # at once, not when deleted later
+        self.member_popup = menu
+        menu.popup(at)
+
+    def popup_gone(self, menu: QMenu) -> None:
+        if self.member_popup is menu:  # not a newer one
+            self.member_popup = None
+
+    def show_motions(self) -> None:
+        """View ▸ Reduce motion: the one picked ticked, and what Bit's calm does to full."""
+        saved = teamgraph.saved_motion()
+        for action in self.motions.actions():
+            mode = str(action.data())
+            action.setChecked(mode == saved)
+            words = teamgraph.MOTIONS[mode]
+            if mode == "full" and saved == "full" and teamgraph.motion() == "calm":
+                words += " (calm while Bit is calm: b in the dashboard)"
+            action.setText(words)
+
+    def pick_motion(self, mode: str) -> None:
+        teamgraph.save_motion(mode)
+        self.graph.set_motion(teamgraph.motion())
+        self.show_motions()
 
     def go_to_tab(self) -> None:
         """Enter: the picked member's tab to the front, where it is open in one."""
@@ -578,6 +661,7 @@ class MonitorWindow(QMainWindow):
             self.say(f"{name} is open in another window: brought to the front.", look.MUTED)
             return
         self.team, self.store, self.snap, self.picked, self.needs_turn = name, self.make_store(name), None, None, -1
+        self.graph.clear()  # the new team's messages so far stay put
         for card in self.cards.values():
             card.deleteLater()
         self.cards, self.columns = {}, 0
@@ -617,8 +701,7 @@ class MonitorWindow(QMainWindow):
 
     # --- the window -------------------------------------------------------------------------------
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
+    def reflow_cards(self) -> None:
         if self.snap is not None:
             self.show_cards(self.snap.view)
 
