@@ -2978,11 +2978,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def change_marks(self, how: Callable[[marks.Marks], marks.Changed]) -> None:
         """f, x: marks.json changed as it is now (marks.change: what another dashboard or a window changed
         since this one read it stays), said, and the list following. Ticks on rows it took out of sight
-        go: Enter would open a session the list no longer shows. When marks.json is there but could not be
-        read, nothing changes (saving over it would wipe what it keeps), and it says so."""
+        go: Enter would open a session the list no longer shows. When marks.json could not be read (saving
+        over it would wipe what it keeps) or the change could not be saved, nothing changes, and it says so."""
         changed = marks.change(how)
-        if changed is None:
-            self.notify(marks.UNREAD, severity="warning", timeout=6)
+        if isinstance(changed, marks.Refused):
+            self.notify(changed.words, severity="warning", timeout=6)
             return
         self.marks, done = changed
         self.selected -= done.hid

@@ -6,7 +6,8 @@ say. Pinned sessions stand together above the rest. Open sessions always show.
 
 Kept in marks.json in the config folder: session ids, and the folders of hidden projects. Every
 dashboard and window changes it through change(): what another one changed since this one read it
-stays, and a file that is there but could not be read is left as it is (UNREAD).
+stays, and a file that is there but could not be read, or a change that could not be written, leaves it
+as it was (Refused: UNREAD, UNSAVED).
 """
 
 from __future__ import annotations
@@ -22,8 +23,18 @@ from .sessions import Exit, Session, folder_key
 
 FILE = "marks.json"
 OPEN_ALWAYS_SHOW = "Open sessions always show: close one to hide it."
-UNREAD = "marks.json could not be read: nothing changed."  # what a key says when change() refused
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class Refused:
+    """Why change() left marks.json as it was: the words the key says."""
+
+    words: str
+
+
+UNREAD = Refused("marks.json could not be read: nothing changed.")
+UNSAVED = Refused("marks.json could not be saved: nothing changed.")
 
 
 @dataclass
@@ -57,12 +68,15 @@ class Marks:
 
         return cls(ids("hidden"), ids("projects"), ids("pinned"))
 
-    def save(self) -> None:
+    def save(self) -> bool:
+        """Written whole or not at all (config.write_json); False when it could not be (another process
+        held it too long, or the folder is read-only), the file as it was."""
         try:
             write_json(FILE, {"hidden": sorted(self.hidden), "projects": sorted(self.projects),
                               "pinned": sorted(self.pinned)}, indent=2)
         except OSError:
-            pass
+            return False
+        return True
 
     def is_hidden(self, session: Session) -> bool:
         """Out of sight: hidden itself or in a hidden project, and not open."""
@@ -84,16 +98,17 @@ class Changed:
     hid: set[str] = field(default_factory=set)
 
 
-def change(how: Callable[[Marks], T]) -> tuple[Marks, T] | None:
+def change(how: Callable[[Marks], T]) -> tuple[Marks, T] | Refused:
     """marks.json changed as it is now, not as this dashboard read it last (another one, or a window,
-    may have changed it since): read, how(marks), saved. The marks as saved, and what how gave. None,
-    with how never called and nothing saved, when the file is there but could not be read
-    (Marks.read): the caller says UNREAD."""
+    may have changed it since): read, how(marks), saved. The marks as saved, and what how gave. Refused,
+    for the caller to say, when the file stays as it was: UNREAD, how never called, when it is there but
+    could not be read (Marks.read); UNSAVED when the change could not be written."""
     marks = Marks.read()
     if marks is None:
-        return None
+        return UNREAD
     done = how(marks)
-    marks.save()
+    if not marks.save():
+        return UNSAVED
     return marks, done
 
 

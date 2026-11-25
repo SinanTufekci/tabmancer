@@ -840,17 +840,33 @@ def test_f_and_x_leave_a_marks_json_they_cannot_read_as_it_is_and_say_so(qapp, w
     assert shown.board.reveal(login)
     press(shown, "Space")
     press(shown, "f")
-    assert shown.bit_line.text() == marks.UNREAD and path.read_bytes() == half  # not saved over: kept
+    assert shown.bit_line.text() == marks.UNREAD.words and path.read_bytes() == half  # not saved over: kept
     assert login not in shown.snap.pinned and shown.selected == {login}
     press(shown, "x")
-    assert shown.bit_line.text() == marks.UNREAD and login in shown.board.cards and path.read_bytes() == half
+    assert shown.bit_line.text() == marks.UNREAD.words and login in shown.board.cards
+    assert path.read_bytes() == half
     press(shown, "Tab")
     projects = shown.rail.projects
     for _ in range(next(n for n, row in enumerate(projects.rows) if n and row.mark not in ("open", "waiting"))):
         QTest.keyClick(projects, Qt.Key.Key_Down)
     picked = shown.project
     press(shown, "x")  # a project, from the rail: nothing changed, so it stays picked
-    assert shown.bit_line.text() == marks.UNREAD and shown.project == picked and path.read_bytes() == half
+    assert shown.bit_line.text() == marks.UNREAD.words and shown.project == picked and path.read_bytes() == half
+
+
+def test_a_pin_that_cannot_be_saved_changes_nothing_and_says_so(qapp, window, monkeypatch):
+    shown = window()
+    read(qapp, shown)
+    login = titled(shown.snap, "Fix the login redirect loop").session_id
+
+    def held(*args, **kwargs):  # another process holds marks.json all the while
+        raise PermissionError(13, "The process cannot access the file", marks.FILE)
+
+    monkeypatch.setattr(marks, "write_json", held)
+    assert shown.board.reveal(login)
+    press(shown, "f")
+    assert shown.bit_line.text() == marks.UNSAVED.words and login not in shown.snap.pinned
+    assert saved_marks()["pinned"] == [] and not shown.board.cards[login].pinned
 
 
 def test_tab_puts_the_keys_on_the_rail_where_x_hides_a_project(qapp, window):

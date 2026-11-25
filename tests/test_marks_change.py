@@ -5,6 +5,7 @@ Made-up data only."""
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -33,7 +34,7 @@ def test_a_change_keeps_what_another_dashboard_saved_since(fake_home):
     mine = marks.Marks.load()  # this dashboard read the marks...
     marks.Marks(pinned={"theirs"}, projects={WIKI}).save()  # ...then another one pinned and hid
     done = marks.change(partial(marks.pin, chosen=[DONE]))
-    assert done is not None
+    assert not isinstance(done, marks.Refused)
     now, said = done
     assert mine.pinned == set() and now.pinned == {"theirs", "d1"} and now.projects == {WIKI}
     assert read_json(marks.FILE) == {"hidden": [], "projects": [WIKI], "pinned": ["d1", "theirs"]}
@@ -42,7 +43,7 @@ def test_a_change_keeps_what_another_dashboard_saved_since(fake_home):
 
 def test_with_no_marks_json_yet_a_change_starts_one(fake_home):
     assert marks.Marks.read() == marks.Marks() and not (config_dir() / marks.FILE).exists()
-    assert marks.change(partial(marks.pin, chosen=[DONE])) is not None
+    assert not isinstance(marks.change(partial(marks.pin, chosen=[DONE])), marks.Refused)
     assert read_json(marks.FILE) == {"hidden": [], "projects": [], "pinned": ["d1"]}
 
 
@@ -53,7 +54,7 @@ def test_a_marks_json_that_cannot_be_read_is_never_saved_over(fake_home, there):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(there)
     asked = []
-    assert marks.change(asked.append) is None  # refused: the caller says marks.UNREAD
+    assert marks.change(asked.append) is marks.UNREAD  # refused: the caller says its words
     assert asked == [] and path.read_bytes() == there  # how never called, nothing saved
     assert marks.Marks.read() is None and marks.Marks.load() == marks.Marks()  # at start-up: none shown
 
@@ -72,12 +73,29 @@ def test_a_marks_json_another_process_holds_too_long_is_never_saved_over(fake_ho
 
     monkeypatch.setattr(Path, "read_text", held)
     monkeypatch.setattr(config, "BUSY_WAIT", 0)
-    assert marks.change(partial(marks.pin, chosen=[DONE])) is None
+    assert marks.change(partial(marks.pin, chosen=[DONE])) is marks.UNREAD
     assert len(tries) == config.BUSY_TRIES and path.read_bytes() == kept  # waited it out, then left it
     tries.clear()
     assert marks.Marks.read(tries=1) is None and len(tries) == 1  # a UI thread's read: tried once, no wait
     monkeypatch.setattr(Path, "read_text", real)
     assert marks.Marks.read() == marks.Marks(pinned={"theirs"}, projects={WIKI})
+
+
+def test_a_change_that_cannot_be_written_leaves_the_file_as_it_was(fake_home, monkeypatch):
+    marks.Marks(pinned={"theirs"}).save()
+    path = config_dir() / marks.FILE
+    kept, real = path.read_bytes(), os.replace
+
+    def held(source, target):  # another process holds marks.json all the while
+        if Path(target) == path:
+            raise PermissionError(13, "The process cannot access the file", str(target))
+        return real(source, target)
+
+    monkeypatch.setattr(os, "replace", held)
+    monkeypatch.setattr(config, "BUSY_WAIT", 0)
+    assert marks.change(partial(marks.pin, chosen=[DONE])) is marks.UNSAVED
+    assert path.read_bytes() == kept and list(path.parent.glob("*.tmp")) == []  # as it was, no half file
+    assert marks.UNSAVED.words == "marks.json could not be saved: nothing changed."
 
 
 def test_f_pins_and_again_unpins_one_by_its_title_more_by_how_many():

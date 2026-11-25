@@ -182,6 +182,20 @@ async def test_an_unreadable_marks_file_changes_nothing_on_a_poll_and_f_leaves_i
         app.notify = lambda message, **_: said.append(message)
         await cursor_on(pilot, app, "two")
         await pilot.press("f")
-        assert said == [marks.UNREAD]
+        assert said == [marks.UNREAD.words]
         assert path.read_text(encoding="utf-8") == "{not json"
         assert app.marks == marks.Marks(pinned={"one"}) and keys(app) == shown
+
+
+async def test_f_that_cannot_be_saved_says_so_and_changes_nothing_here(fake_home, monkeypatch):
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_for(pilot, lambda: len(app.sessions) == 2)
+        shown = keys(app)
+        monkeypatch.setattr(marks.Marks, "save", lambda self: False)  # held too long, or a read-only folder
+        said = []
+        app.notify = lambda message, **_: said.append(message)
+        await cursor_on(pilot, app, "one")
+        await pilot.press("f")
+        assert said == [marks.UNSAVED.words]
+        assert app.marks == marks.Marks() and keys(app) == shown

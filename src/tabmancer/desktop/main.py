@@ -871,15 +871,15 @@ class MainWindow(QMainWindow):
             return
         sessions = [s for s in snap.sessions.values() if folder_key(s.cwd) == key]
         done = marks.change(partial(marks.hide_project, key=key, sessions=sessions))
-        if done is not None and key in done[0].projects and not self.show_hidden:
+        if not isinstance(done, marks.Refused) and key in done[0].projects and not self.show_hidden:
             self.project = VM.ALL_PROJECTS  # gone from the rail: every project again
         self.remarked(done)
 
-    def remarked(self, done: tuple[marks.Marks, marks.Changed] | None) -> None:
+    def remarked(self, done: tuple[marks.Marks, marks.Changed] | marks.Refused) -> None:
         """The marks as just saved, shown at once (and over a read under way); what was hidden, unticked.
-        None: marks.json is there but could not be read, so nothing changed, and Bit says so."""
-        if done is None:
-            self.say(marks.UNREAD, 8)
+        Refused: marks.json is as it was (it could not be read, or the change written), and Bit says so."""
+        if isinstance(done, marks.Refused):
+            self.say(done.words, 8, look.AMBER)
             return
         now, changed = done
         self.selected -= changed.hid
