@@ -590,13 +590,20 @@ class Engine:
 
     def team_start(self, team: teams.Team, lead: Session, written: str, answer: tuple[str, str] | None) -> None:
         """The team handover dialog's answer: (line-up, cap) starts the team's next generation, a fresh
-        lead with the handover; None leaves it closed (h shows the handover again)."""
+        lead with the handover; None leaves it closed (h shows the handover again). A team that has no
+        lead by now (made a team of peers since the handover was written) is refused: nothing is saved
+        or opened, and the kept handover is dropped (it has no lead to go to)."""
         front = self.front
         if answer is None:
             front.say_note(handoverwords.team_not_started_note(team))
             return
         lines, cap = answer
-        fresh = handover.next_team(teams.load().get(team.name, team), lines, cap)
+        try:
+            fresh = handover.next_team(teams.load().get(team.name, team), lines, cap)
+        except handover.HandoverError as error:
+            self.state.kept_handovers.pop(team.name, None)
+            front.say_note(Note(f"{team.name} is not handed over. {error}", "warning", 10))
+            return
         saved = teams.load()
         saved[fresh.name] = fresh
         teams.save(saved)
