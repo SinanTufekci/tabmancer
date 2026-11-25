@@ -808,6 +808,24 @@ def at_work(team: Team, open_names: set[str]) -> str:
 
 
 AT_WORK_GOAL = 800  # characters of a team at work's goal a suggestion is told
+AGY_ASKED = ("If the goal asks to use Antigravity (agy) or mix CLIs, put @agy on those members (with an optional "
+             "effort, e.g. 'ui: screens [src/ui] @agy @high'; never a Claude or GPT model with @agy)")
+
+
+def agy_bullet() -> str:
+    """suggestion_prompt's word on @agy members, with what agy can run now: the model its chain gives
+    from the quota saved last (agy.pick_model: no agy is run, nothing is read afresh), or that it
+    has none, so no member is put on agy only to stand there."""
+    from . import agy
+
+    if not agy.installed():
+        return "agy (Antigravity) is not installed here: put no @agy member; leave the CLI out (Claude Code)."
+    model, why = agy.pick_model()
+    if not model or agy.barred(model):
+        said = (why or "none is usable").removesuffix(agy.PICK_OR_WAIT).rstrip(". ")
+        return (f"agy has no model now ({said}): put no @agy member, even if the goal asks for agy, and say so "
+                "in the size line's why; leave the CLI out (Claude Code).")
+    return f"{AGY_ASKED}; its members run {agy.name(model)} now. Otherwise leave the CLI out (Claude Code)."
 
 
 def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST,
@@ -872,8 +890,7 @@ def suggestion_prompt(goal: str, folder: str, most: int = SUGGEST_MOST,
         "depend on each other so much that someone must hand out and check the work. Leave it out when they "
         "are separate topics that only need to tell each other what touches the other: they then work as peers.\n"
         f"- {router.GUIDE}\n"
-        "- If the goal asks to use Antigravity (agy) or mix CLIs, put @agy on those members (with an optional "
-        "model and effort, e.g. 'ui: screens [src/ui] @agy @high'); otherwise leave the CLI out (Claude Code).\n"
+        f"- {agy_bullet()}\n"
         "- Name a member who reviews review, one who writes tests tests, one who writes documentation docs, one "
         "who finds things out research.")
 
