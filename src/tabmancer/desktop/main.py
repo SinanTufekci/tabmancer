@@ -39,8 +39,8 @@ from PySide6.QtWidgets import (
 from .. import __version__, bitart, clis
 from .. import viewmodel as VM
 from ..keys import KEYS
+from ..palette import mix
 from ..store import DashboardStore, DashSnapshot
-from ..theme import mix
 from . import frame, look
 from .frame import KeysDialog, made_up_world
 from .monitor import sequences, short

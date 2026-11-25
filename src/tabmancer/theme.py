@@ -1,4 +1,6 @@
-"""Black dashboard themes and the status palette."""
+"""Black dashboard themes in Textual, and the key lines under the dialogs. The colours and the
+themes' names live in palette.py (no UI behind them); they are named here too, as the terminal
+dashboard's modules import them from here."""
 
 from __future__ import annotations
 
@@ -6,27 +8,22 @@ from rich.text import Text
 from textual.app import App
 from textual.theme import Theme
 
-from .config import read_json
-
-# Each colour means one thing on every screen: red, your turn (a session waits for you) or
-# something about to run out; amber, work to continue (cut off, unanswered); blue, at work;
-# green, open and fine; grey, done and past.
-GREEN = "#3fb950"
-BLUE = "#6cb6ff"
-AMBER = "#d29922"
-RED = "#f85149"
-ORANGE = "#e3884f"
-CYAN = "#39c5cf"
-MUTED = "#8b949e"
-TEXT = "#e6e6e6"
-
-# name -> (label shown when switching, accent colour)
-THEMES = {
-    "tabmancer-black": ("black · orange", "#d97757"),
-    "tabmancer-black-green": ("black · green", GREEN),
-    "tabmancer-black-mono": ("black · mono", "#d0d0d0"),
-}
-DEFAULT_THEME = "tabmancer-black"
+from .palette import (  # noqa: F401  (named here for the terminal dashboard's modules)
+    AMBER,
+    BLUE,
+    CYAN,
+    DEFAULT_THEME,
+    GREEN,
+    MUTED,
+    ORANGE,
+    RED,
+    SUNKEN,
+    SURFACE,
+    TEXT,
+    THEMES,
+    mix,
+    saved_theme,
+)
 
 
 def keys(*pairs: tuple[str, str]) -> Text:
@@ -52,12 +49,6 @@ def keys_in(width: int, *pairs: tuple[str, str]) -> Text:
         else:
             lines.append(one)
     return Text("\n").join(lines)
-
-
-# Layers, no frames: the list on black, what sits around it a tone up (the top bar, the cards, the
-# preview, the footer), the sidebar in between. The highlighted row takes the theme's own colour.
-SURFACE = "#101010"
-SUNKEN = "#0a0a0a"
 
 
 def _black(name: str, accent: str) -> Theme:
@@ -103,17 +94,4 @@ def use_saved_theme(app: App) -> None:
     """Register the black themes and switch to the one saved last (the default otherwise)."""
     for theme in themes():
         app.register_theme(theme)
-    saved = read_json("config.json")
-    name = saved.get("theme") if isinstance(saved, dict) else None
-    for old in ("antyard-", "ccharbor-", "ccrestore-"):  # saved under an old name
-        if isinstance(name, str) and name.startswith(old):
-            name = "tabmancer-" + name.removeprefix(old)
-    app.theme = name if name in THEMES else DEFAULT_THEME  # older saves named other themes
-
-
-def mix(start: str, end: str, amount: float) -> str:
-    """Blend two #rrggbb colours; amount 0 gives start, 1 gives end. Drives the fades."""
-    amount = max(0.0, min(1.0, amount))
-    a = [int(start[i:i + 2], 16) for i in (1, 3, 5)]
-    b = [int(end[i:i + 2], 16) for i in (1, 3, 5)]
-    return "#" + "".join(f"{round(x + (y - x) * amount):02x}" for x, y in zip(a, b))
+    app.theme = saved_theme()

@@ -11,6 +11,7 @@ license-files = ["LICENSE", "LICENSE-BIT", "NOTICE"]
 authors = [{ name = "Sinan Tüfekci" }]
 requires-python = ">=3.10"
 dependencies = [
+    "rich>=14.2",  # doctor, stats, tokens, wrapped and report print with it; Textual's own floor
     "send2trash>=1.8",
     "textual>=8.2,<9",  # sixel.py leans on Textual internals: raise the ceiling on purpose, after the newest-textual job is green
 ]

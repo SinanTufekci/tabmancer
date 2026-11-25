@@ -78,7 +78,8 @@ assert snap.view.sessions == [] and snap.view.teams == [] and snap.acting is Non
 print(sorted(m for m in sys.modules if m.split(".")[0] in BLOCKED))
 """
 CORE = ("keys", "store", "viewmodel", "actions", "actor", "marks", "search", "teams", "teambus", "codexbus",
-        "mcpserver", "agyplugin", "summarize", "router", "handover", "teamwatch", "launch", "picks", "agy")
+        "mcpserver", "agyplugin", "summarize", "router", "handover", "teamwatch", "launch", "picks", "agy",
+        "palette")
 
 
 def test_the_core_runs_without_textual_or_qt(tmp_path):
@@ -91,6 +92,25 @@ def test_the_core_runs_without_textual_or_qt(tmp_path):
                          check=False)
     assert out.returncode == 0, out.stderr[-2000:]
     assert out.stdout.split() == ["[]"]
+
+
+def test_the_windows_look_needs_no_textual():
+    """The desktop window's colours come from palette.py: its look and its frame load with Qt and
+    without Textual, what the window will stand on once the terminal dashboard is archived."""
+    if not os.environ.get("TABMANCER_NEEDS_QT"):
+        pytest.importorskip("PySide6", reason="the desktop extra is not installed")
+    code = ("import sys\n"
+            "class Blocked:\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        if name.split('.')[0] == 'textual':\n"
+            "            raise ImportError('blocked: ' + name)\n"
+            "sys.meta_path.insert(0, Blocked())\n"
+            "from tabmancer.desktop import frame, look\n"
+            "print(look.accent(), sorted(m for m in sys.modules if m.split('.')[0] == 'textual'))")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
+                         env={**os.environ, "PYTHONPATH": str(SOURCE.parent)}, check=False)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.split()[1:] == ["[]"]
 
 
 def test_the_key_lists_import_nothing():
@@ -245,4 +265,6 @@ def test_the_extra_is_qt_essentials_alone():
     extras = extras[:extras.index("\n[", 1)]
     assert 'desktop = ["PySide6-Essentials>=6.8"]' in extras
     head = text[:text.index("[project.optional-dependencies]")]
-    assert "PySide6" not in head.split("dependencies = [", 1)[1].split("]", 1)[0]  # never a core dependency
+    core = head.split("dependencies = [", 1)[1].split("]", 1)[0]
+    assert "PySide6" not in core  # never a core dependency
+    assert '"rich>=' in core  # the CLI prints with it, whether Textual is there or not

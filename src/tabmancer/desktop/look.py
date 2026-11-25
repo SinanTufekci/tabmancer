@@ -1,6 +1,6 @@
 """How the desktop window looks: the dashboard's black, its colours and its accent, in Qt.
 
-The colours are the dashboard's own (theme.py) and so are the words for a member (monitorview):
+The colours are the dashboard's own (palette.py) and so are the words for a member (monitorview):
 the window draws what the terminal monitor says, in its colours, from the same functions.
 """
 
@@ -13,12 +13,12 @@ from html import escape
 
 from PySide6.QtGui import QColor, QFont, QFontDatabase
 
-from .. import theme
-from ..config import read_json
+from .. import palette
 
-GREEN, BLUE, AMBER, RED, ORANGE, CYAN = theme.GREEN, theme.BLUE, theme.AMBER, theme.RED, theme.ORANGE, theme.CYAN
-MUTED, TEXT = theme.MUTED, theme.TEXT
-BLACK, SUNKEN, SURFACE = "#000000", theme.SUNKEN, theme.SURFACE
+GREEN, BLUE, AMBER, RED, ORANGE, CYAN = (palette.GREEN, palette.BLUE, palette.AMBER, palette.RED, palette.ORANGE,
+                                         palette.CYAN)
+MUTED, TEXT = palette.MUTED, palette.TEXT
+BLACK, SUNKEN, SURFACE = "#000000", palette.SUNKEN, palette.SURFACE
 PANEL, BORDER, FAINT, DIM = "#181818", "#2a2a2a", "#262626", "#5a5a5a"
 HEX = re.compile(r"#[0-9a-fA-F]{6}")
 SPACES = re.compile(r"(?<= ) ")  # every space after another one
@@ -28,13 +28,7 @@ MONO_FAMILIES = ("Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono",
 
 def accent() -> str:
     """The accent of the theme picked in the dashboard (orange unless another was picked)."""
-    saved = read_json("config.json")
-    name = saved.get("theme") if isinstance(saved, dict) else None
-    if isinstance(name, str):
-        for old in ("antyard-", "ccharbor-", "ccrestore-"):  # saved under an old name
-            if name.startswith(old):
-                name = "tabmancer-" + name.removeprefix(old)
-    return theme.THEMES.get(name if isinstance(name, str) else "", theme.THEMES[theme.DEFAULT_THEME])[1]
+    return palette.THEMES[palette.saved_theme()][1]
 
 
 def colour_of(style: str, default: str = TEXT) -> tuple[str, bool]:

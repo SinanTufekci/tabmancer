@@ -253,6 +253,7 @@ wheels = [
 name = "tabmancer"
 source = { editable = "." }
 dependencies = [
+    { name = "rich" },
     { name = "send2trash" },
     { name = "textual" },
 ]
@@ -272,6 +273,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "pyside6-essentials", marker = "extra == 'desktop'", specifier = ">=6.8" },
+    { name = "rich", specifier = ">=14.2" },
     { name = "send2trash", specifier = ">=1.8" },
     { name = "textual", specifier = ">=8.2,<9" },
 ]
