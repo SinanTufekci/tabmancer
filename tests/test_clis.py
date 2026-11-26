@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import pytest
 
 from tabmancer import agy, clis, codex, sessions
+from tabmancer.config import NOT_SAVED, config_dir
 from tabmancer.launch import Launch, Mode
 from tabmancer.sessions import Exit, Status
 
@@ -18,6 +19,45 @@ def test_only_claude_is_on_until_you_choose():
     assert clis.set_enabled(["agy", "codex"]) == ["codex", "agy"]  # kept in a fixed order
     assert clis.enabled() == ["codex", "agy"]
     assert clis.set_enabled([]) == ["claude"]  # never none at all
+
+
+def test_turning_clis_on_keeps_the_rest_of_config_json_and_never_writes_over_one_it_cannot_read():
+    path = config_dir() / "config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+    assert clis.set_enabled(["codex"]) == ["codex"]
+    assert json.loads(path.read_text(encoding="utf-8")) == {"theme": "dark", "clis": ["codex"]}
+    path.write_text('{"theme": "dark", "clis": ["co', encoding="utf-8")  # cut short by another writer
+    assert clis.set_enabled(["agy"]) == ["claude"]  # what reads as on: nothing was saved
+    assert path.read_text(encoding="utf-8") == '{"theme": "dark", "clis": ["co'
+
+
+def test_the_comma_dialogs_picks_are_saved_on_enter_only():
+    picked = clis.Picked.saved()
+    assert picked == clis.Picked({"claude"}, "claude")
+    assert picked.toggle("codex") and not picked.toggle("vim") and picked.on == {"claude", "codex"}
+    picked.turn_main()  # agy as main is turned on too
+    assert picked == clis.Picked({"claude", "codex", "agy"}, "agy")
+    assert clis.enabled() == ["claude"] and clis.main_cli() == "claude"  # nothing saved yet
+    saved = picked.save()
+    assert saved == clis.Saved(["claude"], ["claude", "codex", "agy"], kept=True) and saved.changed
+    assert saved.words == "Listing sessions from Claude Code, Codex, Antigravity."
+    assert clis.main_cli() == "agy" and clis.Picked.saved() == picked
+    picked.turn_main()
+    again = picked.save()
+    assert not again.changed and again.kept and again.words == "" and clis.main_cli() == "claude"
+    picked.on = set()
+    none = picked.save()
+    assert none.after == ["claude"] and none.kept and none.words == "Listing sessions from Claude Code."  # never none
+
+
+def test_a_save_config_json_refused_says_so_and_changes_nothing():
+    path = config_dir() / "config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    saved = clis.Picked({"claude", "codex"}, "agy").save()
+    assert saved == clis.Saved(["claude"], ["claude"], kept=False) and saved.words == NOT_SAVED
+    assert path.read_text(encoding="utf-8") == "{not json"
 
 
 NEON = agy.DEFAULT_CHAIN[0]  # agy never runs on its own default: the chain's first (Neon), quota unread

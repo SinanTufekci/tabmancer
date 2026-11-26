@@ -472,6 +472,7 @@ class DashboardStore(Polled):
         self.open_at_shutdown: set[str] = set()
         self.polls = 0
         self.given: list[Session] = []  # sessions a front end changed itself (take): in the next reading
+        self.relisting = False  # other CLIs listed now (relist): the next reading lists the sessions again
 
     def take(self, session: Session) -> None:
         """A session as the window read it again after changing it itself (r renamed a closed one, which no
@@ -479,14 +480,24 @@ class DashboardStore(Polled):
         any thread: the reading takes it on its own (a list's append and pop hold the GIL)."""
         self.given.append(session)
 
+    def relist(self) -> None:
+        """, turned a CLI on or off: the next reading lists every session again, as the dashboard does then
+        (reload_sessions), asks `claude agents --json` and counts the tokens again (the CLIs listed now
+        count). The ticks of the start are not read again. From any thread: a flag the reading clears."""
+        self.relisting = True
+
     # --- what it reads ------------------------------------------------------------------------
 
     def read_listed(self) -> None:
         """Every session of the last days, as the dashboard lists them when it starts, and which of them
         looked open at the last shutdown (the window ticks those, as the dashboard does)."""
-        self.sessions = {s.session_id: s for s in find_sessions(self.days, self.include_all, quick=True)}
+        self.list_sessions()
         listed = list(self.sessions.values())
         self.open_at_shutdown = shutdowns.open_at_shutdown(listed, shutdowns.recent_shutdowns()) if listed else set()
+
+    def list_sessions(self) -> None:
+        """Every session of the last days, of the CLIs listed now."""
+        self.sessions = {s.session_id: s for s in find_sessions(self.days, self.include_all, quick=True)}
 
     def read_live(self, full: bool) -> None:
         live, self.background = live_entries(full, self.background)
@@ -534,17 +545,23 @@ class DashboardStore(Polled):
 
     def poll(self) -> DashSnapshot:
         """Read what is due and the dashboard as it stands."""
+        relisting, self.relisting = self.relisting, False
         if self.polls == 0:
             self.read_listed()
             self.read_teams()  # who rests, before the first live read: the dashboard reads its teams with its list
             self.due["others"] = self.clock() + OTHERS_SECONDS  # find_sessions has just read them
+        elif relisting:
+            self.list_sessions()
+            self.read_teams()
+            self.due["others"] = self.clock() + OTHERS_SECONDS
+            self.due.pop("tokens", None)  # due now
         elif self.is_due("others", OTHERS_SECONDS):
             self.read_others()
         while self.given:
             taken = self.given.pop(0)
             if taken.session_id in self.sessions:
                 self.sessions[taken.session_id] = taken
-        self.read_live(full=self.polls % FULL_EVERY == 0)  # the first poll asks `claude agents --json`
+        self.read_live(full=relisting or self.polls % FULL_EVERY == 0)  # the first asks `claude agents --json`
         self.polls += 1
         self.read_teams()
         if self.is_due("tokens", TOKENS_SECONDS):

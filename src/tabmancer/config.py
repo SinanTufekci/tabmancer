@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 OLD_NAMES = ("antyard", "ccharbor", "ccrestore")  # tabmancer's names before, newest first
+NOT_SAVED = "Not saved: config.json could not be read, so it was left as it is."  # merge_json refused
 
 
 def config_dir() -> Path:

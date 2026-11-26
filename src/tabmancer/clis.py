@@ -8,9 +8,10 @@ session files let tabmancer read. Only Claude Code is on until you turn others o
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from .config import merge_json, read_json, write_json
+from .config import NOT_SAVED, merge_json, read_json
 from .palette import CYAN, GREEN, MUTED, TEXT
 
 CONFIG_KEY = "clis"
@@ -47,13 +48,11 @@ def enabled() -> list[str]:
 
 
 def set_enabled(names: list[str]) -> list[str]:
-    """Save which CLIs are on. At least one stays on: Claude Code if none is left."""
-    chosen = [name for name in CLIS if name in names] or list(DEFAULT)
-    saved = read_json("config.json")
-    saved = saved if isinstance(saved, dict) else {}
-    saved[CONFIG_KEY] = chosen
-    write_json("config.json", saved, indent=2)
-    return chosen
+    """Save which CLIs are on (at least one: Claude Code if none is left) and return those on now. A
+    config.json that is there but cannot be read is left as it is (merge_json): the CLIs on are then
+    those on before, and the theme, Bit and the rest it keeps are not written over."""
+    merge_json("config.json", **{CONFIG_KEY: [name for name in CLIS if name in names] or list(DEFAULT)})
+    return enabled()
 
 
 def installed(name: str) -> str | None:
@@ -124,3 +123,70 @@ def main_parts(main: str) -> list[Part]:
 def next_main(main: str) -> str:
     """The main CLI after this one, in turn (m in the , dialog)."""
     return MAINS[(MAINS.index(main) + 1) % len(MAINS)] if main in MAINS else MAINS[0]
+
+
+# The rest of what the , dialog says, and its steps: one copy for the terminal's dialog and a window's.
+SETTINGS_TITLE = "Which CLIs do you use?"
+SETTINGS_ABOUT = ("Their sessions join the list, open in tabs and count in the stats. Claude Code is the one every "
+                  "feature works with.")
+SETTINGS_KEYS = (("Space", "turn one on or off"), ("m", "main CLI"), ("Enter", "save"), ("Esc", "cancel"))
+
+
+def listing_words(names: Iterable[str]) -> str:
+    """Said once the , dialog has changed which CLIs are listed."""
+    return "Listing sessions from " + ", ".join(label(name) for name in names) + "."
+
+
+@dataclass(frozen=True)
+class Saved:
+    """What Enter in the , dialog came to: the CLIs listed before and now, and whether all of it was
+    saved (config.json there but unreadable is left as it is: nothing changes then)."""
+
+    before: list[str]
+    after: list[str]
+    kept: bool
+
+    @property
+    def changed(self) -> bool:
+        """The list reads its sessions again: other CLIs are listed now."""
+        return self.after != self.before
+
+    @property
+    def words(self) -> str:
+        if not self.kept:
+            return NOT_SAVED
+        return listing_words(self.after) if self.changed else ""
+
+
+@dataclass
+class Picked:
+    """What the , dialog has picked so far: the CLIs on and the main one. Nothing is saved till save()."""
+
+    on: set[str]
+    main: str
+
+    @classmethod
+    def saved(cls) -> Picked:
+        """As config.json has them now."""
+        return cls(set(enabled()), main_cli())
+
+    def toggle(self, name: str) -> bool:
+        """Space (or a click): one turned on or off; False for a name that is not a CLI."""
+        if name not in CLIS:
+            return False
+        self.on ^= {name}
+        return True
+
+    def turn_main(self) -> None:
+        """m: Claude Code and agy in turn; agy as main is turned on in the list too."""
+        self.main = next_main(self.main)
+        self.on.add(self.main)
+
+    def save(self) -> Saved:
+        """Enter: the main CLI, then which are on, saved."""
+        before = enabled()
+        if self.main != main_cli():
+            set_main(self.main)
+        wanted = [name for name in CLIS if name in self.on] or list(DEFAULT)
+        after = set_enabled(wanted)
+        return Saved(before, after, kept=after == wanted and main_cli() == self.main)

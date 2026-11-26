@@ -457,6 +457,41 @@ def test_a_session_the_window_changed_itself_is_in_the_next_reading(fake_home, t
     assert dash.given == [] and dash.poll().sessions[closed.session_id].title == "Renamed"  # kept, not taken twice
 
 
+def test_the_dashboard_store_lists_the_sessions_again_once_other_clis_are_listed(fake_home, tmp_path, monkeypatch,
+                                                                                  quiet):
+    """, turned Codex on: the next reading lists every session again (the CLIs listed now), asks `claude
+    agents --json` and counts the tokens again, once; the ticks of the start stay as they were read."""
+    shop(fake_home, tmp_path, monkeypatch)
+    clock = Clock()
+    dash = DashboardStore(clock=clock)
+    first = dash.poll()
+    one = next(s for s in first.sessions.values() if s.exit is not Exit.RUNNING)
+    real = store.find_sessions
+    listed: list[bool] = []
+
+    def find(days, include_all=False, quick=False):
+        listed.append(quick)
+        return [*real(days, include_all, quick=quick), replace(one, session_id="c1", cli="codex")]
+
+    monkeypatch.setattr(store, "find_sessions", find)
+    full: list[int] = []
+    asked = sessions.live_sessions
+    monkeypatch.setattr(store, "live_sessions", lambda: full.append(1) or asked())
+    counted: list[int] = []
+    monkeypatch.setattr(dash, "read_tokens", lambda: counted.append(1))
+    others: list[int] = []
+    monkeypatch.setattr(dash, "read_others", lambda: others.append(1))
+    clock.now += 2
+    assert "c1" not in dash.poll().sessions and listed == full == counted == []  # unasked, nothing listed again
+    dash.relist()
+    clock.now = 1000 + store.OTHERS_SECONDS - 1
+    snap = dash.poll()
+    assert snap.sessions["c1"].cli == "codex" and listed == [True] and full == counted == [1]
+    assert not dash.relisting and snap.open_at_shutdown == first.open_at_shutdown
+    clock.now += 2  # Codex's and agy's would be due: they came with the list
+    assert "c1" in dash.poll().sessions and listed == [True] and full == counted == [1] and others == []  # once
+
+
 def test_the_dashboard_store_reads_as_often_as_the_dashboard(fake_home, tmp_path, monkeypatch, quiet):
     shop(fake_home, tmp_path, monkeypatch)
     clock = Clock()
