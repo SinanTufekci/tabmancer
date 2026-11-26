@@ -108,6 +108,26 @@ def improve_refusal(goal: str) -> Note | None:
 
 IMPROVED = Note("Goal improved: Ctrl+Z in the box puts yours back.", seconds=6)
 
+# The form's words, the terminal dialog's and the window's (one copy).
+TITLE = "New team"
+KEYS = [("Ctrl+S", "create"), ("Tab", "next"), ("Ctrl+T", "line-up"), ("Ctrl+L", "keep"), ("Ctrl+R", "suggest"),
+        ("Ctrl+G", "role"), ("Esc", "cancel")]
+IMPROVE_KEY = ("Ctrl+E", "improve")  # after suggest, where the key line has room (the window's always does)
+KEEP_AS, KEEP_EXAMPLE = "Keep this line-up as", "e.g. api and screens"  # Ctrl+L's name prompt
+DECIDE_ASIDE = "members, picked by the lead"  # beside the At most box
+NAMED_NONE = "Claude's answer named no members."  # Ctrl+R's answer with no line-up in it
+
+
+def keys_with_improve(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """KEYS with Ctrl+E after suggest."""
+    return [*pairs[:5], IMPROVE_KEY, *pairs[5:]]
+
+
+def still_needed(missing: list[str], loud: bool) -> list[tuple[str, str]]:
+    """What the form still needs, as (words, tone) parts: louder once Ctrl+S was refused for it."""
+    tone = "amber" if loud else "muted"
+    return [("Still needed: ", tone), (", ".join(missing), tone)]
+
 
 @dataclass
 class Keep:

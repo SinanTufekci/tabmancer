@@ -1038,8 +1038,7 @@ def toned(parts: list[tuple[str, str]]) -> Text:
 
 
 def still_needed(missing: list[str], loud: bool) -> Text:
-    style = f"bold {AMBER}" if loud else MUTED
-    return Text.assemble(("Still needed: ", style), (", ".join(missing), style))
+    return toned(teamforms.still_needed(missing, loud))
 
 
 class ProjectList(OptionList, can_focus=False):
@@ -1144,7 +1143,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             with Horizontal(id="team-top"):
-                yield Label(title("New team"), id="team-title")
+                yield Label(title(teamforms.TITLE), id="team-title")
                 yield Label("", id="team-ready")
             with Horizontal(id="team-body"):
                 with Vertical(id="team-form"):
@@ -1167,7 +1166,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
                             yield Label("At most", classes="name")
                             yield Input(str(teams.DECIDE_MOST), id="team-most", compact=True, restrict=r"[0-9]*",
                                         max_length=1)
-                            yield Static("members, picked by the lead", classes="aside")
+                            yield Static(teamforms.DECIDE_ASIDE, classes="aside")
                 with Vertical(id="team-side"):
                     # In the graph's place while the Project box has the focus.
                     with Vertical(id="projects-card", classes="card"):
@@ -1197,11 +1196,8 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
     def key_line(self, width: int) -> Text:
         """The keys under the dialog, on one line, even in a 120x30 window: a second one would be cut off
         there. Ctrl+E (also on the Team card's border, always) joins them where the line has room."""
-        pairs = [("Ctrl+S", "create"), ("Tab", "next"), ("Ctrl+T", "line-up"), ("Ctrl+L", "keep"),
-                 ("Ctrl+R", "suggest"), ("Ctrl+G", "role"), ("Esc", "cancel")]
-        with_improve = [*pairs[:5], ("Ctrl+E", "improve"), *pairs[5:]]
-        wide = keys(*with_improve)
-        return wide if width and wide.cell_len <= width else keys(*pairs)
+        wide = keys(*teamforms.keys_with_improve(teamforms.KEYS))
+        return wide if width and wide.cell_len <= width else keys(*teamforms.KEYS)
 
     def show_keys(self) -> None:
         line = self.query_one("#team-keys", Label)
@@ -1526,7 +1522,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
             if kept.changed:
                 self.show_preview()
 
-        self.app.push_screen(LineDialog("Keep this line-up as", "e.g. api and screens"), keep)
+        self.app.push_screen(LineDialog(teamforms.KEEP_AS, teamforms.KEEP_EXAMPLE), keep)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
@@ -1558,7 +1554,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         if self.toward is not None and not self.asking:
             self.show_toward()
             return
-        self.query_one("#team-title", Label).update(title("New team"))
+        self.query_one("#team-title", Label).update(title(teamforms.TITLE))
         self.query_one("#lineup-card").border_title = "Line-up"
         lineups = self.query_one("#team-lineup", Static)
         lineups.display = True
@@ -1645,7 +1641,7 @@ class NewTeamDialog(ModalScreen[teams.Team | JoinTeam | TellTeam | None]):
         try:
             answer = summarize.ask(prompt, "", timeout=180, effort=teams.SUGGEST_EFFORT)
             suggestion = teams.read_suggestion(answer, here, goal)
-            error = "" if suggestion.lines or suggestion.kind != teams.OWN_TEAM else "Claude's answer named no members."
+            error = "" if suggestion.lines or suggestion.kind != teams.OWN_TEAM else teamforms.NAMED_NONE
         except Exception as problem:  # noqa: BLE001 - a failed suggestion leaves the box as it was, and says why
             suggestion, error = None, str(problem) or type(problem).__name__
         self.app.call_from_thread(self.suggested, suggestion, error)

@@ -106,7 +106,7 @@ class NewSessions(ModalScreen[Request | None]):
         Binding("ctrl+r", "route", "Router's pick", priority=True),
         Binding("ctrl+e", "improve", "Improve the first message", priority=True),
     ]
-    MESSAGE_NOTE = "optional · Ctrl+E improves it"
+    MESSAGE_NOTE = newforms.MESSAGE_NOTE
 
     def __init__(self, found: list[Project], ticked: set[str] | None = None) -> None:
         super().__init__()
@@ -141,14 +141,13 @@ class NewSessions(ModalScreen[Request | None]):
                 with Vertical(id="folders-card", classes="card"):
                     with Horizontal(id="new-find"):
                         yield Label("⌕")
-                        yield Input(placeholder="Filter, or type a folder path", id="new-filter", compact=True)
+                        yield Input(placeholder=newforms.FILTER_PLACEHOLDER, id="new-filter", compact=True)
                     yield Static("", id="new-head")
                     yield FolderList(id="new-folders")
                     yield Static("", id="new-where")
                 with Vertical(id="new-side"):
                     with Vertical(id="message-card", classes="card"):
-                        yield TextArea(id="new-first", compact=True,
-                                       placeholder="Optional. A line each: a session for each line")
+                        yield TextArea(id="new-first", compact=True, placeholder=newforms.MESSAGE_PLACEHOLDER)
                         yield Label("", id="new-link")
                     with Vertical(id="pick-card", classes="card"):
                         # The card's title names the rows: the model above (agy's own in its place: its
@@ -159,17 +158,15 @@ class NewSessions(ModalScreen[Request | None]):
                         yield Label("", id="new-route")
                     with Vertical(id="opens-card", classes="card"):
                         yield Static("", id="new-opens")
-                        yield Label("These start clean: h in the list carries a session on.", id="new-note")
+                        yield Label(newforms.CLEAN, id="new-note")
             yield Label("", id="new-help")
-            yield Label(keys(("Space", "tick"), ("Enter/Ctrl+S", "start them"), ("Tab", "next box"),
-                             ("Ctrl+R", "router's pick"), ("Ctrl+L", "linked"), ("Ctrl+O", "the CLI"),
-                             ("Esc", "cancel")), classes="hint")
+            yield Label(keys(*newforms.KEYS), classes="hint")
 
     def on_mount(self) -> None:
         self.query_one("#folders-card").border_title = "Folders"
         self.query_one("#message-card").border_title = "First message"
         self.query_one("#message-card").border_subtitle = self.MESSAGE_NOTE
-        self.query_one("#pick-card").border_title = "Model · Effort · Context · Advisor"
+        self.query_one("#pick-card").border_title = newforms.PICK_CARD
         self.show_folders()
         self.show_cli()
         self.show_link()
@@ -208,7 +205,7 @@ class NewSessions(ModalScreen[Request | None]):
         what = self.form.opens(self.message.text)
         if not what.rows:
             card.border_title = what.title
-            opens.update(Text("Tick folders on the left with Space.", style=MUTED))
+            opens.update(Text(newforms.NO_FOLDERS, style=MUTED))
             return
         card.border_title = Text(what.title, style=f"bold {GREEN}")
         card.border_subtitle = Text.assemble(clis.label(self.cli), *(f" · {part}" for part in self.pick_parts()))
@@ -330,8 +327,7 @@ class NewSessions(ModalScreen[Request | None]):
 
     def show_title(self) -> None:
         count = len(self.ticked)
-        self.query_one("#title", Label).update(title("New sessions", *([f"{count} folder{'s' * (count != 1)} ticked"]
-                                                                    if count else [])))
+        self.query_one("#title", Label).update(title(newforms.TITLE, *newforms.ticked_words(count)))
 
     def show_cli(self) -> None:
         many = len(clis.enabled()) > 1
@@ -501,7 +497,7 @@ class NewSessions(ModalScreen[Request | None]):
         if not self.is_mounted:
             return
         if self.improve_note.finish(self, self.message, "#message-card", text, better, why, self.notify):
-            self.notify("First message improved: Ctrl+Z in the box puts yours back.", timeout=6)
+            self.notify(newforms.IMPROVED.words, timeout=newforms.IMPROVED.seconds)
 
     def show_improving(self) -> None:
         self.query_one("#message-card").border_subtitle = self.improve_note.note(self.message.text)
@@ -611,30 +607,23 @@ class Improving:
         return self.idle
 
 
-def words(text: str) -> int:
-    return len(text.split())
+IMPROVED_TONES = {"bad": f"bold {RED}", "plain": TEXT, "good": f"bold {GREEN}"}  # newforms.Improved's
 
 
 def put_improved(box: TextArea, sent: str, better: str, why: str, notify) -> tuple[bool, Text]:
     """The rewrite into its box as one edit (Ctrl+Z puts yours back), unless there is none, it says
-    nothing new, or you changed the text while it was asked for. Says why not; (whether it was put
-    in, how it went in a few words for the card's frame)."""
-    if why:
-        notify(f"Not improved: {why}", severity="warning", timeout=8)
-        return False, Text(f"✗ not improved: {why}", style=f"bold {RED}")
-    if box.text != sent:
-        notify("You changed the text meanwhile, so the rewrite was not put in: Ctrl+E asks again.",
-               severity="warning", timeout=6)
-        return False, Text("✗ the text changed meanwhile · Ctrl+E asks again", style=f"bold {RED}")
-    if " ".join(better.split()) == " ".join(sent.split()):
-        notify("Claude found it clear as it is: nothing changed.", timeout=5)
-        return False, Text("= clear as it was: nothing changed", style=TEXT)
-    box.replace(better, (0, 0), box.document.end)
-    box.move_cursor((0, 0))  # its start in sight, not its end
-    box.scroll_home(animate=False)
-    box.focus()
-    return True, Text(f"✓ improved ({words(sent)} → {words(better)} words) · Ctrl+Z puts yours back",
-                      style=f"bold {GREEN}")
+    nothing new, or you changed the text while it was asked for (newforms.improved: the window's words
+    too). Says why not; (whether it was put in, how it went in a few words for the card's frame)."""
+    said = newforms.improved(sent, better, why, box.text)
+    if said.note:
+        notify(said.note, **({"severity": said.severity} if said.severity != "information" else {}),
+               timeout=said.seconds)
+    if said.put:
+        box.replace(better, (0, 0), box.document.end)
+        box.move_cursor((0, 0))  # its start in sight, not its end
+        box.scroll_home(animate=False)
+        box.focus()
+    return said.put, Text(said.line, style=IMPROVED_TONES[said.tone])
 
 
 TAIL = 20  # the sessions and the last time, right-aligned at a row's end

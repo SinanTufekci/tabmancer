@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import agy, clis, improve, picks, router, teams, workspaces
+from .actions import Note
 from .launch import Launch, Mode
 from .sessions import Session, folder_key
 
@@ -547,6 +548,56 @@ def improve_refusal(text: str) -> str:
     if improve.worth_improving(text):
         return ""
     return "Ctrl+E needs a first message to improve: write what the session is to do first."
+
+
+# --- n's words, the terminal dialog's and the window's (one copy) ------------------------------------
+
+TITLE = "New sessions"
+FILTER_PLACEHOLDER = "Filter, or type a folder path"
+MESSAGE_PLACEHOLDER = "Optional. A line each: a session for each line"
+MESSAGE_NOTE = "optional · Ctrl+E improves it"  # on the message card's border
+PICK_CARD = "Model · Effort · Context · Advisor"
+CLEAN = "These start clean: h in the list carries a session on."
+NO_FOLDERS = "Tick folders on the left with Space."
+IMPROVED = Note("First message improved: Ctrl+Z in the box puts yours back.", seconds=6)
+KEYS = [("Space", "tick"), ("Enter/Ctrl+S", "start them"), ("Tab", "next box"), ("Ctrl+R", "router's pick"),
+        ("Ctrl+L", "linked"), ("Ctrl+O", "the CLI"), ("Esc", "cancel")]
+IMPROVE_KEY = ("Ctrl+E", "improve")  # where the key line has room (the window's always does)
+
+
+def ticked_words(count: int) -> list[str]:
+    """Beside n's title: how many folders are ticked, none when none are."""
+    return [f"{count} folder{'s' * (count != 1)} ticked"] if count else []
+
+
+@dataclass(frozen=True)
+class Improved:
+    """Ctrl+E's answer, for n's message box and the new-team form's goal: whether the rewrite goes in, the
+    card's line and its tone ('bad', 'plain', 'good'), and the note ('' for none) with its severity and
+    seconds."""
+
+    put: bool
+    line: str
+    tone: str
+    note: str = ""
+    severity: str = "information"
+    seconds: float | None = None
+
+
+def improved(sent: str, better: str, why: str, now: str) -> Improved:
+    """A rewrite goes in unless there is none (why), the box's text now is no longer what was sent, or it says
+    nothing new (the same words)."""
+    if why:
+        return Improved(False, f"✗ not improved: {why}", "bad", f"Not improved: {why}", "warning", 8)
+    if now != sent:
+        return Improved(False, "✗ the text changed meanwhile · Ctrl+E asks again", "bad",
+                        "You changed the text meanwhile, so the rewrite was not put in: Ctrl+E asks again.",
+                        "warning", 6)
+    if " ".join(better.split()) == " ".join(sent.split()):
+        return Improved(False, "= clear as it was: nothing changed", "plain",
+                        "Claude found it clear as it is: nothing changed.", seconds=5)
+    return Improved(True, f"✓ improved ({len(sent.split())} → {len(better.split())} words) · Ctrl+Z puts yours back",
+                    "good")
 
 
 # --- the folder list -------------------------------------------------------------------------------

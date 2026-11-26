@@ -37,16 +37,9 @@ from .formparts import Card, Choice, keys_html
 from .handover import label
 
 ROUTE, IMPROVE, QUOTA = "route", "improve", "quota"  # what an Asker was asked
-TITLE = "New sessions"
-KEYS = (("Space", "tick"), ("Enter/Ctrl+S", "start them"), ("Tab", "next box"), ("Ctrl+R", "router's pick"),
-        ("Ctrl+L", "linked"), ("Ctrl+O", "the CLI"), ("Ctrl+E", "improve"), ("Esc", "cancel"))
-MESSAGE_NOTE = "optional · Ctrl+E improves it"
-MESSAGE_PLACEHOLDER = "Optional. A line each: a session for each line"
-FILTER_PLACEHOLDER = "Filter, or type a folder path"
-CLEAN = "These start clean: h in the list carries a session on."
-NO_FOLDERS = "Tick folders on the left with Space."
-IMPROVED = "First message improved: Ctrl+Z in the box puts yours back."
-PICK_CARD = "Model · Effort · Context · Advisor"
+# The words are newforms' (TITLE, CLEAN, ...), one copy with the terminal's; the window's key line always has room
+# for Ctrl+E.
+KEYS = [*newforms.KEYS[:-1], newforms.IMPROVE_KEY, newforms.KEYS[-1]]
 NAME_WIDTH = 26  # a folder row's name, in characters (the rows are monospace)
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPIN_MS = 250
@@ -116,17 +109,16 @@ class Asker(QObject):
 
 # --- a rewrite put in, as the terminal's dialogs put it -----------------------------------------------------
 
+IMPROVED_TONES = {"bad": look.RED, "plain": look.TEXT, "good": look.GREEN}  # newforms.Improved's
+
+
 def put_improved(box: QPlainTextEdit, sent: str, better: str, why: str) -> tuple[bool, str, str, str, str]:
     """The rewrite into its box as one edit (Ctrl+Z puts yours back), unless there is none, it says nothing new,
-    or the text was changed while it was asked for: (put in, the card's line and its colour, the note and its
-    severity, '' for none). The words are the terminal's (newsessions.put_improved)."""
-    if why:
-        return False, f"✗ not improved: {why}", look.RED, f"Not improved: {why}", "warning"
-    if box.toPlainText() != sent:
-        return (False, "✗ the text changed meanwhile · Ctrl+E asks again", look.RED,
-                "You changed the text meanwhile, so the rewrite was not put in: Ctrl+E asks again.", "warning")
-    if " ".join(better.split()) == " ".join(sent.split()):
-        return False, "= clear as it was: nothing changed", look.TEXT, "Claude found it clear as it is: nothing changed.", ""
+    or the text was changed while it was asked for: (put in, the card's line and its colour, the note ('' for
+    none) and its severity). The words are newforms.improved's, the terminal's too."""
+    said = newforms.improved(sent, better, why, box.toPlainText())
+    if not said.put:
+        return False, said.line, IMPROVED_TONES[said.tone], said.note, said.severity
     cursor = box.textCursor()
     cursor.beginEditBlock()
     cursor.select(QTextCursor.SelectionType.Document)
@@ -135,8 +127,7 @@ def put_improved(box: QPlainTextEdit, sent: str, better: str, why: str) -> tuple
     cursor.movePosition(QTextCursor.MoveOperation.Start)
     box.setTextCursor(cursor)  # its start in sight, not its end
     box.setFocus()
-    words = f"✓ improved ({len(sent.split())} → {len(better.split())} words) · Ctrl+Z puts yours back"
-    return True, words, look.GREEN, "", ""
+    return True, said.line, IMPROVED_TONES[said.tone], "", ""
 
 
 class Improving:
@@ -220,8 +211,8 @@ class NewSessionDialog(QDialog):
         self.clock = clock
         self.answered = False
         self.improving: str | None = None  # Ctrl+E: the first message being rewritten, as it was sent
-        self.improve_note = Improving(MESSAGE_NOTE, f"improving with {improve.MODEL}", clock)
-        self.setWindowTitle(TITLE)
+        self.improve_note = Improving(newforms.MESSAGE_NOTE, f"improving with {improve.MODEL}", clock)
+        self.setWindowTitle(newforms.TITLE)
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setMinimumSize(1000, 600)
         box = QVBoxLayout(self)
@@ -239,7 +230,7 @@ class NewSessionDialog(QDialog):
         # The folders on the left.
         self.folders_card = Card("Folders")
         self.filter = FilterLine()
-        self.filter.setPlaceholderText(FILTER_PLACEHOLDER)
+        self.filter.setPlaceholderText(newforms.FILTER_PLACEHOLDER)
         self.filter.setFont(look.font(10))
         self.folders_card.add(self.filter)
         self.folders_card.add(label(look.span(HEADING, f"bold {look.MUTED}")))
@@ -255,7 +246,7 @@ class NewSessionDialog(QDialog):
         body.addLayout(side, 4)
         self.message_card = Card("First message")
         self.message = QPlainTextEdit()
-        self.message.setPlaceholderText(MESSAGE_PLACEHOLDER)
+        self.message.setPlaceholderText(newforms.MESSAGE_PLACEHOLDER)
         self.message.setFont(look.font(10))
         self.message.setTabChangesFocus(True)
         self.message.setFixedHeight(96)
@@ -265,7 +256,7 @@ class NewSessionDialog(QDialog):
         self.link = label("", wrap=True)
         self.message_card.add(self.link)
         side.addWidget(self.message_card)
-        self.pick_card = Card(PICK_CARD)
+        self.pick_card = Card(newforms.PICK_CARD)
         self.rows: dict[str, Choice] = {}
         for row in newforms.choices():
             choice = Choice(row.values, row.value, accent, row.labels)
@@ -280,7 +271,7 @@ class NewSessionDialog(QDialog):
         self.opens_card = Card("")
         self.opens = label("")
         self.opens_card.add(self.opens, 1)
-        self.opens_card.add(label(look.span(CLEAN, look.MUTED), wrap=True))
+        self.opens_card.add(label(look.span(newforms.CLEAN, look.MUTED), wrap=True))
         side.addWidget(self.opens_card, 1)
         self.help = label("", wrap=True)
         box.addWidget(self.help)
@@ -385,8 +376,8 @@ class NewSessionDialog(QDialog):
 
     def show_title(self) -> None:
         count = len(self.form.ticked)
-        self.title.setText(look.span(TITLE, f"bold {look.TEXT}")
-                           + (look.span(f"  {count} folder{'s' * (count != 1)} ticked", look.MUTED) if count else ""))
+        self.title.setText(look.span(newforms.TITLE, f"bold {look.TEXT}")
+                           + "".join(look.span(f"  {words}", look.MUTED) for words in newforms.ticked_words(count)))
 
     # --- the CLI and the rows ------------------------------------------------------------------------------
 
@@ -470,7 +461,7 @@ class NewSessionDialog(QDialog):
         what = self.form.opens(self.text())
         if not what.rows:
             self.opens_card.set_title(what.title)
-            self.opens.setText(look.span(NO_FOLDERS, look.MUTED))
+            self.opens.setText(look.span(newforms.NO_FOLDERS, look.MUTED))
             return
         about = " · ".join([clis.label(self.form.cli), *newforms.pick_parts(self.pick())])
         self.opens_card.title.setText(look.span(what.title, f"bold {look.GREEN}") + look.span(f"  {about}", look.MUTED))
@@ -543,7 +534,7 @@ class NewSessionDialog(QDialog):
         self.improve_note.outcome, self.improve_note.about = (words, colour), self.text()
         self.show_improving()
         if put:
-            self.say(IMPROVED, "done", 6)
+            self.say(newforms.IMPROVED.words, "done", newforms.IMPROVED.seconds)
         elif note:
             self.say(note, severity, 8)
 

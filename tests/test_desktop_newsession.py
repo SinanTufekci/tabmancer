@@ -278,7 +278,7 @@ def test_ctrl_e_rewrites_off_the_thread_as_one_edit(qapp, world, opened):
     until(qapp, lambda: dialog.message.toPlainText() == world.better)
     assert len(world.improves) == 1 and not dialog.message.isReadOnly()
     assert "✓ improved (4 → 8 words)" in text_of(dialog.improve_line)
-    assert text_of(dialog.note) == newsession.IMPROVED
+    assert text_of(dialog.note) == newforms.IMPROVED.words
     dialog.message.undo()  # Ctrl+Z in the box: yours back
     assert dialog.message.toPlainText() == "fix login loop pls"
 

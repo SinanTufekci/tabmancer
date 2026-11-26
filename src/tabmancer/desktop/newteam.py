@@ -40,13 +40,11 @@ from .naming import NameDialog
 from .newsession import SEVERITY, SPIN_MS, Asker, Improving, put_improved
 
 SUGGEST, IMPROVE = "suggest", "improve-goal"  # what the Asker was asked
-TITLE = "New team"
-KEYS = (("Ctrl+S", "create"), ("Tab", "next"), ("Ctrl+T", "line-up"), ("Ctrl+L", "keep"), ("Ctrl+R", "suggest"),
-        ("Ctrl+E", "improve"), ("Ctrl+G", "role"), ("Ctrl+B", "tabs or background"), ("Ctrl+O", "worktrees"),
-        ("Esc", "cancel"))
+# The words are teamforms' (TITLE, KEEP_AS, ...), one copy with the terminal's. The window's key line has room
+# for Ctrl+E and for the Runs card's keys, which the terminal names on its rows.
+KEYS = [*teamforms.keys_with_improve(teamforms.KEYS)[:-1], ("Ctrl+B", "tabs or background"), ("Ctrl+O", "worktrees"),
+        teamforms.KEYS[-1]]
 ROLE_KEYS = (("Esc", "close"),)
-KEEP_AS, KEEP_EXAMPLE = "Keep this line-up as", "e.g. api and screens"
-DECIDE_ASIDE = "members, picked by the lead"
 # The form's tones (teamforms: 'strong', 'muted', 'amber', 'green') in the window's colours.
 TONES = {"strong": f"bold {look.TEXT}", "muted": look.MUTED, "amber": f"bold {look.AMBER}", "green": f"bold {look.GREEN}"}
 BOX_IDS = ("team-name", "team-folder", "team-goal", "team-members", "team-most", "team-cap", "team-advisor")
@@ -59,7 +57,7 @@ def suggest_now(prompt: str, here: list[teams.Team], goal: str) -> tuple[teams.S
     try:
         answer = summarize.ask(prompt, "", timeout=180, effort=teams.SUGGEST_EFFORT)
         suggestion = teams.read_suggestion(answer, here, goal)
-        error = "" if suggestion.lines or suggestion.kind != teams.OWN_TEAM else "Claude's answer named no members."
+        error = "" if suggestion.lines or suggestion.kind != teams.OWN_TEAM else teamforms.NAMED_NONE
     except Exception as problem:  # noqa: BLE001 - a failed suggestion leaves the box as it was, and says why
         return None, str(problem) or type(problem).__name__
     return suggestion, error
@@ -86,7 +84,7 @@ def toned(parts: list[tuple[str, str]], skip: int = 0) -> str:
 
 
 def still_needed(missing: list[str], loud: bool) -> str:
-    return look.span("Still needed: " + ", ".join(missing), f"bold {look.AMBER}" if loud else look.MUTED)
+    return toned(teamforms.still_needed(missing, loud))
 
 
 def pills(words: list[str], picked: str) -> str:
@@ -190,7 +188,7 @@ class NewTeamDialog(QDialog):
         self.improving: str | None = None  # Ctrl+E: the goal being rewritten, as it was sent
         self.improve_note = Improving(teamforms.GOAL_NOTE, f"improving the goal with {improve.MODEL}", clock)
         self.clock = clock
-        self.setWindowTitle(TITLE)
+        self.setWindowTitle(teamforms.TITLE)
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setMinimumSize(1040, 640)
         box = QVBoxLayout(self)
@@ -241,7 +239,7 @@ class NewTeamDialog(QDialog):
         self.most.setValidator(QIntValidator(0, 9, self.most))
         self.most.setMaxLength(1)
         self.most.setFixedWidth(40)
-        self.most_row = row("At most", self.most, DECIDE_ASIDE)
+        self.most_row = row("At most", self.most, teamforms.DECIDE_ASIDE)
         self.lineup_card.add(self.most_row)
         left.addWidget(self.lineup_card, 1)
         # On the right: the team as it stands, and where it runs.
@@ -346,7 +344,7 @@ class NewTeamDialog(QDialog):
         if self.form.toward is not None and not self.asking:
             self.show_toward(fields)
             return
-        self.title.setText(look.span(TITLE, f"bold {look.TEXT}"))
+        self.title.setText(look.span(teamforms.TITLE, f"bold {look.TEXT}"))
         self.lineup_card.set_title("Line-up")
         self.lineups.setVisible(True)
         self.lineups.setText(pills([*self.form.lineups, teamforms.OWN], self.form.shown_lineup(fields.members)))
@@ -451,7 +449,7 @@ class NewTeamDialog(QDialog):
             self.show_preview()
         if not step.ask:
             return
-        asked = NameDialog(self, KEEP_AS, "", KEEP_EXAMPLE, (("Enter", "keep"), ("Esc", "cancel")), self.accent)
+        asked = NameDialog(self, teamforms.KEEP_AS, "", teamforms.KEEP_EXAMPLE, (("Enter", "keep"), ("Esc", "cancel")), self.accent)
         asked.named.connect(lambda name: self.keep(name, step))
         asked.open()
 
