@@ -23,6 +23,7 @@ else:
     pytest.importorskip("PySide6", reason="the desktop extra is not installed")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
+from conftest import wait_until
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -101,13 +102,6 @@ def press(shown, key: str) -> None:
     QApplication.instance().processEvents()
 
 
-async def wait_for(pilot, condition, what: str) -> None:
-    deadline = time.monotonic() + WAIT_SECONDS
-    while not condition():
-        assert time.monotonic() < deadline, f"{what}: not after {WAIT_SECONDS:.0f} s"
-        await pilot.pause(0.05)
-
-
 def tui_keys(app) -> list[str]:
     return [row.key.value for row in app.table.ordered_rows]
 
@@ -175,7 +169,8 @@ async def test_pins_and_hides_cross_within_a_poll_and_the_lock_stays_with_the_te
     window, claims = side_by_side
     app = SessionPicker(days=14)
     async with app.run_test(size=(200, 50)) as pilot:
-        await wait_for(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS), "the terminal's first rows")
+        await wait_until(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS), "the terminal's first rows",
+                         WAIT_SECONDS)
         assert app.engine.state.acts and actor.holds() and claims == [False]  # the terminal's, at its start
         shown = window()
         read(qapp, shown)
@@ -221,7 +216,8 @@ async def test_the_windows_table_lists_the_terminals_rows_row_for_row(qapp, side
     window, _claims = side_by_side
     app = SessionPicker(days=14)
     async with app.run_test(size=(280, 50)) as pilot:  # room for the Model column beside the sidebar and preview
-        await wait_for(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS), "the terminal's first rows")
+        await wait_until(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS), "the terminal's first rows",
+                         WAIT_SECONDS)
         shown = window(1700)  # its Model column too, whatever a runner's monospace font measures
         read(qapp, shown)
         assert shown.selected == app.selected == app.preselected != set()  # open at the made-up shutdown: ticked
