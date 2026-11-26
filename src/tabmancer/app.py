@@ -333,7 +333,8 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
         ways = self.query_one("#ways", OptionList)
         ways.focus()
         if self.away:  # going on would send a conversation to another organisation: the handover first
-            ways.highlighted = next(i for i in range(ways.option_count) if ways.get_option_at_index(i).id == "handover")
+            ways.highlighted = limitwords.first_way([ways.get_option_at_index(i).id or ""
+                                                     for i in range(ways.option_count)], True)
 
     def away_words(self) -> Text:
         """For the ticked ones that ran on another organisation: where going on sends them."""
@@ -360,8 +361,9 @@ class LimitDialog(ModalScreen[tuple[str, list[str]] | None]):
         if event.option_list.id != "ways":
             return
         ticked = self.ticked()
-        if not ticked and event.option.id != "off":
-            self.notify(limitwords.TICK_FIRST.words, timeout=limitwords.TICK_FIRST.seconds)
+        refused = limitwords.pick_refusal(ticked, event.option.id or "")
+        if refused is not None:
+            self.notify(refused.words, timeout=refused.seconds)
             return
         self.dismiss((event.option.id, ticked))
 
@@ -2732,12 +2734,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def action_continue_at_reset(self) -> None:
         """c: the sessions stopped at a usage limit continue now (after you have signed in with another
         account), or by themselves when the limit lifts, or no longer by themselves."""
-        stopped = actions.stopped_at_limit(self.sessions)
-        if not stopped:
-            self.notify(actions.NONE_STOPPED.words, timeout=actions.NONE_STOPPED.seconds)
+        asked = limitwords.ask(self.sessions, self.limits, self.account, self.other_accounts_words(), self.armed)
+        if isinstance(asked, actions.Note):
+            self.notify(asked.words, timeout=asked.seconds)
             return
-        when = actions.continue_when(stopped)
-        plan, room = actions.plan_words(self.limits, self.other_accounts_words())
+        stopped, when = asked.stopped, asked.when
 
         def chosen(picked: tuple[str, list[str]] | None) -> None:
             if picked is None:
@@ -2749,8 +2750,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 self.update_row(session)
             self.update_detail()
 
-        self.push_screen(LimitDialog(stopped, when, all(s.session_id in self.armed for s in stopped), plan, room,
-                                     limitwords.away(self.account, stopped), self.org_words()), chosen)
+        self.push_screen(LimitDialog(stopped, when, asked.armed, asked.plan, asked.room, asked.away, asked.where),
+                         chosen)
 
     def continue_these(self, stopped: list[Session], unasked: bool = False) -> None:
         """Each goes on where it stopped: a closed one in a new tab, an open one with the prompt

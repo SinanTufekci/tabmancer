@@ -4,12 +4,13 @@ terminal draws them; test_desktop_extra proves the module loads with neither Tex
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from tabmancer import limitwords
+from tabmancer import actions, limitwords, usage
 from tabmancer.accounts import Account
 from tabmancer.palette import AMBER, MUTED
-from tabmancer.sessions import Session
+from tabmancer.sessions import Exit, Session, Status
 
 
 def s(sid, context, project="shop", title="Fix the login loop") -> Session:
@@ -58,3 +59,37 @@ def test_which_ran_on_another_organisation():
     here.org, there.org, there.sensitive = "orgP", "orgB", ["Gmail"]
     assert limitwords.away(me, [here, there, unknown]) == {"b": ["Gmail"]}
     assert limitwords.away(None, [there]) == {}
+
+
+def test_where_the_window_does_not_act_it_offers_no_lift_and_no_off():
+    assert [w for w, _ in limitwords.ways("at 16:00", True, True, False, acts=False)] == ["now", "handover"]
+    assert [w for w, _ in limitwords.ways("at 16:00", False, True, False, acts=False)] == ["now", "handover"]
+    assert limitwords.ways("at 16:00", False, True, True) == limitwords.ways("at 16:00", False, True, True, acts=True)
+    assert "terminal dashboard" in limitwords.NOT_HERE
+
+
+def test_the_first_way_and_a_way_with_nothing_ticked():
+    assert limitwords.first_way(["lift", "now", "handover"], False) == 0
+    assert limitwords.first_way(["lift", "now", "handover"], True) == 2  # another organisation: the handover first
+    assert limitwords.first_way(["now"], True) == 0
+    assert limitwords.pick_refusal([], "now") is limitwords.TICK_FIRST
+    assert limitwords.pick_refusal([], "off") is None and limitwords.pick_refusal(["a"], "now") is None
+
+
+def stopped(sid, context, resets) -> Session:
+    return Session(session_id=sid, path=None, cwd=f"C:/work/{sid}", exit=Exit.CLEAN, status=Status.LIMIT,
+                   resets=resets, context=context)
+
+
+def test_what_c_asks_about():
+    soon = datetime.now() + timedelta(hours=2)
+    a, b = stopped("a", 400_000, soon), stopped("b", 1_000, soon + timedelta(hours=1))
+    working = Session(session_id="w", path=None, cwd="C:/work/w")
+    assert limitwords.ask({"w": working}, [], None, [], {}) is actions.NONE_STOPPED
+    limits = [usage.Limit("session", 40, None, "4pm"), usage.Limit("week", 70, None, "Mon")]
+    asked = limitwords.ask({"a": a, "b": b, "w": working}, limits, None, ["other than key"], {"a": soon})
+    assert isinstance(asked, limitwords.Ask)
+    assert asked.stopped == [a, b] and asked.when == actions.continue_when([a, b]) and asked.when.startswith("at ")
+    assert not asked.armed and asked.room and asked.away == {} and asked.where == "this account"
+    assert asked.plan == "Your plan now: session 40% · week 70%\nother than key"
+    assert limitwords.ask({"a": a, "b": b}, [], None, [], {"a": soon, "b": soon}).armed

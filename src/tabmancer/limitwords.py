@@ -2,11 +2,16 @@
 on (now, when the limit lifts, handed over, no longer by themselves) and their order, each session's
 line, what going on costs on another account and where it sends a conversation that ran on another
 organisation. Parts are (words, style) as in teamwords. The terminal dashboard (app's LimitDialog)
-puts them into rich Text, the desktop window into its own; both say the same."""
+puts them into rich Text, the desktop window into its own (desktop/limit.py); both say the same. What c
+asks about (ask: the stopped, when they can go on, the plan, room, where a conversation goes) and the
+dialog's rules (first_way, pick_refusal) are here too, one copy."""
 
 from __future__ import annotations
 
-from . import accountwords
+from dataclasses import dataclass
+from datetime import datetime
+
+from . import accountwords, actions
 from .accounts import Account
 from .actions import Note, clip
 from .palette import AMBER, MUTED, TEXT
@@ -18,12 +23,57 @@ BIG_CONTEXT = 300_000  # tokens: going on with this much on another account cost
 
 TICK_FIRST = Note("Tick a session first (Space, after Tab).", seconds=4)
 KEY_PAIRS = [("Space", "tick"), ("Tab", "the sessions or the ways"), ("Enter", "choose"), ("Esc", "cancel")]
+# Where c's dialog does not act (the desktop window for now): why it offers no "when the limit lifts"
+NOT_HERE = ("Continuing when the limit lifts is set in the terminal dashboard (tabmancer): it continues "
+            "them by itself then. This window does not act yet.")
 
 
-def ways(when: str, room: bool, armed: bool, away: bool) -> list[tuple[str, list[Part]]]:
+@dataclass(frozen=True)
+class Ask:
+    """What c asks about: the sessions stopped at a usage limit, when the first can go on ('now', 'at
+    16:00'), whether all of them are set to continue at their reset (armed), the plan as last read and
+    the other accounts (plan), whether the limit no longer stands in the way (room), those that ran on
+    another organisation (away: id -> what their tool calls read) and where going on sends them (where)."""
+
+    stopped: list[Session]
+    when: str
+    armed: bool
+    plan: str
+    room: bool
+    away: dict[str, list[str]]
+    where: str
+
+
+def ask(sessions: dict[str, Session], limits: list, account: Account | None, others: list[str],
+        armed: dict[str, datetime]) -> Ask | Note:
+    """c: what its dialog asks about, or the note that nothing is stopped at a limit (actions.NONE_STOPPED).
+    account: the Claude account signed in now; others: the other accounts' lines
+    (accountwords.other_accounts_words of its key); armed: the sessions to continue at their reset."""
+    stopped = actions.stopped_at_limit(sessions)
+    if not stopped:
+        return actions.NONE_STOPPED
+    plan, room = actions.plan_words(limits, others)
+    return Ask(stopped, actions.continue_when(stopped), all(s.session_id in armed for s in stopped), plan, room,
+               away(account, stopped), accountwords.goes_to(account))
+
+
+def first_way(ids: list[str], away: bool) -> int:
+    """The way picked when the dialog opens (ids: the ways' ids, in order): the handover when going on
+    would send a conversation to another organisation, else the first."""
+    return ids.index("handover") if away and "handover" in ids else 0
+
+
+def pick_refusal(ticked: list[str], way: str) -> Note | None:
+    """A way chosen with no session ticked: tick one first (but 'off' needs none)."""
+    return TICK_FIRST if not ticked and way != "off" else None
+
+
+def ways(when: str, room: bool, armed: bool, away: bool, acts: bool = True) -> list[tuple[str, list[Part]]]:
     """(id, its words) for each way, continuing now first with room (another account, or the limit
     lifted), else when the limit lifts; 'off' only for the armed. away: some ran on another
-    organisation, so the handover says that only a digest goes."""
+    organisation, so the handover says that only a digest goes. acts: False where the dialog's window
+    never acts (the desktop window for now): no 'lift' or 'off', which only the dashboard that acts
+    carries out (NOT_HERE says so)."""
     now = ("now", [("Continue the ticked now", f"bold {TEXT}"),
                    ("  you signed in with another account, or the limit has lifted\n", MUTED),
                    ("  an open one gets the prompt in its tab, a closed one opens in a new tab", MUTED)])
@@ -37,7 +87,7 @@ def ways(when: str, room: bool, armed: bool, away: bool) -> list[tuple[str, list
     out = [now, later, over] if room else [later, now, over]
     if armed:
         out.append(("off", [("Do not continue them by themselves", f"bold {TEXT}"), ("  they wait for you", MUTED)]))
-    return out
+    return out if acts else [(way, parts) for way, parts in out if way not in ("lift", "off")]
 
 
 def title_words(count: int, when: str) -> tuple[str, str, str]:
