@@ -71,7 +71,7 @@ class AccountsDialog(ModalScreen[tuple[str, str] | None]):
                    for account, _ in self.seen]
         options.append(Option(self.prompt(ANOTHER), id=ANOTHER))
         with Vertical():
-            yield Label(title("Claude accounts", accountwords.title_words(self.current)))
+            yield Label(title(accountwords.TITLE, accountwords.title_words(self.current)))
             yield OptionList(*options)
             yield Label(accountwords.note(bool(self.places), self.stopped), classes="note")
             yield Label(keys(*accountwords.key_pairs(bool(self.places))), classes="hint")
@@ -91,15 +91,11 @@ class AccountsDialog(ModalScreen[tuple[str, str] | None]):
         option = options.get_option_at_index(options.highlighted)
         if option.disabled or option.id is None:
             return
-        ids = [place.id for place in self.places]
-        now = self.place.get(option.id, DEFAULT)
-        self.place[option.id] = accountwords.next_place(ids, now, step)
-        email = self.email.get(option.id, option.id)
-        for option_id, its_email in self.email.items():  # the same email's other organisations open there too
-            if its_email == email:
-                self.place[option_id] = self.place[option.id]
-                options.replace_option_prompt(option_id, self.prompt(option_id))
-        if not accounts.keep_opens_in(email, self.place[option.id], UI_TRIES):
+        # the same email's other organisations open there too (accountwords.turn, one copy)
+        turned = accountwords.turn(self.place, self.email, option.id, [place.id for place in self.places], step)
+        for option_id in turned.keys:
+            options.replace_option_prompt(option_id, self.prompt(option_id))
+        if not accounts.keep_opens_in(turned.email, turned.place, UI_TRIES):
             self.notify(NOT_KEPT, severity="warning", timeout=10)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:

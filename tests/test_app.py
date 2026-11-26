@@ -123,6 +123,41 @@ async def test_save_and_open_workspace(fake_home, tmp_path, monkeypatch, opened)
     assert launch.mode is Mode.RESUME
 
 
+async def test_a_workspace_not_saved_or_not_deleted_is_said_and_the_file_left_as_it_is(fake_home, tmp_path,
+                                                                                       monkeypatch, opened):
+    # w and o's d go through workspaces.keep and drop (UI_TRIES): refused, the note says so, the file and
+    # o's row stay; they used to write back their own read whatever the file held.
+    from tabmancer import workspacewords
+
+    config = tmp_path / "config"
+    monkeypatch.setenv("TABMANCER_CONFIG_DIR", str(config))
+    monkeypatch.setattr(workspaces.Path, "is_dir", lambda self: True)
+    app = SessionPicker(days=14)
+    said = []
+    async with app.run_test() as pilot:
+        await loaded(pilot, app)
+        monkeypatch.setattr(app, "say_note", said.append)
+        config.mkdir(parents=True, exist_ok=True)
+        (config / workspaces.FILE).write_text("[1]", encoding="utf-8")  # there, but holding no dict
+        await pilot.press("space", "w", *"Demo", "enter")
+        await wait_until(pilot, lambda: bool(said))
+        assert said[-1] == workspacewords.not_kept_note("Demo")
+        assert (config / workspaces.FILE).read_text(encoding="utf-8") == "[1]"
+        (config / workspaces.FILE).unlink()
+        await pilot.press("w", *"Demo", "enter")
+        await wait_until(pilot, lambda: list(workspaces.load()) == ["Demo"])
+        assert said[-1].words.startswith("Saved workspace 'Demo'")
+        kept = workspaces.drop
+        monkeypatch.setattr(workspaces, "drop", lambda name, tries=None: False)
+        await pilot.press("o", "d")
+        assert said[-1] == workspacewords.not_kept_note("Demo", deleting=True)
+        assert isinstance(app.screen, ModalScreen) and list(workspaces.load()) == ["Demo"]
+        monkeypatch.setattr(workspaces, "drop", kept)
+        await pilot.press("d")
+        await wait_until(pilot, lambda: not isinstance(app.screen, ModalScreen))
+        assert said[-1] == workspacewords.deleted_note("Demo") and workspaces.load() == {}
+
+
 async def test_summary_key_shows_result_and_failure(fake_home, monkeypatch):
     from tabmancer import summarize
 

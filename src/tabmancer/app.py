@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from rich.console import Group
 from rich.table import Table
@@ -69,6 +69,7 @@ from . import (
     tokens,
     usage,
     workspaces,
+    workspacewords,
     wrapped,
 )
 from . import viewmodel as VM
@@ -501,10 +502,10 @@ class WorkspaceList(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(title("Workspaces"))
+            yield Label(title(workspacewords.TITLE))
             yield OptionList(*[Option(Text.assemble((w.name, "bold"), "   ", (w.summary, "dim")), id=w.name)
                                for w in self.saved.values()])
-            yield Label(keys(("Enter", "open"), ("d", "delete"), ("Esc", "close")), classes="hint")
+            yield Label(keys(*workspacewords.LIST_KEYS), classes="hint")
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id)
@@ -514,11 +515,14 @@ class WorkspaceList(ModalScreen[str | None]):
         if options.highlighted is None:
             return
         name = options.get_option_at_index(options.highlighted).id
-        saved = workspaces.load()
-        saved.pop(name, None)
-        workspaces.save(saved)
+        if name is None:
+            return
+        said = cast("SessionPicker", self.app).say_note
+        if not workspaces.drop(name, UI_TRIES):  # the file left as it is: the row stays
+            said(workspacewords.not_kept_note(name, deleting=True))
+            return
         options.remove_option(name)
-        self.notify(f"Deleted workspace '{name}'.")
+        said(workspacewords.deleted_note(name))
         if options.option_count == 0:
             self.dismiss(None)
 
@@ -2379,9 +2383,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         from .accountsview import AccountsDialog
 
         current = accounts.claude()
-        seen = accounts.known()
-        if current is not None and not any(a.key == current.key for a, _ in seen):
-            seen.insert(0, (current, ""))
+        seen = accountwords.listed(current, accounts.known())
         stopped = sum(1 for s in self.sessions.values() if at_limit(s))
         places = browsers.places()
 
@@ -2391,13 +2393,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if self.after_update("the sign-in opens", lambda: chosen(picked)):
                 return
             email, place = picked
-            login = accountwords.sign_in_launch(email, place)
-            try:
-                left = open_tabs([login])
-            except OSError as error:
-                self.say_note(accountwords.open_failed_note(error))
-                return
-            self.say_note(accountwords.signing_in_note(email, accountwords.where_words(login, places, place), left))
+            said = accountwords.sign_in(email, place, places, open_tabs)  # open_tabs: the demo stands in for it
+            if said is not None:
+                self.say_note(said)
 
         self.push_screen(AccountsDialog(current, seen, stopped, places, accounts.opens_in(), usage.last_by_account()),
                          chosen)
@@ -2666,25 +2664,25 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def action_save_workspace(self) -> None:
         chosen = [s for s in self.sessions.values() if s.session_id in self.selected]
         if not chosen:
-            self.notify("Tick the sessions for the workspace first (Space).", severity="warning")
+            self.say_note(workspacewords.tick_first_note())
             return
 
         def save(name: str | None) -> None:
             if not name or not workspaces.clean_name(name):
                 return
-            saved = workspaces.load()
             workspace = workspaces.from_sessions(name, chosen, self.modes)
-            saved[workspace.name] = workspace
-            workspaces.save(saved)
-            self.notify(f"Saved workspace '{workspace.name}': {workspace.summary}")
+            if workspaces.keep(workspace, UI_TRIES):  # the others kept as the file has them now
+                self.say_note(workspacewords.saved_note(workspace))
+            else:
+                self.say_note(workspacewords.not_kept_note(workspace.name))
 
-        what = "this session's folder" if len(chosen) == 1 else f"these {len(chosen)} sessions' folders"
-        self.push_screen(NamePrompt(f"Name for a workspace with {what}"), save)
+        self.push_screen(NamePrompt(workspacewords.name_heading(len(chosen)), placeholder=workspacewords.PLACEHOLDER),
+                         save)
 
     def action_open_workspace(self) -> None:
         saved = workspaces.load()
         if not saved:
-            self.notify("No workspaces yet. Tick sessions and press w to save one.", severity="warning")
+            self.say_note(workspacewords.none_yet_note())
             return
 
         def open_it(name: str | None) -> None:
@@ -2696,7 +2694,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if launches:
                 self.open_sessions(launches)
             else:
-                self.notify("\n".join(notes) or "Nothing to open.", severity="warning")
+                self.say_note(workspacewords.nothing_note(notes))
 
         self.push_screen(WorkspaceList(saved), open_it)
 
