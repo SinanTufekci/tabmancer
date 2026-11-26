@@ -22,7 +22,7 @@ from functools import partial
 
 from PySide6.QtCore import QObject, Signal
 
-from .. import actions, claudeupdate, launch, openings, prompting, workspaces, workspacewords
+from .. import actions, actor, claudeupdate, launch, openings, prompting, workspaces, workspacewords
 from ..launch import Launch, Mode, default_mode
 from ..sessions import Session, Status
 from ..store import DashSnapshot, live_entries
@@ -41,6 +41,13 @@ def open_tabs(launches: list[Launch]) -> list[str]:
 def run_in_background(one: Launch) -> str:
     """claude --bg, by launch.run_in_background as it is when called (the demo stands in for it)."""
     return launch.run_in_background(one)
+
+
+def updates_here() -> bool:
+    """Whether today's claude update is this window's to run: not while another live process holds the
+    actor lock (the dashboard that acts runs it; two at once would race, as a monitor leaves it too). A
+    window open alone runs it."""
+    return not actor.running(actor.holder())
 
 
 def live_ids(background: dict[str, dict]) -> set[str]:
@@ -110,7 +117,7 @@ class Opener(QObject):
     def open_now(self, launches: list[Launch], background: dict[str, dict]) -> None:
         """On a thread of its own: today's claude update first, when it is due and one is Claude Code's;
         then the tabs, leaving out what a Claude process has open now (actions.open_launches)."""
-        if self.update and any(one.cli == "claude" for one in launches):
+        if self.update and any(one.cli == "claude" for one in launches) and updates_here():
             claudeupdate.before_opening(self.tell)
         done = actions.open_launches(launches, partial(live_ids, background), open_tabs)
         try:
@@ -156,7 +163,7 @@ class Opener(QObject):
         self.start(self.write_now, session, how, prompt, dict(background))
 
     def write_now(self, session: Session, how: str, prompt: str, background: dict[str, dict]) -> None:
-        if self.update and session.cli == "claude":
+        if self.update and session.cli == "claude" and updates_here():
             claudeupdate.before_opening(self.tell)
         sent = prompting.send(session, how, prompt, partial(live_ids, background), open_tabs, run_in_background,
                               self.say)

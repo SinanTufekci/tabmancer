@@ -97,7 +97,10 @@ class WindowFront(QObject):
     def live(self, snap: DashSnapshot) -> None:
         """A reading of the store to the window's Engine: every session listed (it says what changed since
         its last look), none to set resting (the store did, as it read them), the background sessions'
-        jobs. The members as the reading has them, for who() and cap_of()."""
+        jobs. The members as the reading has them, for who() and cap_of(). Who Claude Code is signed in as
+        first (Engine.signed_in, which changes nothing while it is the same): h says what of a session that
+        ran on another organisation goes to this one (accountwords.elsewhere_note), as the terminal does."""
+        self.window().engine.signed_in(list(snap.accounts))
         self.members = {session.session_id: (state.team.name, name) for state, block in
                         VM.team_blocks(list(snap.sessions.values()), snap.team_states) for name, session in block}
         self.window().engine.live(dict(snap.sessions), False, set(), dict(snap.background))
@@ -363,8 +366,11 @@ class WindowFront(QObject):
 
     def update_claude(self) -> None:
         """Today's claude update, before Claude Code sessions open (Engine.update_due), on a thread of its
-        own; its outcome back to Engine.claude_updated. Over the demo's made-up sessions none runs."""
-        if not self.update:
+        own; its outcome back to Engine.claude_updated. Over the demo's made-up sessions none runs, nor while
+        a dashboard acts: it runs it. Who acts as the last reading had it (DashSnapshot.acting, read on the
+        store's thread): the process check (actor.running; two `ps` on macOS) stays off the UI thread."""
+        snap = self.window().snap
+        if not self.update or (snap is not None and snap.acting is not None):
             self.window().engine.claude_updated(claudeupdate.Outcome(True, "", ""), None)
             return
         self.start(self.run_update)

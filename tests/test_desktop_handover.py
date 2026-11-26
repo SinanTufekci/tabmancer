@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QApplication
 from test_desktop_front import busy_one, read, taking
 
 from tabmancer import (
+    accountwords,
     actions,
     actor,
     alerts,
@@ -319,6 +320,65 @@ def test_claude_update_runs_on_a_thread_before_the_fresh_session_opens(qapp, win
     monkeypatch.setattr(alerts, "run_claude_update", lambda: pytest.fail("claude update ran over made-up sessions"))
     shown.engine.open([fresh])
     assert world.opened == [fresh] and not shown.engine.state.updating_claude
+
+
+def test_h_from_the_window_says_what_of_a_session_from_another_organisation_goes_to_this_one(
+        qapp, window, world, monkeypatch):
+    """The reading's accounts reach the window's engine (Engine.signed_in), so h says it as the terminal does
+    (accountwords.elsewhere_note): a session that ran on another organisation, its digest goes to this one."""
+    shown = window()
+    read(qapp, shown)
+    here = shown.engine.state.account
+    assert here is not None and here == next(a for a in shown.snap.accounts if a.cli == "claude")
+    other = replace(closed_one(shown), org=here.org_id + "-other")
+    same = replace(closed_one(shown), org=here.org_id)
+    said: list[str] = []
+    real = shown.front.say_note
+    monkeypatch.setattr(shown.front, "say_note", lambda note: said.append(note.words) or real(note))
+    monkeypatch.setattr(actions, "write_handover", lambda old, how, now, member_of: actions.Handed("THE HANDOVER"))
+    taking(shown, other)
+    shown.engine.handover(other, "transcript")
+    note = accountwords.elsewhere_note(other, "a digest of it", here)
+    assert note is not None and note.words in said and "ran on another organisation" in note.words
+    until(qapp, lambda: world.opened)
+    shown.front.settle()
+    said.clear()
+    world.opened.clear()
+    taking(shown, same)
+    shown.engine.handover(same, "transcript")  # ran here: not a word of it
+    assert said and not any("another organisation" in words for words in said)
+    until(qapp, lambda: world.opened)
+    shown.front.settle()
+
+
+@pytest.mark.parametrize("acting", [True, False], ids=["a dashboard acts", "the window alone"])
+def test_the_windows_claude_update_is_left_to_a_dashboard_that_acts(qapp, window, world, monkeypatch, acting):
+    """Two claude updates at once would race: while another live process holds the actor lock, neither h's
+    fresh session (Engine.open) nor Enter's tabs nor p (the opener) run it; a window open alone does. h's asks
+    the last reading (DashSnapshot.acting), never the process itself on the window's thread."""
+    shown = window()
+    read(qapp, shown)
+    fresh = handover.fresh(closed_one(shown), "THE HANDOVER")
+    ran: list[str] = []
+    held = {"pid": 4242, "started": "made-up"}
+    shown.take(shown.store, replace(shown.snap, acting=held if acting else None), False, "")
+    monkeypatch.setattr(actor, "holder", lambda: held)
+    monkeypatch.setattr(actor, "running", lambda record: pytest.fail("the process looked at on the window's thread"))
+    monkeypatch.setattr(alerts, "update_due", lambda updating, clis: not updating)
+    monkeypatch.setattr(alerts, "run_claude_update", lambda: ran.append("engine") or (claudeupdate.Outcome(True, "", ""),
+                                                                                       None))
+    monkeypatch.setattr(claudeupdate, "before_opening", lambda say=None: ran.append("opener"))
+    shown.engine.open([fresh])
+    until(qapp, lambda: world.opened)
+    shown.front.settle()
+    assert world.opened == [fresh] and not shown.engine.state.updating_claude
+    world.opened.clear()
+    monkeypatch.setattr(actor, "running", lambda record: acting and record == held)  # the opener's, on its threads
+    shown.opener.open_now([fresh], {})  # Enter's, as on its thread
+    session = closed_one(shown)
+    monkeypatch.setattr(opening.prompting, "send", lambda *args: None)
+    shown.opener.write_now(session, "tab", "go on", {})  # p's, as on its thread
+    assert ran == ([] if acting else ["engine", "opener", "opener"])
 
 
 def test_the_opened_sessions_and_the_leftovers_are_the_windows_way(qapp, window, world, monkeypatch):
