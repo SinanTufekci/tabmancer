@@ -1928,7 +1928,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if team is None:
                 return
             try:
-                teams.put(team, UI_TRIES)
+                teams.make(team, UI_TRIES)  # a team of that name made meanwhile: Taken
             except Busy as error:
                 self.notify(teams.not_saved_words(f"{team.name} was not made", error), severity="warning", timeout=8)
                 return
@@ -1939,7 +1939,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         folders = list(dict.fromkeys(s.cwd for s in newest if s.cwd))  # the folder box completes these
         found = newsessions.projects(list(self.sessions.values()))  # and lists these, as n does
         working = [(state.team, self.open_members(state)) for state in self.team_states.values()]
-        self.push_screen(NewTeamDialog(folder or str(Path.home()), set(teams.load()), folders, found,
+        self.push_screen(NewTeamDialog(folder or str(Path.home()), set(teams.load(UI_TRIES)), folders, found,
                                        [(team, names) for team, names in working if names]), made)
 
     def open_members(self, state: teamtree.TeamState) -> set[str]:

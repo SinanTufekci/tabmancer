@@ -1235,8 +1235,8 @@ class MainWindow(QMainWindow):
             open_now = {name for name, s in self.members_now(state).items() if s is not None and s.exit is Exit.RUNNING}
             if open_now:
                 working.append((state.team, open_now))
-        asked = newteam.NewTeamDialog(self, self.team_folder(), set(teams.load()), folders, working, self.asker,
-                                      self.accent)
+        asked = newteam.NewTeamDialog(self, self.team_folder(), set(teams.load(UI_TRIES)), folders, working,
+                                      self.asker, self.accent)
         asked.made.connect(self.team_made)
         asked.open()
 
@@ -1258,8 +1258,9 @@ class MainWindow(QMainWindow):
     def team_made(self, made: object) -> None:
         """The new team's Ctrl+S: saved under the teams' lock (UI_TRIES), started, its members first and the
         lead last, and shown in the Team panel; not made, and that is said, while another tabmancer changes the
-        teams or teams.json can't be read. A goal a team at work has already, or adds to, is the terminal
-        dashboard's for now (the window types into no member's tab): said, its words on the clipboard."""
+        teams, teams.json can't be read, or a team of that name was made meanwhile. A goal a team at work has
+        already, or adds to, is the terminal dashboard's for now (the window types into no member's tab): said,
+        its words on the clipboard."""
         if isinstance(made, TellTeam):
             QApplication.clipboard().setText(made.message)
             self.tell_note(actions.Note(TELL_ELSEWHERE.format(team=made.team, to=made.to), "warning", 14))
@@ -1271,7 +1272,7 @@ class MainWindow(QMainWindow):
         if not isinstance(made, teams.Team):
             return
         try:
-            teams.put(made, UI_TRIES)
+            teams.make(made, UI_TRIES)  # a team of that name made meanwhile: Taken
         except Busy as error:
             self.tell_note(actions.Note(teams.not_saved_words(f"{made.name} was not made", error), "warning", 8))
             return

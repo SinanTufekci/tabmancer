@@ -1,8 +1,8 @@
 """teams.json changed under its lock (teams.changing): two windows, or a window and `tabmancer team`, each
 keep the other's change; a held lock is waited for a moment on a UI thread (UI_TRIES) and the full wait on
 the command line, then said in plain words; a teams.json that is there but cannot be read is never
-written over (every team in it would be lost). lineups.json, the line-ups kept with Ctrl+L, the same
-way."""
+written over (every team in it would be lost); a new team is never saved over one of that name made
+meanwhile (teams.make). lineups.json, the line-ups kept with Ctrl+L, the same way."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from conftest import wait_until
 from test_engine_team_start import Front, lead
 from test_team_keys import Recorder, keys_on, shop
 
@@ -243,3 +244,81 @@ def test_a_lineups_file_that_cannot_be_read_is_never_written_over(held, waits):
     lineups_file().unlink()  # none yet: made at the first keep
     teams.keep_lineup("docs", "docs: z")
     assert teams.saved_lineups() == {"docs": "docs: z"}
+
+
+TAKEN = "shop was not made: a team named shop was made meanwhile. Give yours another name."
+
+
+def test_a_new_team_is_never_saved_over_one_of_that_name_made_meanwhile(tmp_path, waits):
+    team = shop(tmp_path)  # made by another window since this one's T dialog read the names in use
+    before = teams_file().read_bytes()
+    with pytest.raises(teams.Taken) as refused:
+        teams.make(teams.new_team("shop", str(tmp_path), "Another goal", []), config.UI_TRIES)
+    assert teams_file().read_bytes() == before and teams.load()["shop"] == team
+    assert isinstance(refused.value, config.Busy)  # every caller that says Busy says this too
+    assert teams.not_saved_words("shop was not made", refused.value) == TAKEN
+    with config.locked(teams.FILE), pytest.raises(config.Busy):
+        teams.make(teams.new_team("docs", str(tmp_path), "Write", []), config.UI_TRIES)
+    assert waits == [config.BUSY_WAIT] * (config.UI_TRIES - 1) and teams_file().read_bytes() == before
+    teams.make(teams.new_team("docs", str(tmp_path), "Write", []), config.UI_TRIES)
+    assert sorted(teams.load()) == ["docs", "shop"]
+
+
+def test_load_waits_for_a_held_teams_file_as_long_as_asked(tmp_path, waits, monkeypatch):
+    shop(tmp_path)
+    read_text = Path.read_text
+
+    def held_open(self, *args, **kwargs):  # the file itself held by another process (replaced just now)
+        if self.name == teams.FILE:
+            raise PermissionError("in use")
+        return read_text(self, *args, **kwargs)
+
+    with monkeypatch.context() as held:
+        held.setattr(Path, "read_text", held_open)
+        assert teams.load(config.UI_TRIES) == {}  # read as none: a UI thread is not held up ~1 s
+        assert waits == [config.BUSY_WAIT] * (config.UI_TRIES - 1)
+    assert list(teams.load()) == ["shop"]
+
+
+async def test_the_dashboards_T_says_why_a_team_was_not_made(fake_home, tmp_path, monkeypatch):
+    """Ctrl+S with another tabmancer changing the teams, then with a team of that name made meanwhile: not
+    made, said, nothing opened, the other team kept; the names in use are read with a short wait."""
+    from tabmancer import app as app_module
+    from tabmancer.app import SessionPicker
+    from tabmancer.teamview import NewTeamDialog
+
+    opened = []
+    monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
+    loads: list[int | None] = []
+    real_load = teams.load
+    monkeypatch.setattr(teams, "load", lambda tries=None: loads.append(tries) or real_load(tries))
+    folder = tmp_path / "shop"
+    folder.mkdir()
+    other = teams.new_team("shop", str(folder), "Another window's goal", teams.parse_members("docs: z"))
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await wait_until(pilot, lambda: app.sessions)
+
+        async def make_shop() -> None:
+            await pilot.press("T")  # no teams yet: straight to a new one
+            await wait_until(pilot, lambda: isinstance(app.screen, NewTeamDialog))
+            dialog = app.screen
+            dialog.query_one("#team-name").value = "shop"
+            dialog.query_one("#team-folder").value = str(folder)
+            dialog.query_one("#team-goal").text = "Add a checkout"
+
+        def said(words: str) -> bool:
+            return any(str(n.message) == words for n in app._notifications)
+
+        await make_shop()
+        assert config.UI_TRIES in loads  # the names in use, read on the UI thread
+        with config.locked(teams.FILE):
+            await pilot.press("ctrl+s")
+            await wait_until(pilot, lambda: not isinstance(app.screen, NewTeamDialog))
+        assert said(teams.not_saved_words("shop was not made", config.Busy("held")))
+        assert teams.load() == {} and opened == []
+        await make_shop()
+        teams.put(other)  # made meanwhile, elsewhere
+        await pilot.press("ctrl+s")
+        await wait_until(pilot, lambda: said(TAKEN))
+        assert teams.load() == {"shop": other} and opened == []

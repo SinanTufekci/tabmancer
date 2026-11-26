@@ -416,8 +416,10 @@ def has_cli(cli: str) -> bool:
     return any(m.cli == cli for team in load().values() for m in team.members)
 
 
-def load() -> dict[str, Team]:
-    return _teams(read_json(FILE))
+def load(tries: int | None = None) -> dict[str, Team]:
+    """The saved teams. tries: how often a teams.json another process holds is tried (read_json; UI_TRIES on a
+    UI thread). Held past them, or unreadable: none."""
+    return _teams(read_json(FILE, tries))
 
 
 def _teams(data: object) -> dict[str, Team]:
@@ -453,6 +455,10 @@ class Unreadable(Busy):
     """teams.json is there but could not be read: written over, every team in it would be lost."""
 
 
+class Taken(Busy):
+    """make: a team of that name was saved since the name was picked (another window, or `tabmancer team`)."""
+
+
 @contextmanager
 def changing(tries: int | None = None) -> Iterator[dict[str, Team]]:
     """The saved teams, to change in place, saved again (when changed) on the way out: read and written under
@@ -477,6 +483,15 @@ def put(team: Team, tries: int | None = None) -> None:
         saved[team.name] = team
 
 
+def make(team: Team, tries: int | None = None) -> None:
+    """A new team saved, the others as they are now (changing). Taken, and nothing written, when a team of that
+    name is saved now: made meanwhile elsewhere, put would replace it, and its members and goal be lost."""
+    with changing(tries) as saved:
+        if team.name in saved:
+            raise Taken(f"a team named {team.name} was made meanwhile")
+        saved[team.name] = team
+
+
 def drop(name: str, tries: int | None = None) -> None:
     """A team deleted, the others as they are now (changing). Its sessions stay."""
     with changing(tries) as saved:
@@ -486,6 +501,8 @@ def drop(name: str, tries: int | None = None) -> None:
 def not_saved_words(what: str, error: Busy, file: str = FILE) -> str:
     """What a team change that changing (or a line-up keep_lineup: file LINEUPS_FILE) refused says: what was
     not done, and why."""
+    if isinstance(error, Taken):
+        return f"{what}: {error}. Give yours another name."
     if isinstance(error, Unreadable):
         return (f"{what}: {file} could not be read, so it was left as it was. Try again in a moment; if it "
                 f"stays so, look at the file in {config_dir()}.")
