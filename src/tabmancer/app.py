@@ -78,7 +78,7 @@ from .actions import (
 )
 from .actions import clip as _clip
 from .clisettings import CliSettings
-from .config import merge_json, read_json
+from .config import NOT_SAVED, merge_json, read_json  # NOT_SAVED: merge_json refused, said as is
 from .dialogs import frame, title
 from .engine import (  # the timers' schedule (engine.SCHEDULE)
     ACCOUNTS_SECONDS,
@@ -173,7 +173,6 @@ TEAM_MESSAGES_FROM = 150  # columns from which a team's preview lists its messag
 SPLIT_FROM = (180, 40)
 # Said instead of "remembered" when config.json is there but could not be read: writing the one key
 # alone would have wiped the rest of it (merge_json refuses).
-NOT_SAVED = "Not saved: config.json could not be read, so it was left as it is."
 PANE_LEAST, PANE_MOST = 56, 90  # the preview's width there: the window's less 132, within these
 PANE_TAKES = 132
 # The sidebar's marks, said once under its projects (two lines of the sidebar's width).
@@ -2291,17 +2290,17 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         self.push_screen(newsessions.NewSessions(found, ticked), start)
 
     def action_settings(self) -> None:
-        before = clis.enabled()
-
-        def save(chosen: list[str] | None) -> None:
-            if chosen is None:
+        """,: which CLIs are listed and the main one (CliSettings saves them); then the list read again when
+        other CLIs are listed now."""
+        def saved(done: clis.Saved | None) -> None:
+            if done is None:
                 return
-            after = clis.set_enabled(chosen)
-            if after != before:
-                self.notify("Listing sessions from " + ", ".join(clis.label(n) for n in after) + ".", timeout=4)
+            if done.kept and done.words:
+                self.notify(done.words, timeout=4)
+            if done.changed:
                 self.reload_sessions()
 
-        self.push_screen(CliSettings(), save)
+        self.push_screen(CliSettings(), saved)
 
     @work(thread=True, exclusive=True, group="reload")
     def reload_sessions(self) -> None:

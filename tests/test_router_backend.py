@@ -445,7 +445,7 @@ async def test_m_in_the_cli_dialog_picks_the_main_cli_and_enter_saves_it():
         assert clis.main_cli() == "claude"  # nothing saved before Enter
         await pilot.press("enter")
         await pilot.pause()
-    assert got == [["claude", "agy"]]  # agy as main is turned on too
+    assert [saved.after for saved in got] == [["claude", "agy"]]  # agy as main is turned on too (clis.Saved)
     assert clis.main_cli() == "agy"
 
 
