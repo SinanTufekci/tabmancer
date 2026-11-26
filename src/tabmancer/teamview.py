@@ -432,10 +432,6 @@ def _clip_goal(goal: str, most: int = 220) -> str:
     return line if len(line) <= most else line[:most - 1].rstrip() + "…"
 
 
-ADD_QUESTION = "Add members as name: area (several with ;, @agy picks Antigravity, @sonnet picks a model)"
-ADD_EXAMPLE = "docs: the README and the user guide @agy"
-
-
 class TeamHandoverDialog(ModalScreen[tuple[str, str] | None]):
     """The new generation of a team handed over: the lead's handover (to read), the line-up it
     suggests and the context cap its members start under (yours to change). Ctrl+S starts it, and
@@ -575,6 +571,11 @@ class ScreenSurface:
 
     def put_on_clipboard(self, text: str) -> None:
         copy_text(self.screen.app, text)
+
+    def hand_over(self, session: Session) -> None:
+        opener = getattr(self.screen.app, "open_handover", None)
+        if opener is not None:
+            opener(session)
 
 
 class TeamScreen(Screen):
@@ -767,13 +768,7 @@ class TeamScreen(Screen):
     def action_handover(self) -> None:
         """H: hand the picked member alone over to a fresh session with the same name and role."""
         member = self.graph.selected_member()
-        session = self.sessions.get(member.name) if member is not None else None
-        if session is None or session.path is None:
-            self.notify("This member has no session to hand over yet.", severity="warning")
-            return
-        opener = getattr(self.app, "open_handover", None)
-        if opener is not None:
-            opener(session)
+        self.team_keys.hand_over(member, self.sessions.get(member.name) if member is not None else None)
 
     def action_close_team(self) -> None:
         """x, twice: every open member's tab closes. Claude exits as on /exit, so each session can
@@ -791,8 +786,8 @@ class TeamScreen(Screen):
     def action_add_member(self) -> None:
         """a: new members for the team. At work, each opens and introduces itself to the lead; closed,
         they join it and start with it (s), as on the team's row in the list."""
-        at_work = any(s is not None and s.exit is Exit.RUNNING for s in self.sessions.values())
-        self.app.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter="add them"),
+        at_work = teamkeys.at_work(self.sessions)
+        self.app.push_screen(LineDialog(teamforms.ADD_QUESTION, teamforms.ADD_EXAMPLE, enter=teamforms.ADD_ENTER),
                              lambda text: self.team_keys.add(self.team, text, at_work))
 
     def action_remove_member(self) -> None:
@@ -864,9 +859,9 @@ class GoalDialog(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label(title("The team's goal"))
+            yield Label(title(teamforms.GOAL_TITLE))
             yield TextArea(self.goal, id="goal", compact=True)
-            yield Label(keys(("Ctrl+S", "save"), ("Enter", "a new line"), ("Esc", "cancel")), classes="hint")
+            yield Label(keys(*teamforms.GOAL_KEYS), classes="hint")
 
     def on_mount(self) -> None:
         box = self.query_one("#goal", TextArea)

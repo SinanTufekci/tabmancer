@@ -118,9 +118,8 @@ from .sessions import (
 from .shortcuts import DASHBOARD_WINDOW
 from .shutdowns import open_at_shutdown, recent_shutdowns
 from .statsview import StatsScreen, copy_text
+from .teamforms import ADD_ENTER, ADD_EXAMPLE, ADD_QUESTION
 from .teamview import (
-    ADD_EXAMPLE,
-    ADD_QUESTION,
     JoinTeam,
     LineDialog,
     NewTeamDialog,
@@ -2248,7 +2247,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         """New members for a team: at work, each opens and introduces itself to the lead; closed, they
         join it and start with it (teamkeys.TeamKeys.add)."""
         at_work = self.team_open(state.team.name)
-        self.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter="add them"),
+        self.push_screen(LineDialog(ADD_QUESTION, ADD_EXAMPLE, enter=ADD_ENTER),
                          lambda text: self.row_keys.add(state.team, text, at_work))
 
     def open_team(self, team: teams.Team, launches: list[Launch]) -> None:
@@ -3164,6 +3163,9 @@ class RowSurface:
 
     def put_on_clipboard(self, text: str) -> None:
         copy_text(self.app, text)
+
+    def hand_over(self, session: Session) -> None:
+        self.app.open_handover(session)
 
     def after_update(self, what: str, then: Callable[[], None]) -> bool:
         return self.app.after_update(what, then)

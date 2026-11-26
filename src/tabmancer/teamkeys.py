@@ -1,6 +1,6 @@
 """A team's keys, in one copy: s starts it (a closed team whose cache is gone asks first), x twice closes
-its members' tabs, a adds members, d twice takes one off, g changes the goal (the lead is told), Enter on
-a member opens it or goes to its tab; and the dashboard's own: a team's sessions opened (open_team), a
+its members' tabs, a adds members, d twice takes one off, g changes the goal (the lead is told), H hands
+the picked member alone over, Enter on a member opens it or goes to its tab; and the dashboard's own: a team's sessions opened (open_team), a
 message for a member (tell_team), members joining a team at work (join_team). The terminal's team row and
 its team screen both call these; each is a Surface, what the keys ask of the window they run in.
 
@@ -28,6 +28,7 @@ COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon 
 REMOVE_AGAIN_SECONDS = 6  # d once on a member: d again this soon takes it off
 NOBODY_OPEN = "No member is open."
 PICK_FIRST = "Pick a member with ← → first."
+NOTHING_TO_HAND_OVER = "This member has no session to hand over yet."
 
 
 class Surface(Protocol):
@@ -69,6 +70,11 @@ class Surface(Protocol):
     def put_on_clipboard(self, text: str) -> None:
         ...
 
+    def hand_over(self, session: Session) -> None:
+        """H: this member's session handed over to a fresh one, as h hands a session over (the dialog asks
+        how; a busy one is queued till it finishes)."""
+        ...
+
 
 class Dashboard(Surface, Protocol):
     """What the dashboard's own keys ask besides: how its sessions open, its members' messages."""
@@ -95,6 +101,11 @@ class Dashboard(Surface, Protocol):
     def show_team(self, team: teams.Team) -> None:
         """The team's own view."""
         ...
+
+
+def at_work(members: dict[str, Session | None]) -> bool:
+    """Whether a member of the team is open: a adds members that open at once, else they join it closed."""
+    return any(session is not None and session.exit is Exit.RUNNING for session in members.values())
 
 
 class TeamKeys:
@@ -209,6 +220,14 @@ class TeamKeys:
             self.surface.go_to_tab(session)
             return
         self.surface.open_sessions([teams.launch(team, member, resume=session if session and session.path else None)])
+
+    def hand_over(self, member: teams.Member | None, session: Session | None) -> None:
+        """H: the picked member alone handed over to a fresh session with the same name and role; one with
+        no session yet (or none picked) has nothing to hand over."""
+        if member is None or session is None or session.path is None:
+            self.surface.say(Note(NOTHING_TO_HAND_OVER, "warning"))
+            return
+        self.surface.hand_over(session)
 
     # --- a, d, g: the line-up and the goal -----------------------------------------------------------
 

@@ -117,6 +117,15 @@ KEEP_AS, KEEP_EXAMPLE = "Keep this line-up as", "e.g. api and screens"  # Ctrl+L
 DECIDE_ASIDE = "members, picked by the lead"  # beside the At most box
 NAMED_NONE = "Claude's answer named no members."  # Ctrl+R's answer with no line-up in it
 
+# a in a team's view (or on its row): new members, on one line
+ADD_QUESTION = "Add members as name: area (several with ;, @agy picks Antigravity, @sonnet picks a model)"
+ADD_EXAMPLE = "docs: the README and the user guide @agy"
+ADD_ENTER = "add them"
+ADD_KEYS = [("Enter", ADD_ENTER), ("Esc", "cancel")]
+# g in a team's view: its goal, its lines kept
+GOAL_TITLE = "The team's goal"
+GOAL_KEYS = [("Ctrl+S", "save"), ("Enter", "a new line"), ("Esc", "cancel")]
+
 
 def keys_with_improve(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """KEYS with Ctrl+E after suggest."""

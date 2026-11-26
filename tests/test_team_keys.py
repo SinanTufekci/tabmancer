@@ -1,4 +1,4 @@
-"""A team's keys in one copy (teamkeys.TeamKeys), with no UI: what s, x, Enter, a, d and g say and do
+"""A team's keys in one copy (teamkeys.TeamKeys), with no UI: what s, x, Enter, a, d, g and H say and do
 through a surface that records, the presses that need a second one, and the timer that forgets them."""
 
 from __future__ import annotations
@@ -50,6 +50,9 @@ class Recorder:
 
     def put_on_clipboard(self, text) -> None:
         self.calls.append(("clipboard", text[:40]))
+
+    def hand_over(self, session) -> None:
+        self.calls.append(("hand_over", session.session_id))
 
 
 def keys_on(surface: Recorder) -> teamkeys.TeamKeys:
@@ -228,3 +231,23 @@ def test_a_dashboard_waits_for_the_opening_lock_only_a_moment(fake_home, tmp_pat
     assert len(surface.calls) == 1 and surface.calls[0][1].startswith("shop was not started")
     keys_on(surface).open_team(team, launches)
     assert surface.calls[-1][0] in ("open_sessions", "start_in_background")
+
+
+def test_h_hands_the_picked_member_over_and_says_why_not_when_there_is_nothing(fake_home, tmp_path):
+    team, surface = shop(tmp_path), Recorder()
+    keys = keys_on(surface)
+    api, ui = team.members[1], team.members[2]
+    nothing = ("say", teamkeys.NOTHING_TO_HAND_OVER, "warning", None)
+    keys.hand_over(None, None)  # none picked
+    keys.hand_over(ui, None)  # never started
+    keys.hand_over(api, Session(session_id="A", path=None, exit=Exit.RUNNING))  # no transcript yet
+    assert surface.calls == [nothing] * 3
+    surface.calls.clear()
+    keys.hand_over(api, opened("A", "busy"))  # a busy one too: the dialog and the queue are the surface's
+    assert surface.calls == [("hand_over", "A")]
+
+
+def test_at_work_is_any_member_open():
+    assert not teamkeys.at_work({})
+    assert not teamkeys.at_work({"lead": None, "api": closed("A")})
+    assert teamkeys.at_work({"lead": None, "api": opened("A", "busy")})
