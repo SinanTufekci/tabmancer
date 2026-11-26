@@ -41,6 +41,7 @@ from . import (
     wrapped,
 )
 from .actions import Note
+from .config import UI_TRIES
 from .launch import Launch
 from .openings import Openings
 from .sessions import Exit, Session
@@ -410,7 +411,7 @@ class Engine:
         for sid, fresh in updates.items():
             if sid in handing:
                 how = state.queued.pop(sid)  # it finished: the handover asked for with h
-                saved = actions.save_queued(state.queued)
+                saved = actions.save_queued(state.queued, UI_TRIES)
                 done = actions.queued_finished(sid, fresh, front.monitoring(), actor.first)
                 front.say_note(actions.queue_note(done.note, saved))
                 if not done.hand_over:
@@ -516,7 +517,7 @@ class Engine:
             return
         if session.session_id in state.queued:  # h again: not after all
             del state.queued[session.session_id]
-            front.say_note(actions.queue_note(actions.unqueued_note(session), actions.save_queued(state.queued)))
+            front.say_note(actions.queue_note(actions.unqueued_note(session), actions.save_queued(state.queued, UI_TRIES)))
             front.update_row(session)
             return
         if how is not None:
@@ -531,7 +532,7 @@ class Engine:
         current = state.sessions.get(session.session_id, session)
         if actions.busy(current):
             state.queued[session.session_id] = how
-            front.say_note(actions.queue_note(actions.queued_note(session, how), actions.save_queued(state.queued)))
+            front.say_note(actions.queue_note(actions.queued_note(session, how), actions.save_queued(state.queued, UI_TRIES)))
             front.update_row(current)
             return
         # As the list has it now, not as it was when h was pressed: it may have opened or closed

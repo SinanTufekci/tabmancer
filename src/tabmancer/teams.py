@@ -1419,12 +1419,12 @@ def note_opening(names: list[str], now: float | None = None) -> None:
         write_json(OPENING_FILE, {**_opening_now(now), **dict.fromkeys(names, now)})
 
 
-def claim_opening(names: list[str], now: float | None = None) -> set[str]:
+def claim_opening(names: list[str], now: float | None = None, tries: int | None = None) -> set[str]:
     """Those of these session names opening already; the rest noted as opening now. Checked and noted
     under one lock, so of two starts at once only one opens each member. config.Busy when the lock could
-    not be got: nothing noted, so start nothing."""
+    not be got (tries: config.locked's): nothing noted, so start nothing."""
     now = time.time() if now is None else now
-    with locked(OPENING_FILE):
+    with locked(OPENING_FILE, tries):
         coming = opening(now) & set(names)
         fresh = [name for name in names if name not in coming]
         if fresh:

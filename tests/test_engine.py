@@ -20,6 +20,7 @@ from tabmancer import (
     actor,
     alerts,
     claudeupdate,
+    config,
     engine,
     openings,
     store,
@@ -72,7 +73,8 @@ class Front:
 @pytest.fixture
 def claims(monkeypatch):
     saved: list[dict] = []
-    monkeypatch.setattr(actions, "save_queued", lambda queued: saved.append(dict(queued)) or True)
+    monkeypatch.setattr(actions, "save_queued",  # saved only with the UI's short wait (else QUEUE_UNSAVED is said)
+                        lambda queued, tries=None: tries == config.UI_TRIES and saved.append(dict(queued)) is None)
     monkeypatch.setattr(actor, "first", lambda key: True)
     return saved
 
@@ -105,7 +107,7 @@ def test_a_poll_says_what_turned_hands_over_and_delivers_in_order(claims):
 
 
 def test_a_queue_not_saved_is_said_with_what_h_did(claims, monkeypatch):
-    monkeypatch.setattr(actions, "save_queued", lambda queued: False)  # the file was there but unreadable
+    monkeypatch.setattr(actions, "save_queued", lambda queued, tries=None: False)  # the file was there but unreadable
     front = Front()
     busy, q = s("busy"), s("q")
     eng = made(front, acts=True, sessions={"busy": busy, "q": q}, queued={"q": "self"})

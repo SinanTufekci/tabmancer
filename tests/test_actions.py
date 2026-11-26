@@ -618,3 +618,18 @@ def test_what_h_says_on_a_working_session_and_when_it_finishes():
     assert not unclaimed.hand_over and unclaimed.note.severity == "warning" and unclaimed.note.words == (
         "shop finished, but tabmancer could not claim its handover (its claims folder could not be written), so it "
         "was not handed over from here: h hands it over.")
+
+
+def test_a_window_saves_the_queue_or_opens_a_team_with_a_moments_wait(processes, monkeypatch):
+    """On a UI thread (the engine's and the team keys' UI_TRIES): a held lock is waited for ~75 ms, not
+    BUSY_TRIES' second, then said."""
+    from tabmancer import config
+
+    waits = []
+    monkeypatch.setattr(config.time, "sleep", waits.append)
+    team = shop_team()
+    launches = actions.start_team(team, {}).launches
+    with config.locked(actions.QUEUE), config.locked(teams.OPENING_FILE):
+        assert actions.save_queued({"a": "self"}, config.UI_TRIES) is False
+        assert actions.team_opening(team, launches, config.UI_TRIES).words.startswith("shop was not started")
+    assert waits == [config.BUSY_WAIT] * (2 * (config.UI_TRIES - 1))

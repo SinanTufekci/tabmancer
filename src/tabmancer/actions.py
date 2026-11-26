@@ -499,12 +499,13 @@ class TeamOpening:
     words: str = ""
 
 
-def team_opening(team: teams.Team, launches: list[Launch]) -> TeamOpening:
+def team_opening(team: teams.Team, launches: list[Launch], tries: int | None = None) -> TeamOpening:
     """A team's sessions, split into background members and tabs. A member opened a moment ago, here or
     by `tabmancer team start`, is not opened again: s twice, while the first claude --bg calls were
-    still running, started every member twice. The ones that go ahead are noted as opening."""
+    still running, started every member twice. The ones that go ahead are noted as opening. tries: how
+    long a held lock is waited for (teams.claim_opening; a dashboard's UI_TRIES)."""
     try:  # checked and noted under one lock: of two s presses at once, one opens each member
-        coming = teams.claim_opening([teams.session_name_of(team, launch) for launch in launches])
+        coming = teams.claim_opening([teams.session_name_of(team, launch) for launch in launches], tries=tries)
     except Busy:
         return TeamOpening([], [], f"{team.name} was not started: another tabmancer window is starting members "
                                    "right now. Press s again in a moment.")
@@ -902,21 +903,22 @@ def queue_note(note: Note, saved: bool) -> Note:
                    seconds=max(note.seconds or 0, QUEUE_UNSAVED.seconds or 0))
 
 
-def save_queued(mine: dict[str, str]) -> bool:
+def save_queued(mine: dict[str, str], tries: int | None = None) -> bool:
     """This window's queued handovers, saved beside the other open windows' (theirs are kept, a closed
     one's go), under the queue's lock, so two windows saving at once each keep the other's. False, the
     file left as it was, when it is there but could not be read (saving only this window's would drop
     the other windows' entries), its lock could not be got, or it could not be written: the caller says
-    QUEUE_UNSAVED. A file that reads but holds no queue has nothing to keep and is written over."""
+    QUEUE_UNSAVED. A file that reads but holds no queue has nothing to keep and is written over. tries: how
+    long a held lock or file is waited for (config.locked; the engine's UI_TRIES, on a UI thread)."""
     try:
-        with locked(QUEUE):
-            return _save_queued(mine)
+        with locked(QUEUE, tries):
+            return _save_queued(mine, tries)
     except Busy:
         return False
 
 
-def _save_queued(mine: dict[str, str]) -> bool:
-    saved = read_json(QUEUE)
+def _save_queued(mine: dict[str, str], tries: int | None) -> bool:
+    saved = read_json(QUEUE, tries)
     if saved is None and os.path.lexists(config_dir() / QUEUE):
         return False
     entries = {}

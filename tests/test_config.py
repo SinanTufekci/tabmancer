@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from tabmancer import config
 
 
@@ -144,3 +146,56 @@ def test_a_lock_left_by_a_process_that_died_is_taken_over(monkeypatch):
         assert path.stat().st_mtime > old  # this process's now
     assert not path.exists()
     assert issubclass(config.Busy, OSError)  # callers that catch OSError catch it too
+
+
+@pytest.mark.parametrize("fresh", [True, False])
+def test_a_holder_waiting_inside_its_lock_is_never_taken_over(monkeypatch, fresh):
+    """A live holder whose read and write wait out a held file (a scanner), on a machine so loaded that each
+    BUSY_WAIT takes 0.2 s, holds the lock far past LOCK_STALE_SECONDS: its waits keep the lock fresh, so
+    nobody takes it over. Without that (fresh=False, the check that the test can tell), it would be."""
+    clock = [1_000_000.0]
+    monkeypatch.setattr(config.time, "time", lambda: clock[0])
+    monkeypatch.setattr(config.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + 0.2))
+    if not fresh:
+        monkeypatch.setattr(config, "_freshen", lambda: None)
+    path = config.config_dir() / "queue.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}", encoding="utf-8")
+    real_read, real_replace = Path.read_text, os.replace
+
+    def held_read(self, *args, **kwargs):
+        if self == path:
+            raise PermissionError(13, "held by a scanner")
+        return real_read(self, *args, **kwargs)
+
+    def held_replace(src, dst):
+        if Path(dst) == path:
+            raise PermissionError(13, "held by a scanner")
+        return real_replace(src, dst)
+
+    with config.locked("queue.json"):
+        lock = config.config_dir() / "queue.json.lock"
+        os.utime(lock, (clock[0], clock[0]))  # made now, on the test's clock
+        started = clock[0]
+        with monkeypatch.context() as scanned:
+            scanned.setattr(config.Path, "read_text", held_read)
+            scanned.setattr(config.os, "replace", held_replace)
+            assert config.read_json("queue.json") is None
+            with pytest.raises(PermissionError):
+                config.write_json("queue.json", {"a": 1})
+        assert clock[0] - started > 2 * config.LOCK_STALE_SECONDS  # held long past the stale age
+        if fresh:
+            with pytest.raises(config.Busy), config.locked("queue.json", tries=1):
+                pass
+        else:
+            with config.locked("queue.json", tries=1):  # taken over as left by a process that died
+                pass
+
+
+def test_a_ui_waits_for_a_held_lock_only_a_moment(monkeypatch):
+    waits = []
+    monkeypatch.setattr(config.time, "sleep", waits.append)
+    with config.locked("queue.json"), pytest.raises(config.Busy), config.locked("queue.json", config.UI_TRIES):
+        pass
+    assert waits == [config.BUSY_WAIT] * (config.UI_TRIES - 1)
+    assert sum(waits) < 0.1 < config.LOCK_STALE_SECONDS  # ~75 ms: not a freeze

@@ -207,3 +207,24 @@ def test_a_row_and_a_view_given_the_same_presses_share_them(fake_home, tmp_path)
     alone = teamkeys.TeamKeys(Recorder(), clock=lambda: 0.0)
     alone.close(team, members)
     assert alone.closing == "shop" and on_row.closing is None
+
+
+def test_a_dashboard_waits_for_the_opening_lock_only_a_moment(fake_home, tmp_path, monkeypatch):
+    """open_team runs on a dashboard's UI thread: a held opening lock (another window's s, team start) is
+    waited for UI_TRIES times, then said; s again opens them."""
+    from tabmancer import config
+
+    class Updated(Recorder):
+        def after_update(self, what, then) -> bool:
+            return False  # no claude update due
+
+    team, surface = shop(tmp_path), Updated()
+    launches = teams.start(team, {})
+    waits = []
+    monkeypatch.setattr(config.time, "sleep", waits.append)
+    with config.locked(teams.OPENING_FILE):
+        keys_on(surface).open_team(team, launches)
+    assert waits == [config.BUSY_WAIT] * (config.UI_TRIES - 1)
+    assert len(surface.calls) == 1 and surface.calls[0][1].startswith("shop was not started")
+    keys_on(surface).open_team(team, launches)
+    assert surface.calls[-1][0] in ("open_sessions", "start_in_background")

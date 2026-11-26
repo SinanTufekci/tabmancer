@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from . import actions, handover, teambus, teams
 from .actions import Changed, Note
+from .config import UI_TRIES
 from .launch import Launch
 from .sessions import Exit, Session, Status
 
@@ -175,7 +176,7 @@ class TeamKeys:
         if any(launch.cli == "claude" for launch in launches) and surface.after_update(
                 f"{team.name} starts", lambda: surface.open_team(team, launches)):
             return
-        opening = actions.team_opening(team, launches)
+        opening = actions.team_opening(team, launches, UI_TRIES)  # on a UI thread: no long wait for the lock
         if opening.words:
             self.say(opening.words, 3)
             return

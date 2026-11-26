@@ -62,7 +62,7 @@ class Front:
 @pytest.fixture
 def saved(monkeypatch):
     kept: dict = {"queued": [], "teams": []}
-    monkeypatch.setattr(actions, "save_queued", lambda queued: kept["queued"].append(dict(queued)) or True)
+    monkeypatch.setattr(actions, "save_queued", lambda queued, tries=None: kept["queued"].append(dict(queued)) or True)
     monkeypatch.setattr(teams, "save", lambda all_teams: kept["teams"].append(dict(all_teams)))
     return kept
 
