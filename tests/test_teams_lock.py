@@ -138,7 +138,7 @@ def test_the_dashboards_team_keys_wait_a_moment_and_say_what_was_not_done(tmp_pa
     said = [call for call in surface.calls if call[0] == "say"]
     assert [words for _, words, _, _ in said] == [
         f"Nobody joined: {busy}",
-        actions.removal_ask(api, None).words,
+        actions.removal_ask(team, api, None).words,
         f"api is still on the team: {busy}",
         f"The goal is not changed: {busy}",
     ]

@@ -171,7 +171,7 @@ def test_d_twice_takes_the_member_picked_in_the_team_panel_off_and_tells_the_lea
     lead = shown.members_now(shown.snap.team_states[SHOP])["lead"]
     on_the_team_panel(qapp, shown, "api")
     press(qapp, shown, "d")
-    assert said(shown).startswith("Press d again to take api off the team. Its sessions stay.")
+    assert said(shown).startswith("Press d again to take api off the team shop. Its sessions stay.")
     assert "api" in members_of()
     press(qapp, shown, "d")
     assert members_of() == ["lead", "ui", "tests"]

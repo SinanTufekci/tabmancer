@@ -327,8 +327,9 @@ def test_members_added_removed_and_the_goal_changed():
     assert actions.removal_refusal(lead).severity == "warning"
     docs = next(m for m in added.team.members if m.name == "docs")
     assert actions.removal_refusal(docs) is None
-    assert actions.removal_ask(docs, member("docs")).words == (
-        "Press d again to take docs off the team. Its sessions stay. Its tab stays open, as an ordinary session.")
+    assert actions.removal_ask(added.team, docs, member("docs")).words == (
+        "Press d again to take docs off the team shop. Its sessions stay. Its tab stays open, as an ordinary "
+        "session.")
     removed = actions.remove_member(added.team, "docs")
     assert removed.done == "docs is off the team." and "docs" not in {m.name for m in removed.team.members}
     assert removed.note

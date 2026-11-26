@@ -750,8 +750,10 @@ class TeamScreen(Screen):
 
     @property
     def removing(self) -> str | None:
-        """d pressed once on this member: a second press takes it off."""
-        return self.team_keys.removing
+        """d pressed once on this team's member: a second press takes it off (one pressed on another team's
+        member of that name is not this one)."""
+        held = self.team_keys.removing
+        return held[1] if held is not None and held[0] == self.team.name else None
 
     def action_open_member(self) -> None:
         member = self.graph.selected_member()

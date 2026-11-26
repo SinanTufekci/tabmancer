@@ -103,6 +103,12 @@ class Dashboard(Surface, Protocol):
         ...
 
 
+def removal_on(team: str, member: str) -> str:
+    """What a first d is held on: that team's member, never a member of that name on another team (a
+    member's name has no '/'; a team's may)."""
+    return f"{team}/{member}"
+
+
 def at_work(members: dict[str, Session | None]) -> bool:
     """Whether a member of the team is open: a adds members that open at once, else they join it closed."""
     return any(session is not None and session.exit is Exit.RUNNING for session in members.values())
@@ -110,7 +116,7 @@ def at_work(members: dict[str, Session | None]) -> bool:
 
 class TeamKeys:
     """A surface's team keys, with its presses: the team x was pressed on once (closing), the team a cold
-    start was asked for (cold), the member d was pressed on (removing). clock: seconds, time.monotonic."""
+    start was asked for (cold), the team and member d was pressed on (removing). clock: seconds, time.monotonic."""
 
     def __init__(self, surface: Surface, clock: Callable[[], float],
                  presses: dict[str, tuple[str, float]] | None = None) -> None:
@@ -143,8 +149,13 @@ class TeamKeys:
         return self.held("cold")
 
     @property
-    def removing(self) -> str | None:
-        return self.held("remove")
+    def removing(self) -> tuple[str, str] | None:
+        """(team, member) d was pressed on once."""
+        held = self.held("remove")
+        if held is None:
+            return None
+        team, _, member = held.rpartition("/")
+        return team, member
 
     def say(self, words: str, seconds: float, severity: str = "information") -> None:
         self.surface.say(Note(words, severity, seconds))
@@ -253,8 +264,8 @@ class TeamKeys:
             if refusal is not None:
                 self.surface.say(refusal)
             return None
-        if not self.again("remove", member.name, REMOVE_AGAIN_SECONDS):
-            self.surface.say(actions.removal_ask(member, session))
+        if not self.again("remove", removal_on(team.name, member.name), REMOVE_AGAIN_SECONDS):
+            self.surface.say(actions.removal_ask(team, member, session))
             return None
         try:
             return actions.remove_member(team, member.name, UI_TRIES)

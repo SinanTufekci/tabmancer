@@ -589,10 +589,12 @@ def removal_refusal(member: teams.Member | None) -> Note | None:
     return None
 
 
-def removal_ask(member: teams.Member, session: Session | None) -> Note:
-    """What the first d says: a second one takes the member off."""
+def removal_ask(team: teams.Team, member: teams.Member, session: Session | None) -> Note:
+    """What the first d says: a second one takes the member off that team (named: another team may have a
+    member of that name)."""
     still = " Its tab stays open, as an ordinary session." if session and session.exit is Exit.RUNNING else ""
-    return Note(f"Press d again to take {member.name} off the team. Its sessions stay.{still}", seconds=6)
+    return Note(f"Press d again to take {member.name} off the team {team.name}. Its sessions stay.{still}",
+                seconds=6)
 
 
 def remove_member(team: teams.Team, name: str, tries: int | None = None) -> Changed | None:

@@ -144,13 +144,63 @@ def test_a_on_a_closed_team_saves_them_and_on_one_at_work_opens_them(fake_home, 
     assert all(c[0] == "say" for c in surface.calls)
 
 
+def two_teams_with_an_api(tmp_path) -> tuple[teams.Team, teams.Team]:
+    shop_team = teams.new_team("shop", str(tmp_path), "Add a checkout", teams.parse_members("api: x; ui: y"))
+    docs_team = teams.new_team("docs", str(tmp_path), "Write the guide", teams.parse_members("api: x; web: y"))
+    teams.save({"shop": shop_team, "docs": docs_team})
+    return shop_team, docs_team
+
+
+def api_of(team: teams.Team) -> teams.Member:
+    return next(m for m in team.members if m.name == "api")
+
+
+def test_d_on_one_teams_member_then_on_another_teams_of_that_name_only_asks(fake_home, tmp_path):
+    """d on shop's api, a switch to docs, d on docs' api: a first press there (it names docs), nothing taken
+    off; the presses are shared (EngineState.team_presses), as the dashboard's row and team view share them."""
+    shop_team, docs_team = two_teams_with_an_api(tmp_path)
+    surface, presses = Recorder(), {}
+    on_row = teamkeys.TeamKeys(surface, clock=lambda: surface.now, presses=presses)
+    on_view = teamkeys.TeamKeys(surface, clock=lambda: surface.now, presses=presses)
+    assert on_row.remove(shop_team, api_of(shop_team), None) is None
+    assert on_view.remove(docs_team, api_of(docs_team), None) is None
+    assert [m.name for m in teams.load()["docs"].members] == ["lead", "api", "web"]
+    assert [m.name for m in teams.load()["shop"].members] == ["lead", "api", "ui"]
+    assert [c[1] for c in surface.calls] == [
+        "Press d again to take api off the team shop. Its sessions stay.",
+        "Press d again to take api off the team docs. Its sessions stay."]
+    assert on_row.removing == ("docs", "api")  # the newer press is the one held
+    assert on_row.remove(shop_team, api_of(shop_team), None) is None  # shop's again: a first press once more
+    assert [m.name for m in teams.load()["shop"].members] == ["lead", "api", "ui"]
+
+
+def test_d_twice_on_the_same_teams_member_takes_it_off_from_either_surface(fake_home, tmp_path):
+    shop_team, _ = two_teams_with_an_api(tmp_path)
+    surface, presses = Recorder(), {}
+    on_row = teamkeys.TeamKeys(surface, clock=lambda: surface.now, presses=presses)
+    on_view = teamkeys.TeamKeys(surface, clock=lambda: surface.now, presses=presses)
+    assert on_row.remove(shop_team, api_of(shop_team), None) is None
+    surface.now = teamkeys.REMOVE_AGAIN_SECONDS - 0.5
+    changed = on_view.remove(shop_team, api_of(shop_team), None)
+    assert changed is not None and changed.done == "api is off the team."
+    assert [m.name for m in teams.load()["shop"].members] == ["lead", "ui"]
+    assert [m.name for m in teams.load()["docs"].members] == ["lead", "api", "web"]  # docs' api stays
+    assert on_row.removing is None
+
+
+def test_a_team_named_with_a_slash_keeps_its_member_apart(fake_home, tmp_path):
+    keys = keys_on(Recorder())
+    keys.again("remove", teamkeys.removal_on("web/shop", "api"), teamkeys.REMOVE_AGAIN_SECONDS)
+    assert keys.removing == ("web/shop", "api")
+
+
 def test_d_twice_takes_a_member_off_and_the_lead_hears(fake_home, tmp_path):
     team, surface = shop(tmp_path), Recorder()
     keys = keys_on(surface)
     lead, api, _ = team.members
     assert keys.remove(team, None, None) is None and keys.remove(team, lead, None) is None
     assert [c[2] for c in surface.calls] == ["information", "warning"] and keys.removing is None
-    assert keys.remove(team, api, None) is None and keys.removing == "api"
+    assert keys.remove(team, api, None) is None and keys.removing == ("shop", "api")
     assert [m.name for m in teams.load()["shop"].members] == ["lead", "api", "ui"]
     changed = keys.remove(team, api, None)
     assert changed is not None and keys.removing is None
