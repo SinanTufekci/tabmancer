@@ -76,6 +76,7 @@ def test_a_asks_in_the_terminals_words_and_adds_what_is_typed(qapp):
     dialog = ask_add(parent, look.ORANGE, lambda: keys, team, lambda: members)
     assert isinstance(dialog, AddMembersDialog)
     assert teamforms.ADD_QUESTION in shown_words(dialog) and "add them" in shown_words(dialog)
+    assert dialog.windowTitle() == "Add members · shop"  # from the Team panel, the team it adds to
     assert dialog.line.placeholderText() == teamforms.ADD_EXAMPLE
     members.clear()  # at work when it was asked, as the terminal's a decides it
     QTest.keyClicks(dialog.line, "docs: the README @agy")
@@ -107,7 +108,8 @@ def test_g_shows_the_goal_with_its_lines_and_ctrl_s_saves_it_with_the_members_of
     dialog = opened_from_the_loop(qapp, lambda: ask_goal(parent, look.ORANGE, lambda: keys, team, lambda: members))
     assert isinstance(dialog, GoalDialog)
     words = shown_words(dialog)
-    assert teamforms.GOAL_TITLE in words and "Ctrl+S" in words and "a new line" in words
+    assert teamforms.GOAL_TITLE + " · shop" in words and "Ctrl+S" in words and "a new line" in words
+    assert dialog.windowTitle() == "The team's goal · shop"
     assert dialog.goal.toPlainText() == team.goal
     assert dialog.goal.textCursor().atEnd()
     QTest.keyClick(dialog.goal, Qt.Key.Key_Return)  # Enter is a new line, not a save

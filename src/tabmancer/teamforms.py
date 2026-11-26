@@ -122,9 +122,16 @@ ADD_QUESTION = "Add members as name: area (several with ;, @agy picks Antigravit
 ADD_EXAMPLE = "docs: the README and the user guide @agy"
 ADD_ENTER = "add them"
 ADD_KEYS = [("Enter", ADD_ENTER), ("Esc", "cancel")]
+ADD_TITLE = "Add members"  # the window's dialog title, with the team's name (team_title)
 # g in a team's view: its goal, its lines kept
 GOAL_TITLE = "The team's goal"
 GOAL_KEYS = [("Ctrl+S", "save"), ("Enter", "a new line"), ("Esc", "cancel")]
+
+
+def team_title(words: str, team: str) -> str:
+    """A team key's dialog title with the team it acts on: 'The team's goal · shop' (a key from the Team panel
+    or a team's card shows no team around it)."""
+    return f"{words} · {team}" if team else words
 
 
 def keys_with_improve(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:

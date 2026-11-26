@@ -29,29 +29,32 @@ Keys = Callable[[], teamkeys.TeamKeys]
 
 
 class AddMembersDialog(NameDialog):
-    """a: new members on one line, as the terminal's asks for them. Enter with some says them (named); Enter on
-    nothing, or Esc, adds none."""
+    """a: new members on one line, as the terminal's asks for them, the team named in the title. Enter with
+    some says them (named); Enter on nothing, or Esc, adds none."""
 
-    def __init__(self, parent: QWidget, accent: str) -> None:
+    def __init__(self, parent: QWidget, accent: str, team: str = "") -> None:
         super().__init__(parent, teamforms.ADD_QUESTION, "", teamforms.ADD_EXAMPLE, teamforms.ADD_KEYS, accent)
+        self.setWindowTitle(teamforms.team_title(teamforms.ADD_TITLE, team))
 
 
 class GoalDialog(QDialog):
-    """g: the team's goal in a box of several lines, the cursor at its end. Ctrl+S says it (saved, once); Esc
-    closes it with nothing said. Window-modal and never waited on (open(), not exec())."""
+    """g: the team's goal in a box of several lines, the cursor at its end, the team named in the title and the
+    heading. Ctrl+S says it (saved, once); Esc closes it with nothing said. Window-modal and never waited on
+    (open(), not exec())."""
 
     saved = Signal(str)
 
-    def __init__(self, parent: QWidget, goal: str, accent: str) -> None:
+    def __init__(self, parent: QWidget, goal: str, accent: str, team: str = "") -> None:
         super().__init__(parent)
         self.answered = False
-        self.setWindowTitle(teamforms.GOAL_TITLE)
+        self.setWindowTitle(teamforms.team_title(teamforms.GOAL_TITLE, team))
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setMinimumSize(640, 320)
         box = QVBoxLayout(self)
         box.setContentsMargins(18, 14, 18, 12)
         box.setSpacing(8)
-        box.addWidget(label(look.span(teamforms.GOAL_TITLE, f"bold {look.TEXT}")))
+        heading = look.span(teamforms.GOAL_TITLE, f"bold {look.TEXT}")
+        box.addWidget(label(heading + (look.span(f" · {team}", look.MUTED) if team else "")))
         self.goal = QPlainTextEdit(goal)
         self.goal.setFont(look.font(10))
         box.addWidget(self.goal, 1)
@@ -83,7 +86,7 @@ def ask_add(parent: QWidget, accent: str, keys: Keys, team: teams.Team, members:
     """a on a team: its new members asked for, then added (TeamKeys.add). At work when it was asked, each
     opens and introduces itself to the lead; closed, they join it and start with it (s), as in the terminal."""
     at_work = teamkeys.at_work(members())
-    dialog = AddMembersDialog(parent, accent)
+    dialog = AddMembersDialog(parent, accent, team.name)
     dialog.named.connect(lambda text: keys().add(team, text, at_work))
     dialog.open()
     return dialog
@@ -92,7 +95,7 @@ def ask_add(parent: QWidget, accent: str, keys: Keys, team: teams.Team, members:
 def ask_goal(parent: QWidget, accent: str, keys: Keys, team: teams.Team, members: Members) -> GoalDialog:
     """g on a team: its goal shown to change, then saved and the lead told (TeamKeys.change_goal); the same
     goal, or none, changes nothing."""
-    dialog = GoalDialog(parent, team.goal, accent)
+    dialog = GoalDialog(parent, team.goal, accent, team.name)
     dialog.saved.connect(lambda goal: keys().change_goal(team, goal, members()))
     dialog.open()
     return dialog

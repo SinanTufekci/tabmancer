@@ -141,3 +141,8 @@ def test_ctrl_g_finds_the_member_on_the_line(tmp_path):
     said = teamforms.role_words(team, member)
     assert said.head == f"What {team.session_name(member)} is told" and said.role == teams.role(team, member)
     assert form.role_of(boxes(tmp_path), "nobody: here") is None
+
+
+def test_a_team_keys_dialog_title_names_its_team():
+    assert teamforms.team_title(teamforms.GOAL_TITLE, "shop") == "The team's goal · shop"
+    assert teamforms.team_title(teamforms.ADD_TITLE, "") == "Add members"
