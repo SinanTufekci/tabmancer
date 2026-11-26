@@ -78,6 +78,7 @@ from PySide6.QtWidgets import (
 
 from .. import (
     __version__,
+    accountwords,
     actions,
     backgroundwords,
     bitart,
@@ -85,6 +86,7 @@ from .. import (
     commands,
     engine,
     handoverwords,
+    limitwords,
     marks,
     newforms,
     prompting,
@@ -102,14 +104,14 @@ from ..palette import mix
 from ..sessions import Exit, Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
 from ..teamforms import JoinTeam, TellTeam
-from . import commandbar, frame, look, monitor, newsession, newteam, teamgraph, teamkeysdialogs
+from . import commandbar, frame, limit, look, monitor, newsession, newteam, teamgraph, teamkeysdialogs
 from .backgrounds import OPEN, BackgroundDialog, Jobs
 from .board import Board
 from .clisettings import CliSettingsDialog
 from .closing import CloseDialog
 from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
-from .front import WindowFront
+from .front import TYPES_INTO_TABS, WindowFront
 from .monitor import MonitorWindow, sequences
 from .naming import NameDialog, PromptDialog, Renamer
 from .opening import Opener
@@ -127,7 +129,7 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H"}
+        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H", "c"}
 TEAM_GROUP = "The team"
 # The terminal team view's own keys (keys.MONITOR_KEYS' "The team": its a, s, h and x are the dashboard's
 # too, on a team's card): g the team's goal; on a member, picked in the Team panel or its row in the Table, d
@@ -147,7 +149,6 @@ JOIN_ELSEWHERE = ("{team} is at work on this goal: nothing was made. Adding memb
 NEW_TEAM_SECONDS = 60  # a team just made: its Team panel tab picked once a reading shows it, for this long
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
-CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
 MENU_TITLE = 48  # a right-click menu's heading: the title clipped to this
 SEVERITY = {"warning": look.AMBER, "error": look.RED}  # how loud what Bit says is (actions.Note's)
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
@@ -282,10 +283,6 @@ class MainWindow(QMainWindow):
         self.after_open = QTimer(self)
         self.after_open.setSingleShot(True)
         self.after_open.timeout.connect(self.poll)
-        self.closing_team: str | None = None  # x said what a second x does to this team's tabs
-        self.closing_timer = QTimer(self)
-        self.closing_timer.setSingleShot(True)
-        self.closing_timer.timeout.connect(self.forget_closing)
         self.opener.closed.connect(self.closed_tabs)
         self.renamer = Renamer(self)  # r on a closed session: /rename run in it on a thread
         self.renamer.done.connect(self.renamed)
@@ -480,7 +477,7 @@ class MainWindow(QMainWindow):
                  "B": self.background_key, ",": self.settings_key,
                  "A": self.accounts_key, "w": self.save_workspace_key, "o": self.open_workspace_key,
                  "n": self.new_sessions_key, "s": self.start_key, "g": self.goal_key, "d": self.remove_key,
-                 "H": self.member_handover_key}
+                 "H": self.member_handover_key, "c": self.continue_key}
         self.menus_by_group = {}
         for group, keys in WINDOW_KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -1058,23 +1055,10 @@ class MainWindow(QMainWindow):
             self.remarked(marks.change(partial(marks.hide, chosen=chosen)))
 
     def close_team(self, state: teams.TeamState) -> None:
-        """x on a team with members open says what x again does; x again on it within CLOSING_MS closes
-        every open member's tab, as on /exit (the sessions stay: s starts them), on a thread of its own."""
-        snap = self.snap
-        if snap is None:
-            return
-        sessions = self.members_now(state)
-        note = actions.closing_note(state.team, sessions)
-        if note is None:
-            self.say("No member is open.", 3)
-            return
-        if self.closing_team != state.team.name:
-            self.closing_team = state.team.name
-            self.closing_timer.start(CLOSING_MS)
-            self.say(note, CLOSING_MS / 1000, look.AMBER)
-            return
-        self.forget_closing()
-        self.opener.close_team(actions.open_names(state.team, sessions))
+        """x on a team with members open says what x again does; x again on it soon after closes every open
+        member's tab, as on /exit (the sessions stay: s starts them), on a thread of its own: the terminal's x
+        (TeamKeys.close, one copy; the first press kept with the engine's state)."""
+        self.front.team_keys().close(state.team, self.members_now(state))
 
     def members_now(self, state: teams.TeamState) -> dict[str, Session | None]:
         """A team's members, each with its session as the last reading has it (one never started: None)."""
@@ -1177,10 +1161,6 @@ class MainWindow(QMainWindow):
             return
         _state, member, session = found
         self.front.team_keys().hand_over(member, session)
-
-    def forget_closing(self) -> None:
-        self.closing_timer.stop()
-        self.closing_team = None
 
     def closed_tabs(self) -> None:
         """The members' tabs closed: the sessions read again soon, to show them closed."""
@@ -1361,7 +1341,9 @@ class MainWindow(QMainWindow):
         already, or adds to, is the terminal dashboard's for now (the window types into no member's tab): said,
         its words on the clipboard."""
         if isinstance(made, TellTeam):
-            QApplication.clipboard().setText(made.message)
+            if self.front.types_in([], made.message):  # the terminal's Tell: typed in once it waits, a closed one opens
+                self.front.team_keys().tell_team(made.team, made.to, made.message)
+                return
             self.tell_note(actions.Note(TELL_ELSEWHERE.format(team=made.team, to=made.to), "warning", 14))
             return
         if isinstance(made, JoinTeam):
@@ -1652,6 +1634,30 @@ class MainWindow(QMainWindow):
             self.store.relist()
             self.poll()
 
+    def continue_key(self) -> None:
+        """c: the sessions stopped at a usage limit, and what becomes of the ticked ones (limit.LimitDialog, in
+        the terminal's words: limitwords). Now and the handover go on from here (Engine.choose: a closed one
+        opens with the continue prompt, an open one's is handed to you, WindowFront.types_in); continuing when
+        the limit lifts is the dashboard's that acts, so not offered here (the dialog says why)."""
+        snap = self.snap
+        if snap is None:
+            return
+        account = next((a for a in snap.accounts if a.cli == "claude"), None)
+        others = accountwords.other_accounts_words(account.key if account is not None else None)
+        asked = limitwords.ask(snap.sessions, snap.limits, account, others, snap.armed)
+        if isinstance(asked, actions.Note):
+            self.tell_note(asked)
+            return
+        dialog = limit.LimitDialog(self, asked, self.accent, acts=self.engine.state.acts, types=TYPES_INTO_TABS)
+        dialog.chosen.connect(partial(self.continue_chosen, asked))
+        dialog.open()
+
+    def continue_chosen(self, asked: limitwords.Ask, way: str, ids: list[str]) -> None:
+        """The c dialog's answer for the ticked: carried out as the terminal's (Engine.choose); the rows read
+        again when it changed them."""
+        if self.engine.choose(way, ids, asked.stopped, asked.when):
+            self.poll()
+
     def accounts_key(self) -> None:
         """A (or a click on the top bar's accounts): the Claude accounts you use (AccountsDialog), as the terminal
         dashboard's A lists them, read on a thread first."""
@@ -1728,7 +1734,6 @@ class MainWindow(QMainWindow):
         self.door.close()
         self.timer.stop()
         self.ticker.stop()
-        self.closing_timer.stop()
         if self.popup is not None:
             self.popup.close()
         for shown in self.monitors.values():  # the monitors M opened go with the window

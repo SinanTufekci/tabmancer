@@ -15,8 +15,12 @@ what happens by itself (a desktop note for the sessions that turned, continuing 
 keep-warm) stays the acting dashboard's. Engine.live, not acting, says things and changes the window's
 look; the only thing it starts is a handover this window queued itself (h on a busy one), once that one
 finishes: one queued in another window is that window's (state.queued is each window's own, and
-actor.first_to lets one of two that queued the same one hand it over). The members' messages it would
-type in (state.notes) are a terminal dashboard's: nothing here puts any there.
+actor.first_to lets one of two that queued the same one hand it over).
+
+Nor does it type into a session's tab, even at a key (c's continue prompt in an open one, Tell's message
+for a member), until Sinan says it may (TYPES_INTO_TABS): WindowFront.types_in is the one place either asks,
+and it hands the words to you instead, on the clipboard with the tab in front. A closed one still opens with
+its prompt, and a team on the bus is still sent to (a file written, nothing typed).
 
 The front reaches its window as its Qt parent, not as an attribute: a window that kept a front that
 kept the window would be a cycle, closed yet alive till Python's cycle collector came by."""
@@ -36,7 +40,7 @@ from PySide6.QtWidgets import QApplication
 from .. import actions, actor, alerts, claudeupdate, handover, launch, picks, rowwords, teamkeys, teams
 from .. import viewmodel as VM
 from ..launch import Launch
-from ..sessions import Session
+from ..sessions import Session, Status
 from ..store import DashSnapshot
 from . import look, opening
 from .handover import HandoverDialog
@@ -50,6 +54,9 @@ NOW_SECONDS = 5.0  # how long a handover's thread waits for the window to say ho
 WAITING_BITS = 3  # Bit's words that wait their turn behind something said: the newest few
 FAILED_SECONDS = 15.0  # how long a handover that failed is said
 HANDOVER_THREAD = "tabmancer-handover"  # a handover's thread: never cut short on closing (settle)
+# Sinan's call, pending: whether the window types into a session's tab itself (c's continue prompt, Tell's
+# message), as the terminal dashboard does. Till he says yes it types into none (WindowFront.types_in).
+TYPES_INTO_TABS = False
 
 
 @dataclass
@@ -59,6 +66,15 @@ class Asked:
     session: Session
     done: threading.Event = field(default_factory=threading.Event)
     found: tuple[Session, list[Session]] | None = None
+
+
+def continue_handed(names: list[str]) -> actions.Note:
+    """c's now on open sessions, the window typing into none: where to paste the prompt, the first one's tab in
+    front."""
+    first, *rest = list(dict.fromkeys(names))
+    then = f" Then in {', '.join(rest)}." if rest else ""
+    return actions.Note(f"Type continue in {first}'s tab: it is in front, the prompt on the clipboard (Ctrl+V, "
+                        f"Enter).{then}", "warning", 14)
 
 
 class WindowFront(QObject):
@@ -74,6 +90,8 @@ class WindowFront(QObject):
     noted = Signal(object)  # a thread's actions.Note, said on the window's thread
     started = Signal(object)  # a team's background members started: the tabs to open now (Launches)
     ended = Signal()  # a handover's thread is over, whatever came of it
+    continued = Signal(object)  # c's continue prompt typed into the open ones' tabs: an actions.Continued
+    told = Signal(object)  # a member's message typed into its tab, or not: an actions.Told
 
     def __init__(self, window: MainWindow, update: bool = True) -> None:
         super().__init__(window)
@@ -90,6 +108,8 @@ class WindowFront(QObject):
         self.noted.connect(self.say_note)
         self.started.connect(self.open_sessions)
         self.ended.connect(self.handover_ended)
+        self.continued.connect(self.prompt_typed)
+        self.told.connect(self.note_typed)
 
     def window(self) -> MainWindow:
         return self.parent()  # type: ignore[return-value]
@@ -323,6 +343,76 @@ class WindowFront(QObject):
     def close_tabs(self, names: list[str]) -> None:
         """These members' tabs closed, as on /exit, on a thread of its own (Opener.close_team)."""
         self.window().opener.close_team(names)
+
+    def member_session(self, team: str, member: str) -> Session | None:
+        """A member's session as the newest reading has it (None: never run)."""
+        return self.window().members_of(team).get(member)
+
+    def notes(self) -> dict[str, tuple[str, str]]:
+        """The members' messages to type in once each waits for you (EngineState.notes)."""
+        return self.window().engine.state.notes
+
+    def deliver_notes(self) -> None:
+        self.window().engine.deliver()
+
+    # --- typing into a tab: not yet ------------------------------------------------------------------
+
+    def types_in(self, sessions: list[Session], text: str) -> bool:
+        """Whether the window types text into these sessions' tabs itself, as the terminal dashboard does (c's
+        continue prompt, Tell's message): the one place either asks, so Sinan's yes is TYPES_INTO_TABS. Till
+        then it hands them to you: text on the clipboard and the first one's tab in front; False."""
+        if TYPES_INTO_TABS:
+            return True
+        self.put_on_clipboard(text)
+        if sessions:
+            self.go_to_tab(sessions[0])
+        return False
+
+    def type_note(self, session: Session, who: str, message: str) -> None:
+        """A member's message, once it waits for you: typed into its tab on a thread of its own
+        (alerts.type_note; Engine.typed says how it went), where the window types in (types_in); else on the
+        clipboard with its tab in front."""
+        if self.types_in([session], message):
+            self.start(self.type_note_now, session, who, message)
+            return
+        self.say_note(actions.Note(f"The message for {who} is on the clipboard and its tab in front: paste it "
+                                   "there (Ctrl+V, Enter).", "warning", 14))
+
+    def type_note_now(self, session: Session, who: str, message: str) -> None:
+        self.emit("told", alerts.type_note(session, who, message))
+
+    def note_typed(self, told: actions.Told) -> None:
+        self.window().engine.typed(told)
+
+    # --- c: the sessions stopped at a usage limit ----------------------------------------------------
+
+    def launch_for(self, session: Session) -> Launch:
+        """How a closed session opens (actions.launch_for): as m picked it here, a member as that member, one
+        in the background attached to, by its job in the last full reading (as Enter opens it)."""
+        window = self.window()
+        snap = window.snap
+        job = (snap.background.get(session.session_id)
+               if snap is not None and session.status is Status.BACKGROUND else None)
+        return actions.launch_for(session, window.opener.mode(session), job)
+
+    def continue_open(self, still_open: list[Session], opened: int) -> None:
+        """c's now on the open ones (the closed ones opened with the prompt already, Engine.continue_these): the
+        continue prompt typed into each one's tab on a thread of its own (actions.type_continue; Engine.continued
+        says how it went), where the window types in (types_in); else Bit says where to paste it."""
+        if self.types_in(still_open, launch.continue_prompt(Status.LIMIT)):
+            self.start(self.type_continue, still_open, opened)
+            return
+        self.prompt_typed(actions.Continued(opened, continue_handed([self.who(s) for s in still_open])))
+
+    def type_continue(self, still_open: list[Session], opened: int) -> None:
+        self.emit("continued", actions.type_continue(still_open, opened))
+
+    def prompt_typed(self, done: actions.Continued) -> None:
+        self.window().engine.continued(done)
+
+    def open_handover(self, session: Session | None, how: str | None = None) -> None:
+        """c's handover (how "transcript"), as h hands one over: Engine.handover's checks, its thread."""
+        self.window().engine.handover(session, how)
 
     def say(self, note: actions.Note) -> None:
         self.say_note(note)

@@ -1001,7 +1001,7 @@ def test_the_table_ticks_with_space_and_its_box_and_e_and_shift_e_unfold_teams(q
     assert QTest.qWaitForWindowActive(shown, 3000)
     press(shown, "x")  # an open team: x again closes its members' tabs (hidden: none)
     assert shown.bit_line.text().startswith("Press x again to close the") and saved_marks()["hidden"] == []
-    shown.forget_closing()
+    shown.engine.state.team_presses.clear()  # x's first press forgotten
     assert table.show_key(login)
     press(shown, "e")
     assert shown.docks["Preview"].isVisible()  # how it ended: the drawer says it
@@ -1157,13 +1157,13 @@ def test_x_twice_on_a_team_with_members_open_closes_their_tabs(qapp, window, mon
     assert names and shown.board.reveal(VM.TEAM_CARD + team)
     press(shown, "x")
     assert shown.bit_line.text() == actions.closing_note(state.team, members) and closed == []
-    assert shown.closing_team == team and shown.closing_timer.isActive()
-    shown.closing_timer.timeout.emit()  # too late: x again only says it again
+    assert shown.front.team_keys().held("close") == team  # the terminal's x (TeamKeys.close), its press kept
+    shown.engine.state.team_presses["close"] = (team, 0.0)  # too late: x again only says it again
     press(shown, "x")
     assert closed == [] and shown.bit_line.text().startswith(f"Press x again to close the {len(names)} open")
     press(shown, "x")
     settled(qapp, shown)
-    assert closed == names and shown.closing_team is None and saved_marks()["hidden"] == []
+    assert closed == names and shown.front.team_keys().held("close") is None and saved_marks()["hidden"] == []
     assert shown.bit_line.text() == f"The team's members: closed {len(names)} tabs." and shown.after_open.isActive()
 
 

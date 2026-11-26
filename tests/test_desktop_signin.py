@@ -128,7 +128,8 @@ def test_a_lists_each_account_as_the_terminals_dialog_words_it(qapp, window, wor
     assert lit(asked) == [1]  # the first one to switch to: not the one signed in now
     assert asked.heading.text() == (look.span("Claude accounts", f"bold {look.TEXT}") + "&nbsp;&nbsp;"
                                     + look.span("signed in as you@example.com", look.MUTED))
-    assert asked.note.text() == look.span(accountwords.note(True, 0), look.MUTED)
+    stopped = sum(1 for s in shown.snap.sessions.values() if VM.at_limit(s))  # the demo's two: c continues them here
+    assert asked.note.text() == look.span(accountwords.note(True, stopped), look.MUTED)
     assert asked.keys.text() == keys_html(accountwords.key_pairs(True)) and len(places) == 4
     press(qapp, asked, Qt.Key.Key_Escape)
     shown.account.mousePressEvent(QMouseEvent(  # the top bar's accounts, clicked: A too
@@ -275,18 +276,18 @@ def test_accounts_that_cannot_be_read_are_said_in_red_and_a_pressed_again_reads_
     press(qapp, press_a(qapp, shown), Qt.Key.Key_Escape)
 
 
-def test_the_sessions_stopped_at_a_limit_are_counted_only_once_c_continues_them_here(qapp, window, monkeypatch):
+def test_the_sessions_stopped_at_a_limit_are_counted_as_c_continues_them_here(qapp, window, monkeypatch):
     from tabmancer.desktop import main
 
     shown = window()
     stopped = sum(1 for s in shown.snap.sessions.values() if VM.at_limit(s))
-    assert stopped and "c" not in main.HERE
-    asked = press_a(qapp, shown)
-    assert "stopped at a usage limit" not in asked.note.text()  # c is the terminal's: not offered here
-    press(qapp, asked, Qt.Key.Key_Escape)
-    monkeypatch.setattr(main, "HERE", main.HERE | {"c"})
+    assert stopped and "c" in main.HERE
     asked = press_a(qapp, shown)
     assert asked.note.text() == look.span(accountwords.note(True, stopped), look.MUTED)
+    press(qapp, asked, Qt.Key.Key_Escape)
+    monkeypatch.setattr(main, "HERE", main.HERE - {"c"})  # were c the terminal's only: not counted here
+    asked = press_a(qapp, shown)
+    assert "stopped at a usage limit" not in asked.note.text()
     press(qapp, asked, Qt.Key.Key_Escape)
 
 
