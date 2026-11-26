@@ -723,7 +723,7 @@ def test_the_drawer_shows_a_teams_card_and_its_buttons_wait_for_the_window(qapp,
     for b in buttons:  # the window's own keys work; the rest wait till it does them
         here = b.property("key") in main.HERE
         assert b.isEnabled() is here and b.toolTip() == ("" if here else main.ELSEWHERE)
-    assert {b.property("key") for b in buttons if b.isEnabled()} == {"Enter", "p", "h", "f", "x"}
+    assert {b.property("key") for b in buttons if b.isEnabled()} == {"Enter", "s", "p", "h", "f", "x"}  # s: Summary
     pressed = []
     side.act.connect(pressed.append)
     side.set(shown.snap, closed.session_id, None, {key: None for key, _, _ in drawer.BUTTONS})  # all done here

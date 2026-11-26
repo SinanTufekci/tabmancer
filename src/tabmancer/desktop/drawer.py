@@ -26,12 +26,13 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
-from .. import footer, picks, sessionwords, summarize, teams, teamwords
+from .. import footer, picks, sessionwords, teams, teamwords
 from .. import viewmodel as VM
 from ..launch import Mode
 from ..sessions import Session
 from ..store import DashSnapshot
 from . import look
+from .summaries import Summarizer
 from .teamgraph import TeamGraph
 from .widgets import facts_html, last_words, text_label, tone_colour
 
@@ -39,9 +40,9 @@ ROOM = 60  # the preview's room in characters, as the terminal's beside the list
 MORE = 3  # as much of each as the terminal's preview beside the list shows
 NOTHING = "Pick a card: how it stands, what was said in it, and its facts."
 # The buttons: (key, the dashboard action, its words where the footer gives none). Shown when the
-# footer offers the key on this row (footer.allowed is True); s only on a team's (Start rest, Start team): a
-# session's summary is the terminal dashboard's for now.
-BUTTONS = (("Enter", "open", "Open"), ("s", "summarize", "Start"), ("p", "prompt", "Tell it…"),
+# footer offers the key on this row (footer.allowed is True); s on a team's is Start rest or Start team,
+# on a session the terminal's Summary.
+BUTTONS = (("Enter", "open", "Open"), ("s", "summarize", "Summary"), ("p", "prompt", "Tell it…"),
            ("h", "handover", "Hand over"),
            ("c", "continue_at_reset", "Continue"), ("M", "monitor", "Monitor"), ("f", "pin", "Pin"),
            ("x", "hide", "Hide"))
@@ -73,15 +74,17 @@ def member_ids(team_states: dict[str, teams.TeamState]) -> dict[str, tuple[str, 
 def detail_of(snap: DashSnapshot, session: Session, members: dict[str, tuple[str, str]], *, accent: str,
               default_cap: int, summaries: dict[str, dict],
               found: tuple[str, int, int] | None, modes: Mapping[str, Mode] | None = None,
-              selected: Collection[str] = frozenset()) -> sessionwords.DetailView:
+              selected: Collection[str] = frozenset(),
+              summarizing: Collection[str] = frozenset()) -> sessionwords.DetailView:
     """A session's preview as the terminal's says it (sessionwords.detail), its inputs read off the
     snapshot this window holds as the terminal reads them off its own state (app.detail_inputs); modes:
-    how a session opens, where m changed it; selected: the sessions ticked, which Enter opens."""
+    how a session opens, where m changed it; selected: the sessions ticked, which Enter opens;
+    summarizing: the sessions whose summary s is writing."""
     inputs = sessionwords.read_inputs(
         session, members=members, team_states=snap.team_states, git=snap.git, session_tokens=snap.session_tokens,
         background=snap.background, armed=snap.armed, queued=snap.queued, modes=dict(modes or {}),
         selected=selected, default_cap=default_cap,
-        accent=accent, summaries=summaries, found=found, room=ROOM, more=MORE)
+        accent=accent, summaries=summaries, summarizing=summarizing, found=found, room=ROOM, more=MORE)
     return sessionwords.detail(session, inputs)
 
 
@@ -95,7 +98,7 @@ class Drawer(QScrollArea):
         self.accent = accent
         self.why: dict[str, str | None] = {}  # a key -> None when the window does it, else why not
         self.default_cap = picks.cap_tokens(picks.default_cap())  # as the terminal reads it, once
-        self.summaries = summarize.load_cache()
+        self.summarizer: Summarizer | None = None  # the window's: the summaries shown, the ones being written
         self.key: str | None = None  # the card shown: a session id, or VM.TEAM_CARD + a team's name
         self.modes: Mapping[str, Mode] = {}  # how a session opens, where m changed it (the window's)
         self.ticked: frozenset[str] = frozenset()  # the sessions ticked in the window: Enter opens them
@@ -173,8 +176,13 @@ class Drawer(QScrollArea):
 
     def show_session(self, snap: DashSnapshot, session: Session, found: tuple[str, int, int] | None) -> None:
         members = member_ids(snap.team_states)
+        summarizer = self.summarizer
+        if summarizer is not None:
+            summarizer.reread()  # summaries.json changed by another process (the terminal's s): read again
         view = detail_of(snap, session, members, accent=self.accent, default_cap=self.default_cap,
-                         summaries=self.summaries, found=found, modes=self.modes, selected=self.ticked)
+                         summaries=summarizer.summaries if summarizer is not None else {},
+                         summarizing=summarizer.summarizing if summarizer is not None else frozenset(),
+                         found=found, modes=self.modes, selected=self.ticked)
         self.status.setText(cell_html(view.status) + look.span("   " + view.means, look.MUTED))
         member = members.get(session.session_id)
         whose = f"{member[0]} · {member[1]}" if member else session.project
@@ -229,8 +237,6 @@ class Drawer(QScrollArea):
         out = []
         for key, action, words in BUTTONS:
             if action == "continue_at_reset" and not at_limit:
-                continue
-            if action == "summarize" and row.kind not in footer.TEAM_ROWS:
                 continue
             if footer.allowed(action, on_top=False, monitor=False, projects_focused=False, live_mode=False,
                               own=(), sessions=snap.sessions.values(), at=lambda: row) is not True:

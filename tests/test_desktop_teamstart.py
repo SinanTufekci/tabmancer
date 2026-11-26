@@ -2,8 +2,8 @@
 as itself, the lead last, as the terminal dashboard's s starts them (teamkeys.TeamKeys.start, one copy); one
 opened from here a moment ago is not opened again; with every member open it is said; its cache gone, s says
 what going on costs first and s again starts it; while another tabmancer starts members (the opening lock
-held) nothing opens and it is said. s on a session says where its summary is. A team tab picked while a new
-team is coming keeps the panel on it. Offscreen over the made-up sessions of `tabmancer --demo`. Skipped
+held) nothing opens and it is said. s on a session summarizes it (test_desktop_summary_key). A team tab picked
+while a new team is coming keeps the panel on it. Offscreen over the made-up sessions of `tabmancer --demo`. Skipped
 without the desktop extra (pip install "tabmancer[desktop]")."""
 
 import importlib
@@ -146,12 +146,15 @@ def test_s_while_another_tabmancer_starts_members_opens_nothing_and_says_so(qapp
     assert [tab.title for tab in world.tabs] == ["shop: ui"]
 
 
-def test_s_on_a_session_says_where_its_summary_is(qapp, window, world):
+def test_s_on_a_session_starts_no_team_it_summarizes_that_session(qapp, window, world, monkeypatch):
     shown = window()
     closing(shown, "api")
-    press_s(qapp, shown, busy_one(shown).session_id)
-    assert not world.tabs and said(shown) == START_ELSEWHERE
-    assert start_button(shown) is None and "s" not in dict(shown.drawer.offered)  # no summary button: not here
+    asked = []
+    monkeypatch.setattr(shown.summarizer, "start", lambda session: asked.append(session.session_id) or False)
+    busy = busy_one(shown)
+    press_s(qapp, shown, busy.session_id)
+    assert not world.tabs and asked == [busy.session_id] and said(shown) != START_ELSEWHERE
+    assert dict(shown.drawer.offered)["s"] == "Summary"  # the terminal's word for s on a session
 
 
 def test_a_team_tab_picked_while_a_new_team_comes_keeps_the_panel_on_it(qapp, window):

@@ -93,6 +93,7 @@ from .. import (
     prompting,
     rename,
     search,
+    sessionwords,
     teams,
     workspaces,
     workspacewords,
@@ -118,6 +119,7 @@ from .naming import NameDialog, PromptDialog, Renamer
 from .opening import Opener
 from .rail import Rail
 from .signin import Accounts, AccountsDialog, AccountsLabel, Seen
+from .summaries import Summarizer
 from .table import Table, drawer_key
 from .teampanel import TeamPanel
 from .widgets import KeyBar, bit_pixmap, text_label
@@ -141,7 +143,7 @@ WINDOW_KEYS = [*KEYS[:AFTER_SESSION], (TEAM_GROUP, TEAM_KEYS), *KEYS[AFTER_SESSI
 PICK_MEMBER = "d and H act on a team's member: click one in the Team panel (T), or pick its row in the Table."
 GOAL_PICK = "g changes a team's goal: pick its card, or bring its tab in the Team panel (T)."
 TEAMS_SAID = "The Team panel: T again starts a new team."
-START_ELSEWHERE = "s starts a team: pick its card. A session's summary is the terminal dashboard's for now (tabmancer)."
+START_ELSEWHERE = "s starts a team, or summarizes a session: pick one."
 # A goal the new-team dialog found a team at work has already, or adds to: the window types into no member's tab.
 TELL_ELSEWHERE = ("{team} is on this goal already: nothing was made. The message for {to} is on the clipboard, to "
                   "paste into its tab (Ctrl+V, Enter).")
@@ -251,6 +253,9 @@ class MainWindow(QMainWindow):
         # Never acts (state.acts stays False). What opened from here is one copy: Enter's and the engine's (h's fresh one).
         self.engine = engine.Engine(self.front, datetime.now, engine.EngineState(openings=self.opener.openings))
         self.asker = newsession.Asker(self)  # n and T: the router's pick, a rewrite, a line-up, agy's quota
+        self.summarizer = Summarizer(self)  # s on a session: its summary written on a thread, shown in the drawer
+        self.summarizer.said.connect(self.tell_note)
+        self.summarizer.done.connect(self.summary_came)
         self.new_team_shown: tuple[str, float] | None = None  # a team just made, its tab picked until then
         self.view = "board"  # what the Sessions panel shows (VIEWS)
         self.before_live = "board"  # the view l goes back to
@@ -341,6 +346,7 @@ class MainWindow(QMainWindow):
         self.table.menu.connect(self.pick_menu)
         self.rail.projects.left.connect(self.back_to_board)
         self.drawer.act.connect(self.run_key)
+        self.drawer.summarizer = self.summarizer  # the summaries it shows, and the ones being written
         self.rail.projects.picked.connect(self.set_project)
         self.rail.teams.picked.connect(self.pick_team)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, docks["Preview"])
@@ -563,6 +569,8 @@ class MainWindow(QMainWindow):
         self.signin.settle(seconds)
         self.asker.settle(seconds)
         self.front.settle(seconds)
+        for thread in list(self.summarizer.workers):  # s's summaries: written into the config folder
+            thread.join(seconds)
         for shown in self.monitors.values():
             shown.settle(seconds)  # a read of its own (Python's: there after the window is deleted too)
 
@@ -1075,16 +1083,36 @@ class MainWindow(QMainWindow):
         return {name: sessions.get(s.session_id, s) if s is not None else None for name, s in state.sessions.items()}
 
     def start_key(self) -> None:
-        """s on a team's card (or its row in the Table): every member not open started, a closed one resumed as
-        itself, one never started new, the lead last, as the terminal dashboard's s starts them
-        (WindowFront.start_team: teamkeys.TeamKeys.start, one copy; the members claimed under a lock, waited for
-        UI_TRIES at most here); its cache gone, s again starts it. A session's summary is the terminal
-        dashboard's for now: said."""
-        state = self.team_at_hand()
-        if state is None:
+        """s on a team's card (or its row in the Table, or the Team panel's team): every member not open
+        started, a closed one resumed as itself, one never started new, the lead last, as the terminal
+        dashboard's s starts them (WindowFront.start_team: teamkeys.TeamKeys.start, one copy; the members
+        claimed under a lock, waited for UI_TRIES at most here); its cache gone, s again starts it. On a
+        session (a member's too): its short summary written on a thread (Summarizer: summarize.summarize, as
+        the terminal's s), shown in the drawer when it comes; one that ran on another organisation says what
+        goes where first. The team at hand as h takes it: with a session picked and the Team panel beside the
+        sessions, that session."""
+        snap = self.snap
+        if snap is None:
+            return
+        session = None if self.team_panel_over_sessions() else snap.sessions.get(self.picked_now())
+        state = self.team_at_hand(panel_else=session is None)
+        if state is not None:
+            self.front.start_team(state.team, self.members_now(state))
+            return
+        if session is None:
             self.say(START_ELSEWHERE)
             return
-        self.front.start_team(state.team, self.members_now(state))
+        account = next((a for a in snap.accounts if a.cli == "claude"), None)
+        note = accountwords.elsewhere_note(session, sessionwords.SUMMARY_GOES, account)
+        if note is not None:
+            self.tell_note(note)
+        if self.summarizer.start(session):
+            self.show_pick(self.picked_now())  # "asking Claude (haiku)…" in the drawer
+
+    def summary_came(self, sid: str) -> None:
+        """A summary written (or not): the drawer drawn again when it shows that session."""
+        if self.picked_now() == sid:
+            self.show_pick(sid)
 
     def team_panel_in_front(self) -> bool:
         dock = self.docks["Team"]
