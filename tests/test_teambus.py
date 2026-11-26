@@ -321,7 +321,7 @@ def test_install_rewrites_only_what_changed():
     assert teambus._read_team_file("shop")[1] == ["lead", "ui", "api"]
 
 
-def test_a_member_started_in_the_background_gets_its_name_too(tmp_path, monkeypatch):
+def test_a_member_started_in_the_background_gets_its_name_too(tmp_path, monkeypatch, real_launch):
     """claude --bg ran with tabmancer's own environment only, so a background Claude member sent as 'you'."""
     from tabmancer import launch as launch_module
 

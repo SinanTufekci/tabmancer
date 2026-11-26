@@ -4,10 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from tabmancer import app as app_module
-from tabmancer import sessions
+from tabmancer import launch, sessions
+
+try:  # the terminal dashboard (Textual): its own copies are guarded below, where it is installed
+    from tabmancer import app as app_module
+except ImportError:
+    app_module = None
 
 CWD = "C:/work/demo"
+# The real ones, for a test of them (real_launch): every other test has stand-ins (isolated).
+REAL_LAUNCH = {name: getattr(launch, name) for name in ("terminal_kind", "run_in_background")}
 
 
 def team_preview(dialog) -> str:
@@ -95,11 +101,21 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(typein, "write_keys", lambda pid, text: False)  # nor type into a real console
     # Never real tabs or windows, whatever a test presses: a test that wants to see what would
     # open puts its own recorder in their place.
-    monkeypatch.setattr(app_module, "open_tabs", lambda launches: [])
     monkeypatch.setattr(cli, "open_tabs", lambda launches: [])
-    monkeypatch.setattr(app_module, "run_in_background", no_background)
-    # Unasked tabs (a limit lifted) as anywhere but Windows Terminal: test_monitor asks for its way.
-    monkeypatch.setattr(app_module, "terminal_kind", lambda: "none")
+    # At the core too, where the window's openers reach them (launch.open_tabs, looked up when called):
+    # no terminal that opens tabs, so launch.open_tabs gives the commands back and starts nothing; never
+    # `claude --bg`. A test of these takes real_launch. They hold without the terminal dashboard
+    # (test_test_guards).
+    from tabmancer import actions
+
+    monkeypatch.setattr(launch, "terminal_kind", lambda: "none")
+    monkeypatch.setattr(launch, "run_in_background", no_background)
+    monkeypatch.setattr(actions, "run_in_background", no_background)
+    if app_module is not None:  # the terminal dashboard's own copies (imported by name)
+        monkeypatch.setattr(app_module, "open_tabs", lambda launches: [])
+        monkeypatch.setattr(app_module, "run_in_background", no_background)
+        # Unasked tabs (a limit lifted) as anywhere but Windows Terminal: test_monitor asks for its way.
+        monkeypatch.setattr(app_module, "terminal_kind", lambda: "none")
     monkeypatch.setattr(toast, "show", lambda title, body, dashboard: toast.FAILED)  # no real toasts
     from tabmancer import share
 
@@ -151,11 +167,26 @@ def _records(prompt, reply, title):
 
 
 @pytest.fixture
+def real_launch(monkeypatch):
+    """The real launch.terminal_kind and launch.run_in_background, for a test of them. It stands in for
+    what they reach itself (shutil.which, subprocess), so still nothing starts."""
+    for name, real in REAL_LAUNCH.items():
+        monkeypatch.setattr(launch, name, real)
+
+
+@pytest.fixture
 def fake_home(tmp_path, monkeypatch):
     """A ~/.claude with two finished sessions, "one" and "two", in the same folder."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-    monkeypatch.setattr(app_module, "recent_shutdowns", list)
-    monkeypatch.setattr(app_module, "open_at_shutdown", lambda sessions, shutdowns: set())
+    from tabmancer import cli, doctor, shutdowns
+
+    # Never the system's own log of shutdowns (wevtutil, journalctl, last), where it is read by name too.
+    for module in (shutdowns, cli, doctor):
+        monkeypatch.setattr(module, "recent_shutdowns", lambda limit=30: [])
+    monkeypatch.setattr(cli, "open_at_shutdown", lambda sessions, shutdowns: set())
+    if app_module is not None:
+        monkeypatch.setattr(app_module, "recent_shutdowns", list)
+        monkeypatch.setattr(app_module, "open_at_shutdown", lambda sessions, shutdowns: set())
     project = tmp_path / "projects" / "C--work-demo"
     project.mkdir(parents=True)
     for name, title in [("one", "First task"), ("two", "Second task")]:

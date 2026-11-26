@@ -106,7 +106,7 @@ def test_applescript_quotes_paths_and_titles():
     assert L.apple_terminal_script([launch(), launch()]).count("do script") == 2
 
 
-def test_terminal_detection(monkeypatch):
+def test_terminal_detection(monkeypatch, real_launch):
     monkeypatch.setattr(L.sys, "platform", "linux")
     monkeypatch.setattr(L.shutil, "which", lambda name: f"/usr/bin/{name}")
     for var in ("TMUX", "WEZTERM_PANE", "KITTY_WINDOW_ID", "TERM_PROGRAM", "GNOME_TERMINAL_SCREEN",

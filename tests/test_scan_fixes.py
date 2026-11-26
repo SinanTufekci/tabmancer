@@ -37,7 +37,7 @@ def test_a_first_message_that_begins_with_a_dash_is_not_taken_for_an_option():
     assert Launch("x", "C:/w", Mode.NEW, "", prompt="fix it").argv == ["claude", "fix it"]  # as before otherwise
 
 
-def test_a_background_start_through_npms_claude_cmd_keeps_a_quoted_message_whole(monkeypatch):
+def test_a_background_start_through_npms_claude_cmd_keeps_a_quoted_message_whole(monkeypatch, real_launch):
     ran = []
     monkeypatch.setattr(launch.shutil, "which", lambda name: r"C:\npm\claude.CMD")
     monkeypatch.setattr(launch.subprocess, "run", lambda argv, **kw: ran.append(argv) or
@@ -47,7 +47,8 @@ def test_a_background_start_through_npms_claude_cmd_keeps_a_quoted_message_whole
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe runs a .cmd shim on Windows only")
-def test_a_background_start_through_a_cmd_shim_reaches_claude_as_written(tmp_path, monkeypatch):
+def test_a_background_start_through_a_cmd_shim_reaches_claude_as_written(tmp_path, monkeypatch,
+                                                                         real_launch):
     # cmd.exe read the line first: %USERNAME% came out as the name, a word with & in it and no space
     # went bare and the rest ran as a command, a line break ended the message there.
     echo = tmp_path / "echo.py"

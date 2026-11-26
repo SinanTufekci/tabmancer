@@ -150,7 +150,7 @@ async def test_prompt_on_an_open_session_goes_to_its_tab(fake_home, monkeypatch)
     assert asked == [session.title, session.title]
 
 
-def test_run_in_background_uses_claude_bg_resume(monkeypatch):
+def test_run_in_background_uses_claude_bg_resume(monkeypatch, real_launch):
     calls = []
 
     class Result:
