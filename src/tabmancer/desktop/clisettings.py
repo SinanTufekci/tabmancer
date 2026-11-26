@@ -43,6 +43,19 @@ class Row(QLabel):
             super().mousePressEvent(event)
 
 
+class PickRow(Row):
+    """A row in a list to pick from: a click picks it, a double click chooses it (chosen: its place in the list)."""
+
+    chosen = Signal(int)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.chosen.emit(self.at)
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
+
+
 class CliSettingsDialog(QDialog):
     """↑↓ pick a CLI, Space (or a click) turns it on or off, m picks the main CLI, Enter saves (saved, and it
     closes), Esc leaves things as they were. Window-modal, never waited on."""

@@ -22,7 +22,7 @@ from functools import partial
 
 from PySide6.QtCore import QObject, Signal
 
-from .. import actions, claudeupdate, launch, openings, prompting
+from .. import actions, claudeupdate, launch, openings, prompting, workspaces, workspacewords
 from ..launch import Launch, Mode, default_mode
 from ..sessions import Session, Status
 from ..store import DashSnapshot, live_entries
@@ -130,6 +130,23 @@ class Opener(QObject):
         self.openings.seen(sessions)
         words = self.openings.due(sessions)
         return actions.Note(words, "warning", 10) if words else None
+
+    # --- o: a workspace ------------------------------------------------------------------------------
+
+    def open_workspace(self, workspace: workspaces.Workspace, sessions: list[Session],
+                       background: dict[str, dict]) -> None:
+        """o: a workspace's folders opened, each folder's latest sessions continued or new ones started
+        (workspaces.resolve, given the sessions newest first), on a thread of its own: it looks at the folders
+        and the teams first. Nothing to open: said why, folder by folder."""
+        self.start(self.open_workspace_now, workspace, list(sessions), dict(background))
+
+    def open_workspace_now(self, workspace: workspaces.Workspace, sessions: list[Session],
+                           background: dict[str, dict]) -> None:
+        launches, notes = workspaces.resolve(workspace, sessions)
+        if not launches:
+            self.say(workspacewords.nothing_note(notes))
+            return
+        self.open_now(launches, background)
 
     # --- p ----------------------------------------------------------------------------------------
 

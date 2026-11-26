@@ -27,7 +27,7 @@ from ..browsers import DEFAULT, Place
 from ..config import UI_TRIES
 from ..teamwords import Part
 from . import look
-from .clisettings import Row, parts_html
+from .clisettings import PickRow, parts_html
 from .formparts import keys_html
 from .handover import label
 
@@ -121,19 +121,6 @@ class Accounts(QObject):
             thread.join(seconds)
 
 
-class AccountRow(Row):
-    """An account's row: a click picks it, a double click signs in with it (chosen: its place in the list)."""
-
-    chosen = Signal(int)
-
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.chosen.emit(self.at)
-            event.accept()
-        else:
-            super().mouseDoubleClickEvent(event)
-
-
 class AccountsLabel(QLabel):
     """The top bar's accounts: a click opens A, as a click on them does in the terminal dashboard."""
 
@@ -189,9 +176,9 @@ class AccountsDialog(QDialog):
         rows = QVBoxLayout(listed)
         rows.setContentsMargins(0, 4, 0, 4)
         rows.setSpacing(2)
-        self.rows: list[AccountRow] = []
+        self.rows: list[PickRow] = []  # a click picks an account, a double click signs in with it
         for at, key in enumerate(self.ids):
-            row = AccountRow(at)
+            row = PickRow(at)
             if self.is_current(key):
                 row.setCursor(Qt.CursorShape.ArrowCursor)
             row.clicked.connect(self.click)

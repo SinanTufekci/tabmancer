@@ -86,6 +86,8 @@ from .. import (
     rename,
     search,
     teams,
+    workspaces,
+    workspacewords,
 )
 from .. import viewmodel as VM
 from ..bgjobs import Job
@@ -110,6 +112,7 @@ from .signin import Accounts, AccountsDialog, AccountsLabel, Seen
 from .table import Table, drawer_key
 from .teampanel import TeamPanel
 from .widgets import KeyBar, bit_pixmap, text_label
+from .workspacelist import WorkspacesDialog
 
 POLL_MS = 2000  # as often as the terminal dashboard reads its pid files (LIVE_REFRESH_SECONDS)
 TICK_MS = 100  # the live dot breathes and the clock goes on
@@ -118,7 +121,7 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B", ",", "A"}
+        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o"}
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
@@ -262,6 +265,7 @@ class MainWindow(QMainWindow):
         self.renamer.done.connect(self.renamed)
         self.renamer.failed.connect(self.rename_failed)
         self.naming: Session | None = None  # r: the session its dialog names
+        self.workspace_from: list[Session] = []  # w: the sessions ticked when it was pressed, their folders saved
         self.jobs = Jobs(self)  # B: the background sessions read, and stopped or removed, on threads
         self.jobs.read.connect(self.background_read)
         self.listing_background = False  # B pressed, its list not read yet
@@ -447,7 +451,7 @@ class MainWindow(QMainWindow):
                  "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key,
                  "h": self.handover_key, "r": self.rename_key, "p": self.prompt_key,
                  "B": self.background_key, ",": self.settings_key,
-                 "A": self.accounts_key}
+                 "A": self.accounts_key, "w": self.save_workspace_key, "o": self.open_workspace_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -1263,7 +1267,58 @@ class MainWindow(QMainWindow):
         self.poll()
 
     def rename_failed(self, note: actions.Note) -> None:
+        self.tell_note(note)
+
+    def tell_note(self, note: actions.Note) -> None:
+        """A note (actions.Note) said by Bit, as loud and for as long as it says."""
         self.say_note(note.words, float(note.seconds or 4), note.severity)
+
+    # --- w and o: workspaces ------------------------------------------------------------------------
+
+    def save_workspace_key(self) -> None:
+        """w: the ticked sessions' folders saved as a workspace, its name asked for, as the terminal
+        dashboard's w does it and in its words (workspacewords)."""
+        snap = self.snap
+        chosen = [s for s in snap.sessions.values() if s.session_id in self.selected] if snap is not None else []
+        if not chosen:
+            self.tell_note(workspacewords.tick_first_note())
+            return
+        self.workspace_from = chosen
+        asked = NameDialog(self, workspacewords.name_heading(len(chosen)), "", workspacewords.PLACEHOLDER,
+                           workspacewords.NAME_KEYS, self.accent)
+        asked.named.connect(self.save_workspace_as)
+        asked.open()
+
+    def save_workspace_as(self, name: str) -> None:
+        """The name given: the workspace kept (workspaces.keep: the others as the file has them now), each
+        folder continued, or new as m set its row; said, or why it was not kept."""
+        chosen, self.workspace_from = self.workspace_from, []
+        if not chosen or not workspaces.clean_name(name):
+            return
+        workspace = workspaces.from_sessions(name, chosen, self.opener.modes)
+        kept = workspaces.keep(workspace, UI_TRIES)
+        self.tell_note(workspacewords.saved_note(workspace) if kept else workspacewords.not_kept_note(workspace.name))
+
+    def open_workspace_key(self) -> None:
+        """o: the workspaces saved (WorkspacesDialog), as the terminal dashboard's o lists them."""
+        saved = workspaces.load(UI_TRIES)
+        if not saved:
+            self.tell_note(workspacewords.none_yet_note())
+            return
+        asked = WorkspacesDialog(self, saved, self.accent)
+        asked.chosen.connect(self.open_workspace)
+        asked.said.connect(self.tell_note)
+        asked.open()
+
+    def open_workspace(self, name: str) -> None:
+        """Enter on a workspace: its folders opened on a thread (Opener.open_workspace), with the sessions as
+        the list has them now, newest first; what came of it said, as for Enter (took_open)."""
+        snap = self.snap
+        workspace = workspaces.load(UI_TRIES).get(name)
+        if workspace is None or snap is None:
+            return
+        newest = sorted(snap.sessions.values(), key=lambda s: s.last_active, reverse=True)
+        self.opener.open_workspace(workspace, newest, snap.background)
 
     def prompt_key(self) -> None:
         """p: a prompt for the picked session, as the terminal dashboard's p asks for it (prompting.py): an open
