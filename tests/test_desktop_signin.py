@@ -9,6 +9,7 @@ import importlib
 import os
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,8 +28,9 @@ from PySide6.QtWidgets import QApplication, QDialog, QWidget
 from test_desktop_front import read
 from test_desktop_handover import until
 
-from tabmancer import accounts, accountwords, browsers, claudeupdate, demo, launch, shutdowns
+from tabmancer import accounts, accountwords, browsers, claudeupdate, config, demo, launch, shutdowns
 from tabmancer import viewmodel as VM
+from tabmancer.config import config_dir
 from tabmancer.desktop import frame, look, signin
 from tabmancer.desktop.clisettings import parts_html
 from tabmancer.desktop.formparts import keys_html
@@ -156,6 +158,43 @@ def test_the_arrows_pick_past_the_account_signed_in_now_and_where_its_page_opens
     assert shown_dialogs(shown) == [] and world == []  # nothing signed in
     asked = press_a(qapp, shown)  # the next time: as picked
     assert asked.rows[1].text().endswith(look.styled("Chrome · Personal", look.CYAN))
+    press(qapp, asked, Qt.Key.Key_Escape)
+
+
+def test_a_place_not_kept_is_said_in_the_dialog_and_accounts_json_left_as_it_is(qapp, window, world):
+    shown = window()
+    path = config_dir() / accounts.KNOWN
+    path.write_text("{cut short", encoding="utf-8")
+    asked = press_a(qapp, shown)
+    assert asked.ids == [asked.ids[0], accountwords.ANOTHER] and not asked.not_kept.isVisibleTo(asked)
+    press(qapp, asked, Qt.Key.Key_Right)  # another account's page: Chrome · Personal, this time
+    assert asked.not_kept.isVisibleTo(asked) and asked.not_kept.text() == look.span(accountwords.NOT_KEPT, look.AMBER)
+    assert asked.rows[1].text().endswith(look.styled("Chrome · Personal", look.CYAN))
+    assert path.read_text(encoding="utf-8") == "{cut short"
+    path.unlink()
+    press(qapp, asked, Qt.Key.Key_Right)  # kept now: said no more
+    assert not asked.not_kept.isVisibleTo(asked) and accounts.opens_in() == {accounts.ANY_OTHER: "chrome:Profile 1"}
+    press(qapp, asked, Qt.Key.Key_Escape)
+
+
+def test_a_place_turned_while_another_tabmancer_changes_accounts_json_waits_a_moment_and_says_not_kept(
+        qapp, window, world, monkeypatch):
+    """Its read-then-write is one process's at a time (config.locked): held by another, ←/→ waits ~75 ms
+    (UI_TRIES), not a second, and says it was not kept, the file left as that process writes it."""
+    shown = window()
+    asked = press_a(qapp, shown)
+    path = config_dir() / accounts.KNOWN
+    before = path.read_text(encoding="utf-8")
+    waits: list[float] = []
+    monkeypatch.setattr(config, "time", SimpleNamespace(time=time.time, sleep=waits.append))  # config's clock only
+    with config.locked(accounts.KNOWN):  # another window, or the terminal, changing it
+        press(qapp, asked, Qt.Key.Key_Right)
+    assert asked.not_kept.isVisibleTo(asked) and waits == [config.BUSY_WAIT] * (config.UI_TRIES - 1)
+    # The work account's page, from its own profile (Chrome · Work) to the private window, for this sign-in.
+    assert asked.ids[1] == WORK.key and asked.rows[1].text().endswith(look.styled("Chrome · private window", look.CYAN))
+    assert path.read_text(encoding="utf-8") == before
+    press(qapp, asked, Qt.Key.Key_Right)  # let go of: kept, said no more
+    assert not asked.not_kept.isVisibleTo(asked) and accounts.opens_in() == {WORK.email: browsers.DEFAULT}
     press(qapp, asked, Qt.Key.Key_Escape)
 
 

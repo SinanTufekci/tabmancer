@@ -22,6 +22,9 @@ from .teamwords import Part
 from .viewmodel import lifts
 
 ANOTHER = "+"  # the option for an account not seen yet
+# ←/→ when accounts.keep_opens_in could not keep the place (accounts.json there but unreadable, or not written).
+NOT_KEPT = ("Not saved for next time: accounts.json could not be read or written, or another tabmancer was "
+            "changing it, so it was left as it is. This sign-in still opens there.")
 
 
 def seen_words(when: str) -> str:

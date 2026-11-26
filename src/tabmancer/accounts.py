@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -141,19 +142,45 @@ SAVED = ("account_id", "org_id", "org_name", "org_type")  # an account's record:
 
 
 def _known_file() -> dict:
-    from .config import read_json
-
-    saved = read_json(KNOWN)
-    return saved if isinstance(saved, dict) else {}
+    return _readable() or {}
 
 
-def _save_known(saved: dict) -> None:
-    from .config import write_json
+def _readable(tries: int | None = None) -> dict | None:
+    """accounts.json as a dict to change and save: {} when there is none yet, None when it is there but
+    could not be read or holds no dict (config.merge_json's rule): saved then, it would lose the accounts
+    seen, the limits' accounts and where each page opens, so it is left as it is."""
+    from .config import config_dir, read_json
 
+    saved = read_json(KNOWN, tries)
+    if isinstance(saved, dict):
+        return saved
+    return None if os.path.lexists(config_dir() / KNOWN) else {}
+
+
+def _save_known(change: Callable[[dict], bool], tries: int | None = None) -> bool:
+    """accounts.json read, changed and written back by one process at a time (config.locked: the dashboard's
+    notes and A's ←/→, in a window or the terminal, would each write back its own read and lose the other's
+    change); change edits the saved dict and says whether it changed anything. False when it was not kept:
+    the lock still held by another process after tries (config.Busy: refused as an unreadable file is), the
+    file there but unreadable (left as it is), or not written (a read-only config folder). tries:
+    config.UI_TRIES on a UI thread (None: BUSY_TRIES)."""
+    from .config import locked, write_json
+
+    saved = _readable(tries)
+    if saved is None:
+        return False
+    if not change(saved):
+        return True  # as it was: no lock taken, as the dashboard's poll asks every few seconds
     try:
-        write_json(KNOWN, saved, indent=2)
-    except OSError:
-        pass  # a read-only config folder: the list is not kept, nothing else is lost
+        with locked(KNOWN, tries):
+            saved = _readable(tries)  # again, in the lock: a change another process made meanwhile is kept
+            if saved is None:
+                return False
+            if change(saved):
+                write_json(KNOWN, saved, indent=2)
+    except OSError:  # config.Busy, the lock not got, among them
+        return False
+    return True
 
 
 def _record(account: Account, when: str) -> dict:
@@ -167,19 +194,23 @@ def _account(entry: dict) -> Account:
                    *(str(entry.get(name) or "") for name in SAVED))
 
 
-def remember(account: Account | None, when: str) -> None:
+def remember(account: Account | None, when: str, tries: int | None = None) -> None:
     """Claude Code's account as it is now, first in the list of those seen (when: an ISO time). Its
-    email's record from before the ids were kept is this account's: this one takes its place."""
+    email's record from before the ids were kept is this account's: this one takes its place. Not kept
+    (quietly: the next poll tries again) while accounts.json is unreadable or held (_save_known)."""
     if account is None or account.cli != "claude" or "@" not in account.email:
         return
-    saved = _known_file()
-    seen = [e for e in saved.get("claude", []) if isinstance(e, dict) and e.get("email")]
-    if seen and _account(seen[0]) == account:
-        return  # as it was: no write every few seconds
-    saved["claude"] = [_record(account, when), *(
-        e for e in seen if _account(e).key != account.key
-        and not (e["email"] == account.email and not _account(e).account_id))]
-    _save_known(saved)
+
+    def change(saved: dict) -> bool:
+        seen = [e for e in saved.get("claude", []) if isinstance(e, dict) and e.get("email")]
+        if seen and _account(seen[0]) == account:
+            return False  # as it was: no write every few seconds
+        saved["claude"] = [_record(account, when), *(
+            e for e in seen if _account(e).key != account.key
+            and not (e["email"] == account.email and not _account(e).account_id))]
+        return True
+
+    _save_known(change, tries)
 
 
 def known() -> list[tuple[Account, str]]:
@@ -213,11 +244,17 @@ def limited_on() -> dict[str, str]:
     return {str(k): (keys[str(v)][0] if len(keys.get(str(v), ())) == 1 else str(v)) for k, v in found.items()}
 
 
-def keep_limited(limited: dict[str, str]) -> None:
-    saved = _known_file()
-    if saved.get("limited") != limited:
+def keep_limited(limited: dict[str, str], tries: int | None = None) -> None:
+    """On which account each session stopped at a limit; not kept (quietly) while accounts.json is
+    unreadable or held (_save_known)."""
+
+    def change(saved: dict) -> bool:
+        if saved.get("limited") == limited:
+            return False
         saved["limited"] = limited
-        _save_known(saved)
+        return True
+
+    _save_known(change, tries)
 
 
 ANY_OTHER = "*"  # opens_in's key for an account not listed yet
@@ -225,16 +262,26 @@ ANY_OTHER = "*"  # opens_in's key for an account not listed yet
 
 def opens_in() -> dict[str, str]:
     """Email (or ANY_OTHER) -> where its sign-in page opens (a browsers.Place id), as picked in A."""
-    found = _known_file().get("opens_in", {})
+    return _opens_in(_known_file())
+
+
+def _opens_in(saved: dict) -> dict[str, str]:
+    found = saved.get("opens_in", {})
     return {str(k): str(v) for k, v in found.items()} if isinstance(found, dict) else {}
 
 
-def keep_opens_in(email: str, place: str) -> None:
-    saved = _known_file()
-    picked = opens_in()
-    if picked.get(email) != place:
+def keep_opens_in(email: str, place: str, tries: int | None = None) -> bool:
+    """Where the email's sign-in page opens, kept for next time. False when it could not be: accounts.json
+    unreadable or held (left as it is), or not written (_save_known; accountwords.NOT_KEPT says so)."""
+
+    def change(saved: dict) -> bool:
+        picked = _opens_in(saved)
+        if picked.get(email) == place:
+            return False
         saved["opens_in"] = {**picked, email: place}
-        _save_known(saved)
+        return True
+
+    return _save_known(change, tries)
 
 
 def words(account: Account, room: int, org: bool = False) -> str:

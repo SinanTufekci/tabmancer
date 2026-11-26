@@ -1,15 +1,21 @@
 """Who the coding CLIs are signed in as, read from their own files, and shown in the top bar."""
 
 import base64
+import contextlib
 import json
 import os
+import time
+from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from conftest import wait_until
 from textual.widgets import Static
 
-from tabmancer import accounts, clis
+from tabmancer import accounts, clis, config
 from tabmancer.accounts import Account
 from tabmancer.app import SessionPicker
+from tabmancer.config import config_dir
 
 
 def claude_signed_in(folder, email="you@example.com", kind="claude_max", tier="default_claude_max_20x"):
@@ -240,6 +246,116 @@ def test_where_each_account_opens_outlives_the_list_of_accounts_being_written_ag
     accounts.remember(Account("claude", "a@example.com", "Pro"), "2026-11-05T10:00:00")
     accounts.keep_limited({"s1": "a@example.com"})
     assert accounts.opens_in() == {"a@example.com": "edge:private", "*": "chrome:private"}
+
+
+@pytest.mark.parametrize("held", ["{\"claude\": [{\"email\": \"a@example.com\"}], \"limited\": {\"s1\"", "[]"])
+def test_an_accounts_json_that_cannot_be_read_is_left_as_it_is_never_written_over(held):
+    """Cut short, or holding no dict: saving the one change would lose the accounts seen, the limits'
+    accounts and where each page opens. The dashboard's own notes skip quietly; A says ←/→ was not kept."""
+    path = config_dir() / accounts.KNOWN
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(held, encoding="utf-8")
+    accounts.remember(Account("claude", "b@example.com", "Team", "b", "org-b"), "2026-11-26T10:00:00")
+    accounts.keep_limited({"s2": "b:org-b"})
+    assert accounts.keep_opens_in("b@example.com", "chrome:private") is False
+    assert path.read_text(encoding="utf-8") == held
+    assert accounts.known() == [] and accounts.opens_in() == {}  # read as nothing, as before
+    path.unlink()  # none yet: made at the first change
+    assert accounts.keep_opens_in("b@example.com", "chrome:private") is True
+    assert accounts.keep_opens_in("b@example.com", "chrome:private") is True  # as it was: nothing written
+    assert accounts.opens_in() == {"b@example.com": "chrome:private"}
+
+
+def test_a_place_that_could_not_be_written_is_said_not_kept(monkeypatch):
+    def refused(*args, **kwargs):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(config, "write_json", refused)
+    assert accounts.keep_opens_in("b@example.com", "chrome:private") is False
+    accounts.remember(Account("claude", "b@example.com", "Team"), "2026-11-26T10:00:00")  # quietly not kept
+    accounts.keep_limited({"s2": "b@example.com"})
+    assert not (config_dir() / accounts.KNOWN).exists()
+
+
+def test_a_change_while_another_tabmancer_changes_accounts_json_is_refused_and_one_meanwhile_kept(monkeypatch):
+    """One process at a time reads it, changes it and writes it back (config.locked): held by another, a change
+    waits tries (UI_TRIES on a UI thread: ~75 ms) and is refused, the file left to that process; one that
+    changes nothing takes no lock. Got, the file is read again: what another process wrote meanwhile is kept."""
+    path = config_dir() / accounts.KNOWN
+    assert accounts.keep_opens_in("b@example.com", "edge:private") is True
+    before = path.read_text(encoding="utf-8")
+    waits: list[float] = []
+    monkeypatch.setattr(config, "time", SimpleNamespace(time=time.time, sleep=waits.append))  # config's clock only
+    with config.locked(accounts.KNOWN):
+        assert accounts.keep_opens_in("b@example.com", "chrome:private", config.UI_TRIES) is False
+        assert waits == [config.BUSY_WAIT] * (config.UI_TRIES - 1)
+        accounts.remember(Account("claude", "b@example.com", "Team", "b", "org-b"), "2026-11-26T10:00:00")
+        accounts.keep_limited({"s2": "b:org-b"}, 1)
+        assert path.read_text(encoding="utf-8") == before  # quietly not kept: the next poll tries again
+        waits.clear()
+        assert accounts.keep_opens_in("b@example.com", "edge:private", config.UI_TRIES) is True and not waits
+    read_text = Path.read_text
+
+    def held_open(self, *args, **kwargs):  # the file itself held by another process (replaced just now)
+        if self.name == accounts.KNOWN:
+            raise PermissionError("in use")
+        return read_text(self, *args, **kwargs)
+
+    with monkeypatch.context() as held:
+        held.setattr(Path, "read_text", held_open)
+        assert accounts.keep_opens_in("b@example.com", "chrome:private", config.UI_TRIES) is False
+    assert waits == [config.BUSY_WAIT] * (config.UI_TRIES - 1) and path.read_text(encoding="utf-8") == before
+    locked = config.locked
+    meanwhile = [json.dumps({"limited": {"s1": "a@example.com"}}), "{cut short"]
+
+    def another_first(name, tries=None):  # another process's change, written just before the lock is got
+        path.write_text(meanwhile[0], encoding="utf-8")
+        return locked(name, tries)
+
+    monkeypatch.setattr(config, "locked", another_first)
+    assert accounts.keep_opens_in("b@example.com", "chrome:private") is True
+    assert json.loads(path.read_text(encoding="utf-8")) == {"limited": {"s1": "a@example.com"},
+                                                              "opens_in": {"b@example.com": "chrome:private"}}
+    meanwhile.pop(0)  # cut short by it: refused, left as it is
+    assert accounts.keep_opens_in("b@example.com", "edge:private") is False
+    assert path.read_text(encoding="utf-8") == "{cut short"
+
+
+@pytest.mark.parametrize("held", [False, True])
+async def test_a_says_where_a_page_opens_was_not_kept_when_accounts_json_is_unreadable_or_held(held, fake_home,
+                                                                                                 monkeypatch):
+    """Unreadable: left as it is. Held by another tabmancer changing it (config.locked): left to that process,
+    after ~75 ms (UI_TRIES). Said either way, as this sign-in still opens there."""
+    from tabmancer import browsers
+    from tabmancer.accountsview import AccountsDialog
+    from tabmancer.accountwords import NOT_KEPT
+    from tabmancer.browsers import Place
+
+    claude_signed_in(fake_home, "a@example.com")
+    path = config_dir() / accounts.KNOWN
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}" if held else "{cut short", encoding="utf-8")
+    monkeypatch.setattr(browsers, "places", lambda: [Place(browsers.DEFAULT, "default browser"),
+                                                     Place("chrome:private", "Chrome · private window", ("chrome",))])
+    keep_opens_in, asked = accounts.keep_opens_in, []
+
+    def keeps(email, place, tries=None):
+        asked.append(tries)
+        return keep_opens_in(email, place, tries)
+
+    monkeypatch.setattr(accounts, "keep_opens_in", keeps)
+    app = SessionPicker(days=14)
+    async with app.run_test(size=(150, 44)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("A")
+        await wait_until(pilot, lambda: isinstance(app.screen, AccountsDialog), "the A dialog")
+        with config.locked(accounts.KNOWN) if held else contextlib.nullcontext():
+            before = path.read_text(encoding="utf-8")
+            await pilot.press("right")  # another account's page: the private window, this time
+            await wait_until(pilot, lambda: any(str(n.message) == NOT_KEPT for n in app._notifications), "the note")
+            assert path.read_text(encoding="utf-8") == before
+            assert held or before == "{cut short"
+    assert asked == [config.UI_TRIES]  # on the UI thread: ~75 ms at most, not a second
 
 
 # --- one email in more than one organisation: an account is its account id and organisation id -----

@@ -20,8 +20,9 @@ from textual.widgets.option_list import Option
 
 from . import accounts, accountwords, usage
 from .accounts import Account
-from .accountwords import ANOTHER
+from .accountwords import ANOTHER, NOT_KEPT
 from .browsers import DEFAULT, Place
+from .config import UI_TRIES
 from .dialogs import frame, title
 from .theme import keys
 
@@ -98,7 +99,8 @@ class AccountsDialog(ModalScreen[tuple[str, str] | None]):
             if its_email == email:
                 self.place[option_id] = self.place[option.id]
                 options.replace_option_prompt(option_id, self.prompt(option_id))
-        accounts.keep_opens_in(email, self.place[option.id])
+        if not accounts.keep_opens_in(email, self.place[option.id], UI_TRIES):
+            self.notify(NOT_KEPT, severity="warning", timeout=10)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         option_id = event.option.id or ANOTHER

@@ -24,6 +24,7 @@ from .. import accounts, accountwords, actions, browsers, claudeupdate, launch, 
 from ..accounts import Account
 from ..accountwords import ANOTHER
 from ..browsers import DEFAULT, Place
+from ..config import UI_TRIES
 from ..teamwords import Part
 from . import look
 from .clisettings import Row, parts_html
@@ -201,6 +202,9 @@ class AccountsDialog(QDialog):
         box.addWidget(listed)
         self.note = label(look.span(accountwords.note(bool(self.places), stopped), look.MUTED), wrap=True)
         box.addWidget(self.note)
+        self.not_kept = label(look.span(accountwords.NOT_KEPT, look.AMBER), wrap=True)  # ←/→ not kept: said here
+        self.not_kept.setVisible(False)
+        box.addWidget(self.not_kept)
         self.keys = label(keys_html(accountwords.key_pairs(bool(self.places))))
         box.addWidget(self.keys)
         self.setStyleSheet(f"QDialog {{ background:{look.SURFACE}; }}"
@@ -248,7 +252,8 @@ class AccountsDialog(QDialog):
 
     def turn_place(self, step: int) -> None:
         """←/→: the next place for the picked account's page, its email's other organisations' too, kept for
-        it at once (accounts.keep_opens_in), Esc or not."""
+        it at once (accounts.keep_opens_in), Esc or not; not kept (accounts.json unreadable, or held by
+        another tabmancer past UI_TRIES), said under the note (this sign-in still opens there)."""
         if not self.places:
             return
         key = self.ids[self.at]
@@ -257,7 +262,7 @@ class AccountsDialog(QDialog):
         for other, its_email in self.email.items():  # the same email's other organisations open there too
             if its_email == email:
                 self.place[other] = now
-        accounts.keep_opens_in(email, now)
+        self.not_kept.setVisible(not accounts.keep_opens_in(email, now, UI_TRIES))  # held: ~75 ms, no more
         self.draw()
 
     def choose(self) -> None:
