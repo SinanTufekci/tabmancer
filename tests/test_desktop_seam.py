@@ -37,6 +37,8 @@ look.fonts_for_offscreen()
 
 TIMES = re.compile(r"\b\d+h\d{2}m\b|\b\d+[dhms]\b")  # "3m" then "4m": the two read a moment apart
 TURNING = re.compile(f"[{re.escape(STAR)}]")  # a member at work's star, in the frame of the moment it was drawn
+WAIT_SECONDS = 60.0  # the bound on each wait below, reached only when something is wrong: a wait ends as
+# soon as its condition holds, however late the terminal's poll threads land with other suites running beside
 
 
 @pytest.fixture(scope="module")
@@ -67,7 +69,7 @@ def side_by_side(qapp, tmp_path, monkeypatch):
         shown = main.MainWindow(start=False)
         shown.resize(width, 950)
         shown.show()
-        QTest.qWaitForWindowActive(shown, 3000)  # its keys are the active window's
+        assert active(shown), "the window never became the active one: its keys would do nothing"
         made.append(shown)
         return shown
 
@@ -79,7 +81,11 @@ def side_by_side(qapp, tmp_path, monkeypatch):
     qapp.processEvents()
 
 
-def read(qapp, shown, seconds: float = 30.0) -> None:
+def active(shown) -> bool:
+    return QTest.qWaitForWindowActive(shown, int(WAIT_SECONDS * 1000))
+
+
+def read(qapp, shown, seconds: float = WAIT_SECONDS) -> None:
     """One poll of the window: read on its thread, then shown."""
     shown.poll()
     deadline = time.monotonic() + seconds
@@ -95,12 +101,11 @@ def press(shown, key: str) -> None:
     QApplication.instance().processEvents()
 
 
-async def wait_for(pilot, condition, tries: int = 100) -> None:
-    for _ in range(tries):
+async def wait_for(pilot, condition, what: str) -> None:
+    deadline = time.monotonic() + WAIT_SECONDS
+    while not condition():
+        assert time.monotonic() < deadline, f"{what}: not after {WAIT_SECONDS:.0f} s"
         await pilot.pause(0.05)
-        if condition():
-            return
-    raise AssertionError("condition never became true")
 
 
 def tui_keys(app) -> list[str]:
@@ -108,12 +113,13 @@ def tui_keys(app) -> list[str]:
 
 
 async def cursor_on(pilot, app, key: str) -> None:
-    for _ in range(40):
+    deadline = time.monotonic() + WAIT_SECONDS
+    while True:
         app.table.move_cursor(row=tui_keys(app).index(key))
         await pilot.pause(0.05)
         if app.cursor_key() == key:
             return
-    raise AssertionError(f"the cursor never stayed on {key}")
+        assert time.monotonic() < deadline, f"the cursor never stayed on {key!r}"
 
 
 def tui_words(app, key: str) -> list[str]:
@@ -143,24 +149,33 @@ def same_words(theirs: list[str], ours: list[str]) -> bool:
     return True
 
 
-async def rows_agree(pilot, app, table) -> None:
-    """The two lists, row for row, in the same words, once both have read what the other has (a team's
-    members resting, say: the terminal's own poll of its teams lands a moment after its first rows)."""
-    for _ in range(200):
-        if tui_keys(app) == table.keys and all(same_words(tui_words(app, key), window_words(table, key))
-                                               for key in table.keys):
-            break
-        await pilot.pause(0.05)
-    assert tui_keys(app) == table.keys
+def rows_differ(app, table) -> str:
+    """Where the two lists differ, or "" where they agree, row for row."""
+    if tui_keys(app) != table.keys:
+        return f"the rows differ: the terminal's {tui_keys(app)!r}, the window's {table.keys!r}"
     for key in table.keys:
-        assert same_words(tui_words(app, key), window_words(table, key)), key
+        if not same_words(tui_words(app, key), window_words(table, key)):
+            return (f"row {key!r} differs: the terminal's {tui_words(app, key)!r}, "
+                    f"the window's {window_words(table, key)!r}")
+    return ""
+
+
+async def rows_agree(pilot, qapp, app, table) -> None:
+    """The two lists, row for row, in the same words, once both have read what the other has (a team's
+    members resting, say: the terminal's own poll of its teams lands a moment after its first rows). Each
+    side goes on meanwhile: the terminal's loop, and the window's events."""
+    deadline = time.monotonic() + WAIT_SECONDS
+    while differs := rows_differ(app, table):
+        assert time.monotonic() < deadline, differs
+        qapp.processEvents()
+        await pilot.pause(0.05)
 
 
 async def test_pins_and_hides_cross_within_a_poll_and_the_lock_stays_with_the_terminal(qapp, side_by_side):
     window, claims = side_by_side
     app = SessionPicker(days=14)
     async with app.run_test(size=(200, 50)) as pilot:
-        await wait_for(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS))
+        await wait_for(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS), "the terminal's first rows")
         assert app.engine.state.acts and actor.holds() and claims == [False]  # the terminal's, at its start
         shown = window()
         read(qapp, shown)
@@ -206,13 +221,13 @@ async def test_the_windows_table_lists_the_terminals_rows_row_for_row(qapp, side
     window, _claims = side_by_side
     app = SessionPicker(days=14)
     async with app.run_test(size=(280, 50)) as pilot:  # room for the Model column beside the sidebar and preview
-        await wait_for(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS))
+        await wait_for(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS), "the terminal's first rows")
         shown = window(1700)  # its Model column too, whatever a runner's monospace font measures
         read(qapp, shown)
         assert shown.selected == app.selected == app.preselected != set()  # open at the made-up shutdown: ticked
         shown.set_view("table")
         table = shown.table
-        await rows_agree(pilot, app, table)
+        await rows_agree(pilot, qapp, app, table)
         assert any(key.startswith(HEADING) for key in table.keys) and app.model_shown and table.model_shown
         team = next(iter(shown.snap.team_states))
         await cursor_on(pilot, app, f"\x01{team}")
@@ -220,7 +235,7 @@ async def test_the_windows_table_lists_the_terminals_rows_row_for_row(qapp, side
         await pilot.press("e")  # its members unfolded in the terminal, and in the window
         assert table.show_key(VM.TEAM_CARD + team)
         press(shown, "e")
-        await rows_agree(pilot, app, table)
+        await rows_agree(pilot, qapp, app, table)
         assert len(table.keys) > len(folded)
 
 
@@ -235,7 +250,7 @@ def test_after_ms_monitor_took_the_keys_the_window_has_them_again_when_clicked_b
     press(shown, "M")
     watching = shown.monitors[team]
     assert isinstance(watching, monitor.MonitorWindow)
-    QTest.qWaitForWindowActive(watching, 3000)
+    active(watching)
     assert QApplication.activeWindow() is watching  # it took the keys, as a window opened in front does
     login = next(s.session_id for s in shown.snap.sessions.values() if s.title == "Fix the login redirect loop")
     assert shown.board.reveal(login)
@@ -244,7 +259,7 @@ def test_after_ms_monitor_took_the_keys_the_window_has_them_again_when_clicked_b
     # Clicked back: the window manager makes a clicked window the active one (offscreen there is none, so
     # the test asks for what the click does), and the window's keys are its own again.
     shown.activateWindow()
-    QTest.qWaitForWindowActive(shown, 3000)
+    active(shown)
     assert QApplication.activeWindow() is shown
     press(shown, "f")
     assert login in shown.snap.pinned and marks.Marks.load().pinned == {login}
