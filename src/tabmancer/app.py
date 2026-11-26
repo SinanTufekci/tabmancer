@@ -2291,12 +2291,12 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
 
     def action_settings(self) -> None:
         """,: which CLIs are listed and the main one (CliSettings saves them); then the list read again when
-        other CLIs are listed now."""
+        other CLIs are listed now. config.json there but unreadable: nothing changed, and that is said."""
         def saved(done: clis.Saved | None) -> None:
             if done is None:
                 return
-            if done.kept and done.words:
-                self.notify(done.words, timeout=4)
+            if done.words:
+                self.notify(done.words, **({"timeout": 4} if done.kept else {"severity": "warning", "timeout": 8}))
             if done.changed:
                 self.reload_sessions()
 
