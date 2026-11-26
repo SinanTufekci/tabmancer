@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
+from conftest import wait_until
 from rich.text import Text
 
 from tabmancer import (
@@ -39,11 +40,8 @@ def shop(tmp_path):
     return team
 
 
-async def settle(pilot, app, tries: int = 60) -> None:
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if isinstance(app.screen, TeamMonitor) and app.screen.view is not None:
-            return
+async def settle(pilot, app) -> None:
+    await wait_until(pilot, lambda: isinstance(app.screen, TeamMonitor) and app.screen.view is not None, "the monitor")
 
 
 async def workers_done(pilot, app, *groups: str, seconds: float = 20) -> None:

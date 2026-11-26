@@ -18,11 +18,7 @@ def opened(monkeypatch):
 
 
 async def loaded(pilot, app):
-    for _ in range(100):
-        await pilot.pause(0.05)
-        if app.sessions and app.full_polls:
-            return
-    raise AssertionError("never loaded")
+    await wait_until(pilot, lambda: app.sessions and app.full_polls, "the sessions")
 
 
 def told(app) -> list[str]:

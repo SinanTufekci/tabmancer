@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from conftest import box_has_focus
+from conftest import wait_until as until
 
 from tabmancer import agy, newsessions, router, teams
 from tabmancer.app import SessionPicker
@@ -36,14 +37,6 @@ def usage(monkeypatch):
 
     monkeypatch.setattr(agy, "_run_usage", run)
     return said
-
-
-async def until(pilot, check, tries=120):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def open_dialog(pilot, app):

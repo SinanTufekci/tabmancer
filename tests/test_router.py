@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from conftest import box_has_focus
+from conftest import wait_until as until
 
 from tabmancer import app as app_module
 from tabmancer import cli, context, newsessions, picks, router, summarize, teams
@@ -21,14 +22,6 @@ from tabmancer.sessions import Session
 def capped(monkeypatch):
     """New sessions get a 300k cap, as they do outside the tests (conftest turns it off)."""
     monkeypatch.delenv("TABMANCER_CONTEXT_CAP", raising=False)
-
-
-async def until(pilot, check, tries=120):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 # --- the cap's words ---------------------------------------------------------------------------

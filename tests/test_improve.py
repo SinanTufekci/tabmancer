@@ -7,6 +7,7 @@ import threading
 
 import pytest
 from conftest import box_has_focus
+from conftest import wait_until as until
 from textual.app import App
 from textual.widgets import TextArea
 
@@ -21,14 +22,6 @@ def frame_words(card) -> str:
     from rich.text import Text
 
     return Text.from_markup(str(card.border_subtitle)).plain
-
-
-async def until(pilot, check, tries=120):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 def answering(monkeypatch, answer: str) -> list[tuple[str, str, str]]:

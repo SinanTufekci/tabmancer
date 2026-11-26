@@ -3,6 +3,7 @@
 import io
 
 import pytest
+from conftest import wait_until
 from rich.console import Console
 from textual.screen import ModalScreen
 
@@ -21,11 +22,7 @@ def opened(monkeypatch):
 
 
 async def loaded(pilot, app):
-    for _ in range(50):
-        await pilot.pause(0.05)
-        if app.sessions:
-            return
-    raise AssertionError("sessions never loaded")
+    await wait_until(pilot, lambda: app.sessions, "the sessions")
 
 
 async def test_select_cycle_mode_and_open(fake_home, opened):

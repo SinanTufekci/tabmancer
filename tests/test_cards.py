@@ -3,6 +3,7 @@ counts; the same key or Esc shows everything again; the tokens card opens the st
 
 from __future__ import annotations
 
+from conftest import wait_until
 from test_team_tree import shop
 
 from tabmancer.app import SessionPicker
@@ -10,10 +11,8 @@ from tabmancer.statsview import StatsScreen
 
 
 async def loaded(pilot, app):
-    for _ in range(100):
-        await pilot.pause(0.05)
-        if app.sessions.get("lead-1") is not None and app.sessions["lead-1"].live_state and app.team_states:
-            break
+    await wait_until(pilot, lambda: app.sessions.get("lead-1") is not None and app.sessions["lead-1"].live_state
+                     and app.team_states, "the lead and its team")
     await pilot.pause(0.2)
 
 

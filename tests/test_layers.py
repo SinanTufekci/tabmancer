@@ -3,6 +3,7 @@ loud states as badges, a legend under the projects, and two-line cards on a shor
 
 from __future__ import annotations
 
+from conftest import wait_until
 from rich.style import Style
 
 from tabmancer import app as app_module
@@ -10,12 +11,9 @@ from tabmancer.app import BADGE, LEGEND, SessionPicker, badge
 from tabmancer.theme import AMBER, MUTED, SURFACE, THEMES, mix
 
 
-async def settle(pilot, app, tries=200):
+async def settle(pilot, app):
     """Till the dashboard has faded in and drawn itself again (a slow runner takes its time)."""
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if app.sessions and app.faded:
-            break
+    await wait_until(pilot, lambda: app.sessions and app.faded, "the faded-in dashboard")
     await pilot.pause(0.2)
 
 

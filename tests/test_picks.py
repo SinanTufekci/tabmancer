@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pytest
 from conftest import box_has_focus
+from conftest import wait_until as until
 
 from tabmancer import app as app_module
 from tabmancer import handover, newsessions, picks, teams
@@ -127,14 +128,6 @@ def test_new_command_takes_a_model_and_an_effort(tmp_path, monkeypatch):
     assert opened[0].argv[3:] == ["--model", "haiku", "--effort", "low"]
     with pytest.raises(SystemExit):
         cli.main(["new", str(tmp_path / "proj"), "--cli", "codex", "--effort", "low"])
-
-
-async def until(pilot, check, tries=80):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def test_the_new_team_dialog_keeps_its_keys_on_a_120x30_screen(fake_home):

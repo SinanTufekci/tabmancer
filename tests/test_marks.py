@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+from conftest import wait_until as wait_for
+
 from tabmancer import marks, sessions
 from tabmancer.app import HEADING, SessionPicker
 from tabmancer.config import read_json
@@ -19,14 +21,6 @@ def write(home, folder: str, sid: str, title: str) -> None:
                {"type": "ai-title", "aiTitle": title}]
     (project / f"{sid}.jsonl").write_text("\n".join(json.dumps(r, separators=(",", ":")) for r in records) + "\n",
                                           encoding="utf-8")
-
-
-async def wait_for(pilot, condition, tries=60):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if condition():
-            return
-    raise AssertionError("condition never became true")
 
 
 def keys(app) -> list[str]:

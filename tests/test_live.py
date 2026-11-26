@@ -1,5 +1,7 @@
 """The live view: open sessions only, refreshed, with an alert when one needs you."""
 
+from conftest import wait_until as wait_for
+
 from tabmancer import app as app_module
 from tabmancer import sessions
 from tabmancer.app import SessionPicker, live_label
@@ -12,14 +14,6 @@ def test_live_labels():
     assert live_label("idle")[0] == "waiting for you"
     assert live_label("blocked")[:2] == ("needs you", f"bold {RED}")
     assert live_label("something-new") == ("something-new", "", 3)
-
-
-async def wait_for(pilot, condition, tries=60):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if condition():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def test_open_sessions_drop_out_of_the_automatic_ticks(fake_home, monkeypatch):

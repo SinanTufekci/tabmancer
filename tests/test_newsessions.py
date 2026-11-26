@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta
 
 from conftest import box_has_focus
+from conftest import wait_until as until
 
 from tabmancer import app as app_module
 from tabmancer import clis, newsessions, workspaces
@@ -38,14 +39,6 @@ def test_fresh_launches_carry_the_first_message_and_the_cli():
     first, second = newsessions.launches(["C:/a", "C:/b"], "codex", "plan the release")
     assert first.argv == ["codex", "plan the release"] and second.cwd == "C:/b"
     assert newsessions.launches(["C:/a"], "claude", "")[0].argv == ["claude"]
-
-
-async def until(pilot, check, tries=80):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 def transcript(home, name, cwd):

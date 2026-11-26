@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from conftest import wait_until as until
 from textual.widgets import Label, Static
 from textual.widgets._toast import Toast
 
@@ -16,14 +17,6 @@ from tabmancer.sessions import Session
 from tabmancer.teamview import TeamHandoverDialog
 
 WORDS = "close the [/b] tag, keep [the] word and [red]this[/red]"
-
-
-async def until(pilot, check, tries=80):
-    for _ in range(tries):
-        if check():
-            return
-        await pilot.pause(0.05)
-    raise AssertionError("never came")
 
 
 async def test_a_note_says_brackets_as_written(fake_home):

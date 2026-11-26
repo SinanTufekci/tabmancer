@@ -8,6 +8,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from conftest import wait_until as until
 
 from tabmancer import app as app_module
 from tabmancer import context, focus, handover, sessions, summarize, teams
@@ -148,14 +149,6 @@ def test_from_the_transcript_is_one_call(tmp_path, monkeypatch):
     session = sessions.read_session(path)
     assert handover.from_transcript(session) == "## Goal\nX"
     assert handover.INSTRUCTIONS in seen[0] and "- go" in seen[0]
-
-
-async def until(pilot, check, tries=100):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def test_the_dashboard_warns_once_and_hands_over_both_ways(fake_home, monkeypatch):

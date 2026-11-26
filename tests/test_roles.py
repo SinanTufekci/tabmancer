@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import subprocess
 
+from conftest import wait_until as until
 from textual.app import App
 from textual.widgets import Input, Static, TextArea
 
@@ -93,14 +94,6 @@ class Host(App):
 
     def on_mount(self) -> None:
         self.push_screen(self.dialog)
-
-
-async def until(pilot, check, tries=80):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def test_ctrl_r_writes_a_suggested_line_up_and_ctrl_g_shows_a_role(tmp_path, monkeypatch):

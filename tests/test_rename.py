@@ -9,6 +9,7 @@ from dataclasses import replace
 
 import pytest
 from conftest import box_has_focus
+from conftest import wait_until as until
 
 from tabmancer import app as app_module
 from tabmancer import rename, sessions
@@ -57,14 +58,6 @@ def test_what_r_says_is_one_copy_for_both_front_ends(tmp_path, monkeypatch):
     assert rename.failed_note(closed, "no claude").words == "shop was not renamed: no claude"
     assert rename.failed_note(closed, "x").severity == "error"
     assert rename.renamed_note("Fresh").words == "Renamed to “Fresh”."
-
-
-async def until(pilot, check, tries=200):  # a loaded machine takes its time
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def test_r_renames_a_closed_session_and_hands_an_open_one_the_command(fake_home, monkeypatch):

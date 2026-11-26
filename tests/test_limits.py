@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
+from conftest import wait_until as wait_for
+
 from tabmancer import app as app_module
 from tabmancer import handover, sessions, teamview, typein, viewmodel
 from tabmancer.app import LimitDialog, SessionPicker
@@ -35,14 +37,6 @@ def write(home, sid: str, last: dict) -> None:
                last, {"type": "ai-title", "aiTitle": f"Task {sid}"}]
     (folder / f"{sid}.jsonl").write_text("\n".join(json.dumps(r, separators=(",", ":")) for r in records) + "\n",
                                          encoding="utf-8")
-
-
-async def wait_for(pilot, condition, tries=80):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if condition():
-            return
-    raise AssertionError("condition never became true")
 
 
 def test_the_reset_time_is_read_from_the_reply():

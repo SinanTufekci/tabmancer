@@ -46,10 +46,12 @@ async def wait_until(pilot, check, what: str = "the condition", seconds: float =
     a count) takes many times longer while other suites share the machine, so a few seconds' bound
     fails a test that is right (test_stats_overview failed once so under five parallel lanes)."""
     deadline = time.monotonic() + seconds
-    while not check():
+    while True:
+        await pilot.pause(0.05)
+        if check():
+            return
         if time.monotonic() > deadline:
             raise AssertionError(f"{what} did not come within {seconds:.0f} s")
-        await pilot.pause(0.05)
 
 
 @pytest.fixture(autouse=True)

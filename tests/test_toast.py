@@ -5,19 +5,13 @@ from __future__ import annotations
 
 import subprocess
 
+from conftest import wait_until as wait_for
+
 from tabmancer import app as app_module
 from tabmancer import cli, sessions, toast
 from tabmancer.app import SessionPicker
 from tabmancer.config import read_json, write_json
 from tabmancer.toast import show as real_show  # taken before conftest stubs it out
-
-
-async def wait_for(pilot, condition, tries=80):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if condition():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def test_a_session_that_stops_working_is_told_on_the_desktop(fake_home, monkeypatch):

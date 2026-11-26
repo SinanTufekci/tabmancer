@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 import pytest
+from conftest import wait_until as until
 
 from tabmancer import background as B
 from tabmancer import bgjobs, sessions
@@ -98,14 +99,6 @@ def test_commands_go_to_the_cli_with_a_clean_environment(monkeypatch):
 def test_attach_mode_runs_claude_attach():
     launch = L.Launch(title="t", cwd="", mode=L.Mode.ATTACH, session_id="idle1")
     assert launch.argv == ["claude", "attach", "idle1"]
-
-
-async def until(pilot, check, tries=80):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def test_the_dialog_stops_removes_and_cleans_up(fake_home, cli, monkeypatch):

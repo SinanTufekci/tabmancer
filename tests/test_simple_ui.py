@@ -5,16 +5,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from conftest import wait_until as wait_for
+
 from tabmancer import focus, sessions
 from tabmancer.app import HEADING, SessionPicker, home_short
-
-
-async def wait_for(pilot, condition, tries=60):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if condition():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def test_open_sessions_and_the_rest_have_headings_the_cursor_steps_over(fake_home, monkeypatch):

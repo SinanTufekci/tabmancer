@@ -5,6 +5,7 @@ import asyncio
 import sys
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import sessions
 from tabmancer.app import TIMER_THREADS, SessionPicker
@@ -21,10 +22,8 @@ async def test_on_windows_every_timer_gets_a_thread_of_its_own(fake_home):
 
 
 async def settled(pilot, app, states: dict[str, str]) -> None:
-    for _ in range(100):
-        await pilot.pause(0.05)
-        if all(app.sessions.get(sid) and app.sessions[sid].live_state == state for sid, state in states.items()):
-            break
+    await wait_until(pilot, lambda: all(app.sessions.get(sid) and app.sessions[sid].live_state == state
+                                        for sid, state in states.items()), "the sessions' states")
     app.flash.clear()  # the highlight of a change animates too, for a moment
 
 

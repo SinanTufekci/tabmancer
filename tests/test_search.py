@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 
+from conftest import wait_until as wait_for
 from rich.console import Console
 
 from tabmancer import search
@@ -29,14 +30,6 @@ def reply(text: str) -> dict:
 
 def tool_output(text: str) -> dict:
     return {"type": "user", "cwd": CWD, "message": {"content": [{"type": "tool_result", "content": text}]}}
-
-
-async def wait_for(pilot, condition, tries=80):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if condition():
-            return
-    raise AssertionError("condition never became true")
 
 
 def test_only_what_was_said_is_kept_and_only_what_is_new_is_read(tmp_path):

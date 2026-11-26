@@ -2,7 +2,7 @@
 
 import unicodedata
 
-from conftest import box_has_focus
+from conftest import box_has_focus, wait_until
 
 from tabmancer import app as app_module
 from tabmancer import launch as L
@@ -47,11 +47,7 @@ async def test_the_top_bar_takes_a_late_update_quietly():
 
 
 async def loaded(pilot, app):
-    for _ in range(60):
-        await pilot.pause(0.05)
-        if app.sessions:
-            return
-    raise AssertionError("sessions never loaded")
+    await wait_until(pilot, lambda: app.sessions, "the sessions")
 
 
 def test_status_symbols_are_plain_text_not_emoji():

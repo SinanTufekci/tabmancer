@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from conftest import team_preview
+from conftest import wait_until as until
 from textual.app import App
 from textual.widgets import Static, TextArea
 
@@ -101,14 +102,6 @@ class Host(App):
 
     def on_mount(self) -> None:
         self.push_screen(self.dialog, lambda result: setattr(self, "result", result))
-
-
-async def until(pilot, check, tries=80):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 async def test_ctrl_r_adds_to_a_team_at_work_and_ctrl_n_makes_a_new_one_after_all(tmp_path, monkeypatch):

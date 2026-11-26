@@ -3,6 +3,7 @@ dimmed (never hidden), and the keys keep to the ? screen's groups."""
 
 from __future__ import annotations
 
+from conftest import wait_until
 from test_team_tree import plain, ready, shop
 from textual.widgets._footer import FooterKey
 
@@ -17,12 +18,9 @@ def footer(app) -> dict[str, tuple[str, bool]]:
 
 async def whole_footer(pilot, app) -> dict[str, tuple[str, bool]]:
     """The footer once it is made again: a slow runner can be read in the middle of that (seen on CI)."""
-    for _ in range(80):
-        await pilot.pause(0.05)
-        keys = footer(app)
-        if {"open", "keys", "next_waiting", "quit"} <= keys.keys() and app.footer_was == app.footer_context():
-            return keys
-    raise AssertionError("the footer was never made again")
+    await wait_until(pilot, lambda: {"open", "keys", "next_waiting", "quit"} <= footer(app).keys()
+                     and app.footer_was == app.footer_context(), "the footer made again")
+    return footer(app)
 
 
 async def on_row(pilot, app, row: str) -> dict[str, tuple[str, bool]]:

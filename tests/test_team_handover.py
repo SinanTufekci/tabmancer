@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pytest
+from conftest import wait_until as until
 from test_team_tree import shop
 
 from tabmancer import app as app_module
@@ -18,14 +19,6 @@ from tabmancer.teamview import TeamHandoverDialog, TeamScreen
 ANSWER = ("Here it is.\n<handover>\n## Goal\nA checkout.\n## Next steps\nWire the payment page.\n</handover>\n"
           "<lineup>\nTeam size: 2\n- api: the payment endpoint [src/api] @sonnet @medium\n"
           "lead: plans @opus\ntests: end to end tests [tests] @haiku @low\n</lineup>")
-
-
-async def until(pilot, check, tries=120):
-    for _ in range(tries):
-        await pilot.pause(0.05)
-        if check():
-            return
-    raise AssertionError("condition never became true")
 
 
 def lead_session(**changes) -> Session:
