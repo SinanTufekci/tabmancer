@@ -31,13 +31,26 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
-from .. import actions, actor, alerts, claudeupdate, handover, launch, picks, rowwords, teamkeys, teams
+from .. import (
+    accountwords,
+    actions,
+    actor,
+    alerts,
+    claudeupdate,
+    handover,
+    launch,
+    picks,
+    rowwords,
+    teamkeys,
+    teams,
+)
 from .. import viewmodel as VM
 from ..launch import Launch
 from ..sessions import Session, Status
@@ -57,6 +70,14 @@ HANDOVER_THREAD = "tabmancer-handover"  # a handover's thread: never cut short o
 # Sinan's call, pending: whether the window types into a session's tab itself (c's continue prompt, Tell's
 # message), as the terminal dashboard does. Till he says yes it types into none (WindowFront.types_in).
 TYPES_INTO_TABS = False
+
+
+class AskHow:
+    """hand_over's way when none is given (teamkeys' H: Surface.hand_over(session)): asked first, as h asks. Never
+    a value the engine passes (it always says how), so nothing it passes comes back to Engine.handover."""
+
+
+ASK_HOW = AskHow()
 
 
 @dataclass
@@ -220,13 +241,13 @@ class WindowFront(QObject):
         window = self.window()
         HandoverDialog(window, session, then, window.accent).open()
 
-    def hand_over(self, session: Session, how: str | None = None) -> None:
+    def hand_over(self, session: Session, how: str | AskHow = ASK_HOW) -> None:
         """The handover written on a thread of its own (actions.write_handover: a minute or more, the old
         session closed on the way); back on the window's thread by a Signal, Engine.handover_ready opens
         the fresh one. Not told how (H on a member, teamkeys.Surface.hand_over): asked first, as h asks
         (Engine.handover: its checks, the dialog, a busy one queued till it finishes), which then comes
         back here with the way picked."""
-        if how is None:
+        if isinstance(how, AskHow):
             self.window().engine.handover(session)
             return
         self.start(self.write, session, how, handing=session.project)
@@ -354,6 +375,54 @@ class WindowFront(QObject):
 
     def deliver_notes(self) -> None:
         self.window().engine.deliver()
+
+    # --- what only the dashboard that acts does: never here ------------------------------------------
+    # The window never acts (Engine.state.acts stays False, nothing claims the actor lock), so the engine asks
+    # none of these of it; were it to, nothing happens and nothing breaks.
+
+    def start_acting(self) -> None:
+        """Never: the window takes no lock, so it never starts acting."""
+
+    def stop_acting(self) -> None:
+        """Never: it never acted."""
+
+    def start_wrapped(self) -> None:
+        """Never: Wrapped's timers are the acting dashboard's."""
+
+    def say_who_acts(self, held: dict | None = None) -> None:
+        """Never asked: the window says who acts on Bit's line by itself (MainWindow.show_bit)."""
+
+    def send_toast(self, title: str, body: str) -> None:
+        """Never: desktop notes come from the dashboard that acts."""
+
+    def show_newer(self, version: str) -> None:
+        """Never: the dashboard that acts looks for a newer tabmancer."""
+
+    def refresh_usage(self) -> None:
+        """Never asked (only on a sign-in this one records, which it does not): the store reads the plan
+        limits on its own."""
+
+    def limits_at(self, at: set[str]) -> None:
+        """Nothing to change: c is always in the window's menus, and a card's Continue shows while its session
+        is at a limit (the drawer, from the store's reading)."""
+
+    def armed_changed(self) -> None:
+        """Nothing to draw: the sessions to continue at their reset come with each reading (DashSnapshot.armed)."""
+
+    def other_accounts_note(self, opens: datetime | None) -> tuple[str, str]:
+        """What the other accounts offer while a limit stands (accountwords), the Claude account as the top bar
+        shows it."""
+        snap = self.window().snap
+        account = next((a for a in snap.accounts if a.cli == "claude"), None) if snap is not None else None
+        return accountwords.other_accounts_note(account, account.key if account is not None else None, opens)
+
+    def show_rows(self, sessions: list[Session]) -> None:
+        for session in sessions:
+            self.update_row(session)
+
+    def open_in_dashboard_window(self, launches: list[Launch]) -> None:
+        """Never asked: the window is a dashboard's, not a monitor's (monitoring); were it, they open as any."""
+        self.window().engine.open(launches, None, True)
 
     # --- typing into a tab: not yet ------------------------------------------------------------------
 

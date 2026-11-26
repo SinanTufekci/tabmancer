@@ -80,6 +80,7 @@ from .. import (
     __version__,
     accountwords,
     actions,
+    alerts,
     backgroundwords,
     bitart,
     clis,
@@ -146,6 +147,12 @@ TELL_ELSEWHERE = ("{team} is on this goal already: nothing was made. The message
                   "paste into its tab (Ctrl+V, Enter).")
 JOIN_ELSEWHERE = ("{team} is at work on this goal: nothing was made. Adding members to a team at work is the terminal "
                   "dashboard's for now (T there, then Ctrl+R); the goal is on the clipboard.")
+# c in the window on sessions the dashboard that acts continues at their reset (config.json's, read with the
+# list): it changes nothing of that dashboard's. Gone on now, one is left alone there (actions.due takes only the
+# still stopped); handed over, the old one would go on there too, so that waits for c there.
+STAYS_ARMED = "{names}: still set to continue at the reset in the dashboard that acts, which leaves alone what has gone on."
+HANDOVER_ARMED = ("{names}: set to continue at the reset in the dashboard that acts, which would go on with the old "
+                  "session too: c there takes that off, then hand it over here.")
 NEW_TEAM_SECONDS = 60  # a team just made: its Team panel tab picked once a reading shows it, for this long
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
@@ -1044,13 +1051,14 @@ class MainWindow(QMainWindow):
         if self.rail.projects.hasFocus():
             self.hide_project()
             return
-        team = self.picked_team() if not self.selected else None
-        state = snap.team_states.get(team) if team is not None else None
+        state = self.team_at_hand(panel_else=False) if not self.selected else None
         if state is not None and VM.members_open(state, snap.sessions):
             self.close_team(state)
             return
-        chosen = ([snap.sessions.get(s.session_id, s) for s in state.sessions.values() if s is not None]
-                  if state is not None else self.chosen())
+        if state is not None:
+            chosen = [snap.sessions.get(s.session_id, s) for s in state.sessions.values() if s is not None]
+        else:  # the Team panel over the sessions with no team in it: the one picked behind it is out of sight
+            chosen = [] if self.team_panel_over_sessions() and not self.selected else self.chosen()
         if chosen:
             self.remarked(marks.change(partial(marks.hide, chosen=chosen)))
 
@@ -1082,15 +1090,25 @@ class MainWindow(QMainWindow):
         dock = self.docks["Team"]
         return dock.isVisible() and not dock.visibleRegion().isEmpty()
 
-    def team_at_hand(self) -> teams.TeamState | None:
-        """The team a, s and g act on: the one picked (its card, or its row in the Table); none picked, the
-        Team panel's tab with the panel in front (the terminal's team view's keys)."""
+    def team_panel_over_sessions(self) -> bool:
+        """The Team panel in front where the sessions would show (its tab picked over theirs): what is picked
+        among the sessions is out of sight, so the keys take the panel's team and member, never that."""
+        sessions = self.docks["Sessions"]
+        return self.team_panel_in_front() and (not sessions.isVisible() or sessions.visibleRegion().isEmpty())
+
+    def team_at_hand(self, panel_else: bool = True) -> teams.TeamState | None:
+        """The team a, s, g, h and x act on: the Team panel's with the panel over the sessions (the terminal's
+        team view's keys); else the one picked (its card, or its row in the Table), and with none picked the
+        panel's when it shows beside them (panel_else: a, s and g; h and x act on the picked session then)."""
         snap = self.snap
         if snap is None:
             return None
-        name = self.picked_team()
-        if name is None and self.team_panel_in_front():
+        if self.team_panel_over_sessions():
             name = self.team_panel.team
+        else:
+            name = self.picked_team()
+            if name is None and panel_else and self.team_panel_in_front():
+                name = self.team_panel.team
         return snap.team_states.get(name) if name is not None else None
 
     def team_members(self, name: str) -> Callable[[], dict[str, Session | None]]:
@@ -1104,14 +1122,16 @@ class MainWindow(QMainWindow):
         return self.members_now(state) if state is not None else {}
 
     def member_at_hand(self) -> tuple[teams.TeamState, teams.Member, Session | None] | None:
-        """The member d and H act on: the one picked in the Team panel with the panel in front, else the member
-        whose row is picked in the Table; with its session as the newest reading has it (None: never run)."""
+        """The member d and H act on: the one picked in the Team panel with the panel in front (over the sessions,
+        only that: none picked there, none), else the member whose row is picked in the Table; with its session
+        as the newest reading has it (None: never run)."""
         snap, panel = self.snap, self.team_panel
         if snap is None:
             return None
+        found: tuple[str, str] | None = None
         if self.team_panel_in_front() and panel.team is not None and panel.picked is not None:
-            found: tuple[str, str] | None = (panel.team, panel.picked)
-        else:
+            found = (panel.team, panel.picked)
+        elif not self.team_panel_over_sessions():
             key = self.picked_now()
             found = next(((team, name) for team, state in snap.team_states.items()
                           for name, session in state.sessions.items() if session is not None
@@ -1146,7 +1166,7 @@ class MainWindow(QMainWindow):
         changed = keys.remove(state.team, member, session)
         if changed is None:
             return
-        if self.team_panel.picked == member.name:
+        if self.team_panel.team == state.team.name and self.team_panel.picked == member.name:
             self.team_panel.picked = None
             self.team_panel.show_team()
         keys.changed(changed, self.members_now(state))
@@ -1443,13 +1463,13 @@ class MainWindow(QMainWindow):
         snap = self.snap
         if snap is None:
             return
-        team = self.picked_team()
-        if team is not None:
-            state = snap.team_states.get(team)
-            if state is not None:
-                self.engine.team_handover(state.team, self.members_now(state))
+        state = self.team_at_hand(panel_else=False)  # the Team panel's over the sessions, else a team picked
+        if state is not None:
+            self.engine.team_handover(state.team, self.members_now(state))
             return
-        session = snap.sessions.get(self.picked_now())
+        if self.picked_team() is not None and not self.team_panel_over_sessions():
+            return  # a team gone meanwhile
+        session = None if self.team_panel_over_sessions() else snap.sessions.get(self.picked_now())
         if session is None:
             self.say("h hands a session over to a fresh one: pick one.")
             return
@@ -1654,9 +1674,20 @@ class MainWindow(QMainWindow):
 
     def continue_chosen(self, asked: limitwords.Ask, way: str, ids: list[str]) -> None:
         """The c dialog's answer for the ticked: carried out as the terminal's (Engine.choose); the rows read
-        again when it changed them."""
+        again when it changed them. The ones the dashboard that acts continues at their reset stay so (this
+        window saves no armed list): gone on now, Bit says so; handed over, not here (STAYS_ARMED, HANDOVER_ARMED)."""
+        snap = self.snap
+        armed = [s for s in asked.stopped if s.session_id in ids and snap is not None and s.session_id in snap.armed]
+        names = ", ".join(dict.fromkeys(self.front.who(s) for s in armed))
+        if way == "handover" and armed:
+            ids = [sid for sid in ids if sid not in {s.session_id for s in armed}]
+            self.front.show_bit(alerts.Bit("say", HANDOVER_ARMED.format(names=names), seconds=14))
+            if not ids:
+                return
         if self.engine.choose(way, ids, asked.stopped, asked.when):
             self.poll()
+        if way == "now" and armed:
+            self.front.show_bit(alerts.Bit("say", STAYS_ARMED.format(names=names), tone="plain", seconds=10))
 
     def accounts_key(self) -> None:
         """A (or a click on the top bar's accounts): the Claude accounts you use (AccountsDialog), as the terminal

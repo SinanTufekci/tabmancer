@@ -4,6 +4,7 @@ and a window, never acting, does nothing by itself. Offscreen over the made-up s
 --demo`. Skipped without the desktop extra (pip install "tabmancer[desktop]")."""
 
 import importlib
+import inspect
 import os
 import threading
 import time
@@ -22,6 +23,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from tabmancer import (
+    accountwords,
     actions,
     actor,
     alerts,
@@ -202,3 +204,41 @@ def test_events_say_their_note_else_bits_words_in_bits_tone(qapp, window):
     shown.front.show_bit(alerts.Bit("say", "plain words", tone="plain"))  # nothing said: at once
     assert look.TEXT in shown.bit_line.styleSheet()
     assert shown.front.monitoring() is False and shown.front.tell_desktop([]) is None
+
+
+def test_the_window_answers_all_the_engine_may_ask_of_its_front_in_its_words():
+    """Every engine.Front method, with its parameters' names: one the engine reached and the window lacked would
+    fail only then (c's now reaches launch_for and continue_open, a sign-in other_accounts_note)."""
+    for name, asked in vars(engine.Front).items():
+        if name.startswith("_") or not callable(asked):
+            continue
+        mine = getattr(front.WindowFront, name, None)
+        assert callable(mine), name
+        assert list(inspect.signature(mine).parameters) == list(inspect.signature(asked).parameters), name
+    assert isinstance(front.WindowFront.default_cap, property)
+
+
+def test_what_only_the_dashboard_that_acts_does_changes_nothing_here(qapp, window, monkeypatch):
+    shown = window()
+    read(qapp, shown)
+    sent, drawn, opened, claimed = [], [], [], []
+    monkeypatch.setattr(toast, "show", lambda *args, **kwargs: sent.append(args))
+    monkeypatch.setattr(actor, "claim", lambda *args, **kwargs: claimed.append(args) or True)
+    monkeypatch.setattr(shown.front, "update_row", drawn.append)
+    monkeypatch.setattr(shown.engine, "open", lambda launches, *rest: opened.append((launches, rest)))
+    said = shown.bit_line.text()
+    for asked in (shown.front.start_acting, shown.front.stop_acting, shown.front.start_wrapped,
+                  shown.front.refresh_usage, shown.front.armed_changed):
+        asked()
+    shown.front.say_who_acts({"pid": 1})
+    shown.front.send_toast("made-up", "words")
+    shown.front.show_newer("9.9.9")
+    shown.front.limits_at({"made-up"})
+    assert not shown.engine.state.acts and sent == [] and claimed == [] and shown.bit_line.text() == said
+    account = next(a for a in shown.snap.accounts if a.cli == "claude")  # the top bar's
+    assert shown.front.other_accounts_note(None) == accountwords.other_accounts_note(account, account.key, None)
+    busy = busy_one(shown)
+    shown.front.show_rows([busy])
+    assert drawn == [busy]
+    shown.front.open_in_dashboard_window([])
+    assert opened == [([], (None, True))]

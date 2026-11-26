@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QApplication
 from test_desktop_front import busy_one, read, taking
 from test_desktop_handover import until
 
-from tabmancer import claudeupdate, config, demo, launch, shutdowns, teams
+from tabmancer import claudeupdate, config, demo, launch, marks, shutdowns, teams
 from tabmancer import viewmodel as VM
 from tabmancer.desktop import frame, main
 from tabmancer.desktop.handover import HandoverDialog
@@ -210,3 +210,112 @@ def test_h_hands_the_member_whose_row_is_picked_alone_over_asked_how_as_h_asks(q
     QTest.keyClick(asked.ways, Qt.Key.Key_Return)  # the first way: a full handover
     until(qapp, lambda: bool(written))
     assert written == [(ui.session_id, "self")]
+
+
+def with_docs(shown) -> None:
+    """A second made-up team, docs, in the window's reading (shop's line-up under another name)."""
+    shop = shown.snap.team_states[SHOP]
+    shown.snap.team_states["docs"] = replace(shop, team=replace(shop.team, name="docs"))
+
+
+def test_the_team_panel_over_the_sessions_is_at_hand_not_the_card_behind_it(qapp, window, monkeypatch):
+    shown = window()
+    with_docs(shown)
+    handed, closing = [], []
+    monkeypatch.setattr(shown.engine, "team_handover", lambda team, members: handed.append(team.name))
+    monkeypatch.setattr(shown, "close_team", lambda state: closing.append(state.team.name))
+    assert shown.board.reveal(VM.TEAM_CARD + SHOP)  # shop's card picked on the board
+    shown.show_teams()
+    qapp.processEvents()
+    shown.team_panel.team = "docs"  # the panel over the sessions shows docs (its tab clicked)
+    assert shown.team_panel_over_sessions() and shown.team_at_hand().team.name == "docs"
+    press(qapp, shown, "h")
+    press(qapp, shown, "x")
+    assert handed == ["docs"] and closing == ["docs"]
+    asked = []
+    monkeypatch.setattr(shown.engine, "handover", lambda session, how=None: asked.append(session))
+    closed = next(s for s in shown.snap.sessions.values()  # x hides a closed one (an open one always shows)
+                  if s.exit is not Exit.RUNNING and s.session_id not in shown.front.members)
+    assert shown.board.reveal(closed.session_id)  # a session's card behind, the panel with no team
+    shown.show_teams()
+    qapp.processEvents()
+    shown.team_panel.team = None
+    press(qapp, shown, "h")
+    press(qapp, shown, "x")
+    assert asked == [] and not marks.Marks.load().hidden  # what is out of sight is not handed over nor hidden
+    shown.docks["Sessions"].raise_()  # the sessions in front again: x hides the card picked there
+    qapp.processEvents()
+    assert not shown.team_panel_over_sessions()
+    press(qapp, shown, "x")
+    assert marks.Marks.load().hidden == {closed.session_id}
+
+
+def test_h_on_a_team_gone_meanwhile_does_nothing_as_before(qapp, window, monkeypatch):
+    shown = window()
+    asked = []
+    monkeypatch.setattr(shown.engine, "handover", lambda session, how=None: asked.append(session))
+    monkeypatch.setattr(shown.engine, "team_handover", lambda team, members: asked.append(team))
+    assert shown.board.reveal(VM.TEAM_CARD + SHOP)
+    del shown.snap.team_states[SHOP]  # gone meanwhile: its card not yet taken away by the next reading
+    shown.say("left alone", 30)
+    press(qapp, shown, "h")
+    assert asked == [] and shown.bit_line.text() == "left alone"  # not "pick one": a card is picked
+
+
+def test_the_team_panel_beside_the_sessions_leaves_what_is_picked_there_at_hand(qapp, window, monkeypatch):
+    shown = window()
+    with_docs(shown)
+    handed = []
+    monkeypatch.setattr(shown.engine, "team_handover", lambda team, members: handed.append(team.name))
+    monkeypatch.setattr(shown.engine, "handover", lambda session, how=None: handed.append(session.session_id))
+    shown.show_teams()
+    shown.docks["Team"].setFloating(True)  # beside them: both in sight
+    shown.docks["Sessions"].show()
+    shown.docks["Sessions"].raise_()
+    qapp.processEvents()
+    shown.team_panel.team = "docs"
+    assert shown.team_panel_in_front() and not shown.team_panel_over_sessions()
+    assert shown.board.reveal(VM.TEAM_CARD + SHOP)
+    assert shown.team_at_hand().team.name == SHOP
+    press(qapp, shown, "h")
+    busy = busy_one(shown)
+    assert shown.board.reveal(busy.session_id)  # a session's card: h hands it over, never the panel's team
+    press(qapp, shown, "h")
+    assert handed == [SHOP, busy.session_id]
+    assert shown.team_at_hand().team.name == "docs"  # a, s and g: none picked, the panel's in sight
+
+
+def test_d_with_the_team_panel_over_the_sessions_and_nobody_picked_there_takes_nobody_off(qapp, window):
+    shown = window()
+    ui = shown.members_now(shown.snap.team_states[SHOP])["ui"]
+    shown.set_view("table")
+    shown.table.fold(SHOP)
+    assert shown.table.show_key(ui.session_id)  # ui's row picked, then out of sight
+    on_the_team_panel(qapp, shown, None)
+    press(qapp, shown, "d")
+    press(qapp, shown, "d")
+    assert said(shown) == main.PICK_MEMBER and members_of() == ["lead", "api", "ui", "tests"]
+
+
+def test_d_off_a_tables_row_keeps_the_pick_of_another_team_in_the_panel(qapp, window):
+    shown = window()
+    with_docs(shown)
+    api = shown.members_now(shown.snap.team_states[SHOP])["api"]
+    shown.team_panel.team, shown.team_panel.picked = "docs", "api"  # docs' api, picked earlier in the panel
+    shown.set_view("table")
+    shown.table.fold(SHOP)
+    assert shown.table.show_key(api.session_id) and not shown.team_panel_in_front()
+    press(qapp, shown, "d")
+    press(qapp, shown, "d")
+    assert members_of() == ["lead", "ui", "tests"] and shown.team_panel.picked == "api"
+
+
+def test_h_alone_on_a_member_asks_how_and_the_engines_way_writes(qapp, window, monkeypatch):
+    shown = window()
+    ui = shown.members_now(shown.snap.team_states[SHOP])["ui"]
+    asked, written = [], []
+    monkeypatch.setattr(shown.engine, "handover", lambda session, how=None: asked.append((session.session_id, how)))
+    monkeypatch.setattr(shown.front, "start", lambda work, *args, handing="": written.append(args))
+    shown.front.hand_over(ui)  # teamkeys' Surface.hand_over: asked first
+    shown.front.hand_over(ui, "transcript")  # the engine's, the way given: written, never asked again
+    assert asked == [(ui.session_id, None)] and written == [(ui, "transcript")]

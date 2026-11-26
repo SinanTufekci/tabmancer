@@ -233,3 +233,37 @@ def test_a_closed_member_told_opens_with_the_message_once_the_window_may_type(qa
     taking(shown, replace(ui, exit=Exit.CLEAN))
     shown.team_made(TellTeam(SHOP, "shop-ui", "A made-up request"))
     assert [(t.title, t.prompt) for t in world.tabs] == [("shop: ui", "A made-up request")] and world.typed == []
+
+
+def waiting_words(shown) -> list[str]:
+    """Bit's words waiting their turn behind what was said (WindowFront.waiting)."""
+    return [words for words, _seconds, _colour in shown.front.waiting]
+
+
+def test_now_on_one_the_acting_dashboard_continues_at_its_reset_leaves_that_there_and_says_so(qapp, window, world):
+    shown = window()
+    first, second = sorted(stopped(shown), key=lambda s: s.session_id)
+    at = (datetime.now() + timedelta(hours=2)).replace(microsecond=0)
+    assert actions.save_armed({first.session_id: at})  # set in the dashboard that acts
+    read(qapp, shown)
+    assert shown.snap.armed == {first.session_id: at}  # the window reads it, read-only
+    choose(qapp, asked_by_c(qapp, shown), "now")
+    assert sorted(t.session_id for t in world.tabs) == sorted([first.session_id, second.session_id])
+    assert main.STAYS_ARMED.format(names=first.project) in waiting_words(shown) + [said(shown)]
+    assert store.read_armed() == {first.session_id: at}  # the window changes nothing of that dashboard's
+
+
+def test_the_handover_of_one_the_acting_dashboard_continues_at_its_reset_waits_for_c_there(qapp, window, monkeypatch):
+    shown = window()
+    first, second = sorted(stopped(shown), key=lambda s: s.session_id)
+    at = (datetime.now() + timedelta(hours=2)).replace(microsecond=0)
+    assert actions.save_armed({first.session_id: at})
+    read(qapp, shown)
+    handed = []
+    monkeypatch.setattr(shown.engine, "handover", lambda session, how=None: handed.append((session.session_id, how)))
+    choose(qapp, asked_by_c(qapp, shown), "handover")
+    assert handed == [(second.session_id, "transcript")]  # the other one only
+    assert main.HANDOVER_ARMED.format(names=first.project) in waiting_words(shown) + [said(shown)]
+    shown.continue_chosen(limitwords.ask(shown.snap.sessions, [], None, [], shown.snap.armed), "handover",
+                          [first.session_id])
+    assert handed == [(second.session_id, "transcript")] and store.read_armed() == {first.session_id: at}
