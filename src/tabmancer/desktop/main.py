@@ -18,8 +18,9 @@ brings an open one's tab to the front (a team's card: its Team panel tab); j goe
 session waiting for you, and m changes how the picked one opens (opening.py, each on a thread of its
 own); p opens a closed one with a prompt, in a new tab or in the background, and r renames one (naming.py,
 in prompting.py's and rename.py's words); B lists the background sessions, to attach to, stop, remove
-and clean up (backgrounds.py, in backgroundwords.py's), and , picks which CLIs are listed and the main one
-(clisettings.py, in clis.py's). M opens the picked team's monitor (a member's: its team's) in a window of its own (monitor.py), on
+and clean up (backgrounds.py, in backgroundwords.py's), , picks which CLIs are listed and the main one
+(clisettings.py, in clis.py's), and A (or a click on the accounts in the top bar) lists the Claude accounts you
+use, to sign in with another one in Claude Code's own sign-in (signin.py, in accountwords.py's). M opens the picked team's monitor (a member's: its team's) in a window of its own (monitor.py), on
 another screen when there is one; open already, here or from the terminal, it comes to the front. Space
 and a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the rail, the project; on a
 team with members open, x twice closes their tabs, as on /exit), X shows the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and
@@ -104,6 +105,7 @@ from .monitor import MonitorWindow, sequences
 from .naming import NameDialog, PromptDialog, Renamer
 from .opening import Opener
 from .rail import Rail
+from .signin import Accounts, AccountsDialog, AccountsLabel, Seen
 from .table import Table, drawer_key
 from .teampanel import TeamPanel
 from .widgets import KeyBar, bit_pixmap, text_label
@@ -115,7 +117,7 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B", ","}
+        "j", "M", "h", "r", "p", "B", ",", "A"}
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
@@ -262,6 +264,10 @@ class MainWindow(QMainWindow):
         self.jobs = Jobs(self)  # B: the background sessions read, and stopped or removed, on threads
         self.jobs.read.connect(self.background_read)
         self.listing_background = False  # B pressed, its list not read yet
+        self.signin = Accounts(self, demo)  # A: the accounts read, and the sign-in opened, on threads
+        self.signin.read.connect(self.accounts_read)
+        self.signin.said.connect(self.say_note)
+        self.reading_accounts = False  # A pressed, its accounts not read yet
         self.monitors: dict[str, MonitorWindow] = {}  # M: each team's monitor opened from here
         self.popup: QMenu | None = None  # a card's or a row's menu, while it is shown
         self.leaving = False  # closing anyway: the handovers queued here dropped (CloseDialog), or the app quit
@@ -328,7 +334,8 @@ class MainWindow(QMainWindow):
         self.info = text_label("Reading your sessions…", look.MUTED, 9.5)
         self.info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)  # gives way first
         self.pills = text_label("", self.accent, 9.5)  # what the list is narrowed to: with the list
-        self.account = self.rich_label()
+        self.account = AccountsLabel()  # a click: A
+        self.account.clicked.connect(self.accounts_key)
         self.usage = self.rich_label()
         self.live = self.rich_label()
         self.clock = text_label("", look.MUTED, 9.5)
@@ -438,7 +445,8 @@ class MainWindow(QMainWindow):
                  "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
                  "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key,
                  "h": self.handover_key, "r": self.rename_key, "p": self.prompt_key,
-                 "B": self.background_key, ",": self.settings_key}
+                 "B": self.background_key, ",": self.settings_key,
+                 "A": self.accounts_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -514,6 +522,7 @@ class MainWindow(QMainWindow):
         self.opener.settle(seconds)
         self.renamer.settle(seconds)
         self.jobs.settle(seconds)
+        self.signin.settle(seconds)
         self.front.settle(seconds)
         for shown in self.monitors.values():
             shown.settle(seconds)  # a read of its own (Python's: there after the window is deleted too)
@@ -1336,6 +1345,23 @@ class MainWindow(QMainWindow):
         if saved.changed:
             self.store.relist()
             self.poll()
+
+    def accounts_key(self) -> None:
+        """A (or a click on the top bar's accounts): the Claude accounts you use (AccountsDialog), as the terminal
+        dashboard's A lists them, read on a thread first."""
+        if not self.reading_accounts:
+            self.reading_accounts = True
+            self.signin.fetch()
+
+    def accounts_read(self, shown: Seen) -> None:
+        """The accounts read: the dialog, saying how many sessions are stopped at a usage limit only once c,
+        which continues them, is done here too."""
+        self.reading_accounts = False
+        snap = self.snap
+        stopped = sum(1 for s in snap.sessions.values() if VM.at_limit(s)) if snap is not None and "c" in HERE else 0
+        asked = AccountsDialog(self, shown, stopped, self.accent)
+        asked.chosen.connect(self.signin.sign_in)
+        asked.open()
 
     def next_waiting(self) -> None:
         """j: the next open session that needs you, else the next one waiting for you: picked in the list
