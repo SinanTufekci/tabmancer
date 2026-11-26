@@ -285,6 +285,9 @@ class EngineState:
     acts: bool = False  # this one holds the actor lock (actor.py): what happens by itself is its to do
     sessions: dict[str, Session] = field(default_factory=dict)  # the list as last polled
     queued: dict[str, str] = field(default_factory=dict)  # h on a busy one: id -> how, once it finishes
+    # queued in the other open tabmancer windows, as the last live poll read them (actions.read_queued):
+    # shown in the list as queued; theirs to hand over, not this one's
+    queued_elsewhere: dict[str, str] = field(default_factory=dict)
     unasked: set[str] = field(default_factory=set)  # queued handovers being written: their fresh one opens unasked
     notes: dict[str, tuple[str, str]] = field(default_factory=dict)  # messages for members: id -> (name, message)
     told_crowded: set[str] = field(default_factory=set)  # sessions already said to be crowded
@@ -390,14 +393,21 @@ class Engine:
             self.front.show_bit(event.bit)
 
     def live(self, updates: dict[str, Session], full: bool, resting: set[str],
-             background: dict[str, dict] | None = None) -> None:
+             background: dict[str, dict] | None = None, queued_elsewhere: dict[str, str] | None = None) -> None:
         """A live poll came back (updates: the sessions it brought up to date; resting: the team
         members that wait for their lead, not for you; background: the background sessions' jobs it
-        kept, store.live_entries): what turned is said, a queued handover that finished is handed
-        over, the list takes them, waiting messages go in."""
+        kept, store.live_entries; queued_elsewhere: the handovers the other open windows queued, read
+        with it): what turned is said, a queued handover that finished is handed over, the list takes
+        them, waiting messages go in."""
         state, front = self.state, self.front
         if background is not None:
             state.background_live = background
+        if queued_elsewhere is not None and queued_elsewhere != state.queued_elsewhere:
+            marked = set(queued_elsewhere).symmetric_difference(state.queued_elsewhere)
+            state.queued_elsewhere = queued_elsewhere
+            for sid in marked - set(updates):  # the rows the poll brings up to date are redrawn anyway
+                if sid in state.sessions:
+                    front.update_row(state.sessions[sid])
         if full:
             state.full_poll_due = False
             state.full_polls += 1
@@ -511,7 +521,10 @@ class Engine:
         state, front = self.state, self.front
         if session is None:
             return
-        refusal = actions.handover_refusal(session, self.open_ones(), session.session_id in state.queued)
+        here = session.session_id in state.queued
+        # read afresh, not as the last poll had it: a window closed meanwhile has nothing queued
+        elsewhere = not here and session.session_id in actions.read_queued(others=True)
+        refusal = actions.handover_refusal(session, self.open_ones(), here, elsewhere)
         if refusal:
             front.say_note(Note(refusal.words, "warning", refusal.seconds or None))
             return

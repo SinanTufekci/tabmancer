@@ -1222,7 +1222,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     def mode_cell(self, session: Session, plain: bool = False) -> Text:
         """How it opens; in the list only when not the plain resume (plain=True says it anyway)."""
         return cell(sessionwords.open_as(session, self.mode(session), armed=self.armed.get(session.session_id),
-                                          queued=session.session_id in self.queued, accent=self.accent(),
+                                          queued=session.session_id in self.shown_queued, accent=self.accent(),
                                           plain=plain))
 
     def flash_background(self, session: Session) -> str:
@@ -1385,7 +1385,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             self.grouped, self.sessions, self.team_states, self.accent(), self.title_width,
             model_shown=self.model_shown, live=self.live_mode, unfolded=self.unfolded, selected=self.selected,
             pinned=self.marks.pinned, is_hidden=self.marks.is_hidden, modes=self.modes, armed=self.armed,
-            queued=self.queued, tokens=self.session_tokens, default_cap=self.default_cap,
+            queued=self.shown_queued, tokens=self.session_tokens, default_cap=self.default_cap,
             star=STAR[int(time.monotonic() * 8) % len(STAR)])
 
     def rows(self) -> list[tuple[str, Session | None, int]]:
@@ -1580,7 +1580,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         return sessionwords.read_inputs(
             session, members=self.member_rows, team_states=self.team_states, git=self.git,
             session_tokens=self.session_tokens, background=self.background_live, armed=self.armed,
-            queued=self.queued, modes=self.modes, default_cap=self.default_cap, accent=self.accent(),
+            queued=self.shown_queued, modes=self.modes, default_cap=self.default_cap, accent=self.accent(),
             selected=self.selected, summaries=self.summaries, summarizing=self.summarizing, found=found,
             room=room, more=3 if self.split else 1, said=said)
 
@@ -1977,7 +1977,8 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         sessions = self.sessions
         return VM.build(sessions, hidden={sid for sid, s in sessions.items() if self.marks.is_hidden(s)},
                         pinned=set(self.marks.pinned), git=self.git, team_states=self.team_states,
-                        tokens=self.session_tokens, limits=self.limits, armed=self.armed, queued=self.queued)
+                        tokens=self.session_tokens, limits=self.limits, armed=self.armed,
+                        queued=self.shown_queued)
 
     ACTIONS = ("open", "focus", "handover", "continue_at_reset")
 
@@ -2889,12 +2890,19 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
             if not self.told_idle:
                 self.call_from_thread(self.engine.idle, idle)
         updates = store.fresh_sessions(known, live, full)
-        self.call_from_thread(self.apply_live_updates, updates, full, kept)  # kept: on the UI thread
+        elsewhere = actions.read_queued(others=True)  # the other windows' queued handovers, for the rows
+        self.call_from_thread(self.apply_live_updates, updates, full, kept, elsewhere)  # kept: on the UI thread
 
     def apply_live_updates(self, updates: dict[str, Session], full: bool = False,
-                           kept: dict[str, dict] | None = None) -> None:
+                           kept: dict[str, dict] | None = None, elsewhere: dict[str, str] | None = None) -> None:
         self.reread_marks()
-        self.engine.live(updates, full, self.resting_members(), kept)
+        self.engine.live(updates, full, self.resting_members(), kept, elsewhere)
+
+    @property
+    def shown_queued(self) -> dict[str, str]:
+        """The handovers the list shows as queued: this window's (self.queued, which q warns about and
+        saves) and the other open windows' (queued_elsewhere), as the desktop window shows them all."""
+        return {**self.queued_elsewhere, **self.queued}
 
     def monitoring(self) -> bool:
         return self.watch is not None

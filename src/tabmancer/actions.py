@@ -66,11 +66,16 @@ class Handed:
     left_open: str = ""
 
 
-def handover_refusal(session: Session, open_ones: list[Session], queued: bool = False) -> Refusal | None:
+def handover_refusal(session: Session, open_ones: list[Session], queued: bool = False,
+                     queued_elsewhere: bool = False) -> Refusal | None:
     """Why h does not hand this session over; None when it can. A queued one (h again cancels it) is
-    not checked for a reason it cannot be closed."""
+    not checked for a reason it cannot be closed. One queued in another open tabmancer window
+    (read_queued(others=True)) is that window's: it hands it over as it finishes, and h there cancels it."""
     if session.status is Status.BACKGROUND:
         return Refusal("Background sessions cannot be handed over from here: attach to it first.")
+    if queued_elsewhere and not queued:
+        return Refusal(f"{session.project}'s handover is queued in another tabmancer window: h there cancels it.",
+                       10)
     readable = session.path and session.path.suffix == ".jsonl" and session.path.is_file()
     if session.cli == "agy" and not readable and not clis.installed("agy"):
         return Refusal("Antigravity has no readable transcript for this session and agy is not on PATH.")
@@ -866,10 +871,11 @@ def _writer(record: object) -> tuple | None:
     return record.get("pid"), record.get("started"), record.get("command")
 
 
-def read_queued() -> dict[str, str]:
-    """The handovers queued in every tabmancer window: session id -> how. Only the windows still open
-    queue anything: one that closed or crashed (its process gone, or its pid now another process's:
-    actor.running checks the start time and command line too) left nothing queued."""
+def read_queued(others: bool = False) -> dict[str, str]:
+    """The handovers queued in every tabmancer window (others: in every other one): session id -> how.
+    Only the windows still open queue anything: one that closed or crashed (its process gone, or its pid
+    now another process's: actor.running checks the start time and command line too) left nothing
+    queued."""
     saved = read_json(QUEUE)
     if not isinstance(saved, dict):
         return {}
@@ -879,7 +885,7 @@ def read_queued() -> dict[str, str]:
         if not isinstance(entry, dict) or not isinstance(entry.get("how"), str):
             continue
         writer = _writer(entry.get("by"))
-        if writer is None:
+        if writer is None or (others and actor.is_me(entry["by"])):
             continue
         if writer not in alive:
             alive[writer] = actor.running(entry["by"])

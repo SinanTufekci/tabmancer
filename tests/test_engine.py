@@ -220,7 +220,8 @@ def test_the_dashboards_state_is_the_engines():
     from tabmancer.app import SessionPicker
 
     app = SessionPicker(days=14)
-    assert engine.FORWARDED == ("acts", "sessions", "queued", "unasked", "notes", "told_crowded", "told_idle",
+    assert engine.FORWARDED == ("acts", "sessions", "queued", "queued_elsewhere", "unasked", "notes", "told_crowded",
+                                "told_idle",
                                 "background_live", "openings", "full_poll_due", "full_polls", "armed", "armed_unsaved",
                                 "told_limit", "actor_misses", "told_alone", "told_update", "updating_claude",
                                 "after_claude_update", "account", "signed_as", "told_agy_out",
