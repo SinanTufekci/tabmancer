@@ -1,9 +1,15 @@
+import json
+import time
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from tabmancer import config as C
 from tabmancer import workspaces as W
+from tabmancer.config import config_dir
 from tabmancer.launch import Mode
 from tabmancer.sessions import Exit, Session, Status
 
@@ -37,6 +43,69 @@ def test_round_trip_and_case_insensitive_find(folders):
     assert loaded["PCB work"] == ws
     assert W.find(loaded, "pcb WORK") == ws
     assert W.find(loaded, "missing") is None
+
+
+def test_keep_and_drop_change_one_workspace_and_keep_the_others(folders):
+    pcb = W.Workspace("PCB work", [W.Entry(str(folders["pcb"]))])
+    web = W.Workspace("web", [W.Entry(str(folders["web"]), W.NEW)])
+    assert W.keep(pcb) and W.keep(web)
+    assert W.load() == {"PCB work": pcb, "web": web}
+    moved = W.Workspace("PCB work", [W.Entry(str(folders["empty"]))])
+    assert W.keep(moved) and W.load() == {"PCB work": moved, "web": web}  # one by its name, replaced
+    assert W.drop("web") and W.drop("never saved") and W.load() == {"PCB work": moved}
+    assert W.save({web.name: web}) and W.load() == {"web": web}  # these, and no others
+
+
+@pytest.mark.parametrize("held", ['{"workspaces": [{"name": "PCB work", "entries": [{"cwd": "C:/', "[]"])
+def test_a_workspaces_json_that_cannot_be_read_is_left_as_it_is_never_written_over(held, folders):
+    """Cut short, or holding no dict: load reads it as none, so written, every workspace in it would be lost."""
+    path = config_dir() / W.FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(held, encoding="utf-8")
+    web = W.Workspace("web", [W.Entry(str(folders["web"]))])
+    assert W.keep(web) is False and W.drop("PCB work") is False and W.save({web.name: web}) is False
+    assert path.read_text(encoding="utf-8") == held and W.load() == {}
+    path.unlink()  # none yet: made at the first save
+    assert W.save({web.name: web}) and W.load() == {"web": web}
+
+
+def test_a_change_while_another_tabmancer_changes_workspaces_json_is_refused_and_one_meanwhile_kept(
+        folders, monkeypatch):
+    """One process at a time reads it, changes it and writes it back (config.locked): held by another, a save
+    waits tries (UI_TRIES on a UI thread: ~75 ms) and is refused; got, what another wrote meanwhile is kept."""
+    path = config_dir() / W.FILE
+    pcb = W.Workspace("PCB work", [W.Entry(str(folders["pcb"]))])
+    web = W.Workspace("web", [W.Entry(str(folders["web"]))])
+    assert W.keep(pcb)
+    before = path.read_text(encoding="utf-8")
+    waits: list[float] = []
+    monkeypatch.setattr(C, "time", SimpleNamespace(time=time.time, sleep=waits.append))  # config's clock only
+    with C.locked(W.FILE):
+        assert W.keep(web, C.UI_TRIES) is False and W.drop("PCB work", C.UI_TRIES) is False
+    assert waits == [C.BUSY_WAIT] * (C.UI_TRIES - 1) * 2 and path.read_text(encoding="utf-8") == before
+    waits.clear()
+    read_text = Path.read_text
+
+    def held_open(self, *args, **kwargs):  # the file itself held by another process (replaced just now)
+        if self.name == W.FILE:
+            raise PermissionError("in use")
+        return read_text(self, *args, **kwargs)
+
+    with monkeypatch.context() as held:
+        held.setattr(Path, "read_text", held_open)
+        assert W.keep(web, C.UI_TRIES) is False
+        assert waits == [C.BUSY_WAIT] * (C.UI_TRIES - 1)
+        assert W.load(C.UI_TRIES) == {} and len(waits) == (C.UI_TRIES - 1) * 2  # read as none, as before
+    assert path.read_text(encoding="utf-8") == before and W.load() == {"PCB work": pcb}
+    other = W.Workspace("other", [W.Entry(str(folders["empty"]), W.NEW)])
+    locked = W.locked
+
+    def another_first(name, tries=None):  # another process's save, written just before the lock is got
+        path.write_text(json.dumps({"workspaces": [asdict(other)]}), encoding="utf-8")
+        return locked(name, tries)
+
+    monkeypatch.setattr(W, "locked", another_first)
+    assert W.keep(web) and W.load() == {"other": other, "web": web}
 
 
 def test_clean_name_strips_characters_that_break_shortcuts():

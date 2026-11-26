@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import picks, teams
-from .config import read_json, write_json
+from .config import config_dir, locked, read_json, write_json
 from .launch import Launch, Mode, default_mode
 from .sessions import Exit, Session
 
@@ -44,8 +45,13 @@ def clean_name(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*;]', "-", name).strip(" .")
 
 
-def load() -> dict[str, Workspace]:
-    data = read_json(FILE)
+def load(tries: int | None = None) -> dict[str, Workspace]:
+    """The workspaces saved, by name; none when there is no file, or it could not be read (held by another
+    process past tries: config.read_json's; UI_TRIES on a UI thread)."""
+    return _parsed(read_json(FILE, tries))
+
+
+def _parsed(data: object) -> dict[str, Workspace]:
     workspaces = {}
     for item in data.get("workspaces", []) if isinstance(data, dict) else []:
         try:
@@ -56,8 +62,51 @@ def load() -> dict[str, Workspace]:
     return workspaces
 
 
-def save(workspaces: dict[str, Workspace]) -> None:
-    write_json(FILE, {"workspaces": [asdict(w) for w in workspaces.values()]}, indent=2)
+def save(workspaces: dict[str, Workspace], tries: int | None = None) -> bool:
+    """These, and no others, saved: False, the file left as it is, as for keep."""
+
+    def change(saved: dict[str, Workspace]) -> None:
+        saved.clear()
+        saved.update(workspaces)
+
+    return _change(change, tries)
+
+
+def keep(workspace: Workspace, tries: int | None = None) -> bool:
+    """A workspace saved, one by its name replaced, the others kept as the file has them now. False when it
+    was not: the file there but unreadable, or holding no dict (load read it as none: written, every
+    workspace in it would be lost), another tabmancer changing it past tries (config.locked; UI_TRIES on
+    a UI thread), or not written. The file is left as it is."""
+
+    def change(saved: dict[str, Workspace]) -> None:
+        saved[workspace.name] = workspace
+
+    return _change(change, tries)
+
+
+def drop(name: str, tries: int | None = None) -> bool:
+    """The workspace named so deleted, the others kept; False as for keep."""
+
+    def change(saved: dict[str, Workspace]) -> None:
+        saved.pop(name, None)
+
+    return _change(change, tries)
+
+
+def _change(change: Callable[[dict[str, Workspace]], None], tries: int | None) -> bool:
+    """workspaces.json read, changed and written back by one process at a time (config.locked): a window, the
+    terminal dashboard and `tabmancer workspaces` would each write back its own read, and lose the other's."""
+    try:
+        with locked(FILE, tries):
+            data = read_json(FILE, tries)
+            if not isinstance(data, dict) and os.path.lexists(config_dir() / FILE):
+                return False
+            saved = _parsed(data)
+            change(saved)
+            write_json(FILE, {"workspaces": [asdict(w) for w in saved.values()]}, indent=2)
+    except OSError:  # config.Busy, the lock not got, among them
+        return False
+    return True
 
 
 def find(workspaces: dict[str, Workspace], name: str) -> Workspace | None:
