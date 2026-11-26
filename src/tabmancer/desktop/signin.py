@@ -63,7 +63,7 @@ def open_tabs(launches: list[launch.Launch]) -> list[str]:
 
 class Accounts(QObject):
     """A's reading and its sign-in, on threads of their own; back on the window's thread by a Signal.
-    read: what the dialog shows (Seen); said: words for Bit, for how long, and how loud. Over the demo, no
+    read: what the dialog shows (Seen; None when it could not be read, said first); said: words for Bit, for how long, and how loud. Over the demo, no
     claude update before the sign-in (its accounts are made up), and the tab said only by the demo's
     stand-in, which says what would have opened."""
 
@@ -79,7 +79,15 @@ class Accounts(QObject):
         self.start(self.fetch_now)
 
     def fetch_now(self) -> None:
-        self.send("read", read_seen())
+        """Read, and answered whatever happens (read: None when it failed, said in red first), so the window's
+        A is never left waiting for a read that died."""
+        shown: Seen | None = None
+        try:
+            shown = read_seen()
+        except Exception as error:  # noqa: BLE001 - said; A pressed again reads them again
+            self.say(accountwords.read_failed_note(error))
+        finally:
+            self.send("read", shown)
 
     def sign_in(self, email: str, place: str, places: list[Place]) -> None:
         """Claude Code's own sign-in in a new tab, its page where place says (accountwords.sign_in_launch,

@@ -132,6 +132,12 @@ def open_failed_note(error: OSError) -> Note:
     return Note(f"Could not open the tab: {error}", severity="error", seconds=15)
 
 
+def read_failed_note(error: Exception) -> Note:
+    """The accounts could not be read for A (a file it reads, broken): said, and A pressed again reads them again."""
+    return Note(f"Could not read the Claude accounts: {str(error) or type(error).__name__}", severity="error",
+                seconds=15)
+
+
 def signing_in_note(email: str, where: str, left: list[str]) -> Note:
     """Said once the sign-in tab opens; left: the command, when there was no terminal to open it in."""
     if left:

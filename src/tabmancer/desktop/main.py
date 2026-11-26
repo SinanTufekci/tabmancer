@@ -1354,10 +1354,13 @@ class MainWindow(QMainWindow):
             self.reading_accounts = True
             self.signin.fetch()
 
-    def accounts_read(self, shown: Seen) -> None:
+    def accounts_read(self, shown: Seen | None) -> None:
         """The accounts read: the dialog, saying how many sessions are stopped at a usage limit only once c,
-        which continues them, is done here too."""
+        which continues them, is done here too. None: they could not be read (said in red): no dialog, and A
+        reads them again."""
         self.reading_accounts = False
+        if shown is None:
+            return
         snap = self.snap
         stopped = sum(1 for s in snap.sessions.values() if VM.at_limit(s)) if snap is not None and "c" in HERE else 0
         asked = AccountsDialog(self, shown, stopped, self.accent)

@@ -7,6 +7,7 @@ extra (pip install "tabmancer[desktop]")."""
 
 import importlib
 import os
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -249,6 +250,29 @@ def test_a_tab_that_cannot_open_is_said_and_with_no_terminal_the_command_is_give
     until(qapp, lambda: "No terminal" in shown.bit_line.text())
     assert shown.bit_line.text() == ("No terminal to open it in. Run it yourself: "
                                      "claude auth login --email you@work.example.com")
+
+
+def test_accounts_that_cannot_be_read_are_said_in_red_and_a_pressed_again_reads_them_again(qapp, window, monkeypatch):
+    """A file A reads, broken (a raise on its thread): said, no dialog, and A not left waiting for it for the
+    window's life."""
+    shown = window()
+    read_seen = signin.read_seen
+
+    def broken() -> signin.Seen:
+        raise ValueError("made-up broken file")
+
+    monkeypatch.setattr(signin, "read_seen", broken)
+    raised: list = []
+    monkeypatch.setattr(sys, "excepthook", lambda *error: raised.append(error))  # a slot's raise, kept
+    shown.actions_by_key["A"].trigger()
+    until(qapp, lambda: "Could not read" in shown.bit_line.text())
+    shown.signin.settle()
+    qapp.processEvents()
+    assert shown.bit_line.text() == "Could not read the Claude accounts: made-up broken file"
+    assert look.RED in shown.bit_line.styleSheet() and not shown_dialogs(shown) and not shown.reading_accounts
+    assert not raised
+    monkeypatch.setattr(signin, "read_seen", read_seen)  # mended
+    press(qapp, press_a(qapp, shown), Qt.Key.Key_Escape)
 
 
 def test_the_sessions_stopped_at_a_limit_are_counted_only_once_c_continues_them_here(qapp, window, monkeypatch):
