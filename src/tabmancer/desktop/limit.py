@@ -40,13 +40,14 @@ class LimitDialog(QDialog):
 
     chosen = Signal(str, list)
 
-    def __init__(self, parent: QWidget, asked: limitwords.Ask, accent: str, acts: bool = False) -> None:
+    def __init__(self, parent: QWidget, asked: limitwords.Ask, accent: str, acts: bool = False,
+                 types: bool = False) -> None:
         super().__init__(parent)
         self.asked, self.accent, self.acts = asked, accent, acts
         self.answered = False
         self.sessions = limitwords.biggest(asked.stopped)
         self.ticked = [s.session_id for s in self.sessions]
-        self.ways = limitwords.ways(asked.when, asked.room, asked.armed, bool(asked.away), acts)
+        self.ways = limitwords.ways(asked.when, asked.room, asked.armed, bool(asked.away), acts, types)
         self.way = limitwords.first_way([way for way, _ in self.ways], bool(asked.away))
         self.at, self.place = 0, WAYS
         self.setWindowTitle(limitwords.title_words(len(asked.stopped), asked.when)[0])

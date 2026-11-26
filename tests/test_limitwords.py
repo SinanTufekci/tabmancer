@@ -93,3 +93,11 @@ def test_what_c_asks_about():
     assert not asked.armed and asked.room and asked.away == {} and asked.where == "this account"
     assert asked.plan == "Your plan now: session 40% · week 70%\nother than key"
     assert limitwords.ask({"a": a, "b": b}, [], None, [], {"a": soon, "b": soon}).armed
+
+
+def test_where_the_window_does_not_type_into_tabs_now_says_the_clipboard():
+    def now(types):
+        return "".join(words for words, _ in dict(limitwords.ways("at 16:00", True, False, False, types=types))["now"])
+    assert limitwords.NOW_OPEN_TYPED in now(True)
+    assert limitwords.NOW_OPEN_CLIPBOARD in now(False) and "in its tab," not in now(False)
+    assert limitwords.ways("at 16:00", True, False, False) == limitwords.ways("at 16:00", True, False, False, types=True)

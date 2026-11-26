@@ -26,6 +26,10 @@ KEY_PAIRS = [("Space", "tick"), ("Tab", "the sessions or the ways"), ("Enter", "
 # Where c's dialog does not act (the desktop window for now): why it offers no "when the limit lifts"
 NOT_HERE = ("Continuing when the limit lifts is set in the terminal dashboard (tabmancer): it continues "
             "them by itself then. This window does not act yet.")
+# What "now" does with an open one: typed into its tab (the terminal dashboard), or, where the window does not
+# type into tabs (the desktop window for now), its prompt put on the clipboard to paste there
+NOW_OPEN_TYPED = "  an open one gets the prompt in its tab, a closed one opens in a new tab"
+NOW_OPEN_CLIPBOARD = "  an open one's prompt goes on the clipboard to paste into its tab, a closed one opens in a new tab"
 
 
 @dataclass(frozen=True)
@@ -68,15 +72,17 @@ def pick_refusal(ticked: list[str], way: str) -> Note | None:
     return TICK_FIRST if not ticked and way != "off" else None
 
 
-def ways(when: str, room: bool, armed: bool, away: bool, acts: bool = True) -> list[tuple[str, list[Part]]]:
+def ways(when: str, room: bool, armed: bool, away: bool, acts: bool = True,
+         types: bool = True) -> list[tuple[str, list[Part]]]:
     """(id, its words) for each way, continuing now first with room (another account, or the limit
     lifted), else when the limit lifts; 'off' only for the armed. away: some ran on another
     organisation, so the handover says that only a digest goes. acts: False where the dialog's window
     never acts (the desktop window for now): no 'lift' or 'off', which only the dashboard that acts
-    carries out (NOT_HERE says so)."""
+    carries out (NOT_HERE says so). types: False where the window does not type into tabs (the desktop
+    window for now): an open one's prompt goes on the clipboard (NOW_OPEN_CLIPBOARD)."""
     now = ("now", [("Continue the ticked now", f"bold {TEXT}"),
                    ("  you signed in with another account, or the limit has lifted\n", MUTED),
-                   ("  an open one gets the prompt in its tab, a closed one opens in a new tab", MUTED)])
+                   (NOW_OPEN_TYPED if types else NOW_OPEN_CLIPBOARD, MUTED)])
     later = ("lift", [("Continue the ticked when the limit lifts", f"bold {TEXT}"), (f"  {when}\n", MUTED),
                       ("  leave the dashboard open; each goes on by itself then", MUTED)])
     over = ("handover", [("Hand the ticked over", f"bold {TEXT}"),

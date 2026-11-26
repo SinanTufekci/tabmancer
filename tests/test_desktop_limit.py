@@ -70,14 +70,16 @@ def test_a_window_that_does_not_act_offers_now_and_the_handover_and_says_why(qap
     assert "when the limit lifts" not in said.split(limitwords.NOT_HERE)[0].lower()
     assert "Do not continue them by themselves" not in said and limitwords.NOT_HERE in said
     assert "632k tokens" in said  # what going on on another account costs, for the ticked
+    assert "prompt goes on the clipboard" in said and "gets the prompt in its tab" not in said  # it types into none
     assert [way for way, _ in dialog.ways] == ["now", "handover"]
     parent.deleteLater()
 
 
 def test_given_acts_every_way_is_offered_as_in_the_terminal(qapp):
     parent = QWidget()
-    dialog = LimitDialog(parent, asked(), look.ORANGE, acts=True)
+    dialog = LimitDialog(parent, asked(), look.ORANGE, acts=True, types=True)
     assert [way for way, _ in dialog.ways] == ["lift", "now", "handover", "off"]
+    assert "gets the prompt in its tab" in words(dialog)  # given it types into tabs, as the terminal says it
     assert limitwords.NOT_HERE not in words(dialog)
     parent.deleteLater()
 
