@@ -161,7 +161,7 @@ async def test_a_workspace_not_saved_or_not_deleted_is_said_and_the_file_left_as
 async def test_summary_key_shows_result_and_failure(fake_home, monkeypatch):
     from tabmancer import summarize
 
-    monkeypatch.setattr(summarize, "summarize", lambda s: {"summary": "Did the thing.", "size": s.size})
+    monkeypatch.setattr(summarize, "summarize", lambda s: summarize.Summary({"summary": "Did the thing.", "size": s.size}, True))
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
         await loaded(pilot, app)
@@ -185,13 +185,15 @@ async def test_a_summary_reaches_the_preview_after_a_poll_replaced_the_session(f
     # compared by identity, so the preview kept saying "asking Claude" until something else redrew it.
     from dataclasses import replace
 
+    from tabmancer import summarize
+
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
         await loaded(pilot, app)
         asked = app.current()
         app.summarizing.add(asked.session_id)
         app.sessions[asked.session_id] = replace(asked)
-        app.summary_done(asked, {"summary": "Did the thing.", "size": asked.size}, None)
+        app.summary_done(asked, summarize.Summary({"summary": "Did the thing.", "size": asked.size}, True), None)
         console = Console(width=120, file=io.StringIO(), record=True)
         console.print(app.detail.content)
         assert "Did the thing." in console.export_text()

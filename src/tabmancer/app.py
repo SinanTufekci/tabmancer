@@ -3029,7 +3029,7 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         session = self.current()
         if session is None or session.session_id in self.summarizing:
             return
-        self.tell_elsewhere(session, "a digest of it")
+        self.tell_elsewhere(session, sessionwords.SUMMARY_GOES)
         self.summarizing.add(session.session_id)
         self.update_detail()
         self.run_summary(session)
@@ -3037,17 +3037,18 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
     @work(thread=True)
     def run_summary(self, session: Session) -> None:
         try:
-            entry, error = summarize.summarize(session), None
+            summary, error = summarize.summarize(session), None
         except (summarize.SummaryError, OSError) as failure:
-            entry, error = None, str(failure)
-        self.call_from_thread(self.summary_done, session, entry, error)
+            summary, error = None, str(failure)
+        self.call_from_thread(self.summary_done, session, summary, error)
 
-    def summary_done(self, session: Session, entry: dict | None, error: str | None) -> None:
+    def summary_done(self, session: Session, summary: summarize.Summary | None, error: str | None) -> None:
         self.summarizing.discard(session.session_id)
-        if entry:
-            self.summaries[session.session_id] = entry
-        else:
-            self.notify(f"Summary failed: {error}", severity="error", timeout=8)
+        if summary is not None:
+            self.summaries[session.session_id] = summary.entry  # shown, saved or not (the note says)
+        note = sessionwords.summary_note(summary, error)
+        if note is not None:
+            self.notify(note.words, severity=note.severity, timeout=note.seconds or 4)
         # By id: a live poll replaces an open session's object every few seconds.
         current = self.current()
         if current is not None and current.session_id == session.session_id:

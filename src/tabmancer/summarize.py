@@ -2,7 +2,9 @@
 
 Runs `claude -p` with a small model, no tools and no session persistence, so it uses
 whatever plan or API key Claude Code is logged in with and leaves no transcript
-behind. Summaries are cached until the transcript changes.
+behind. Summaries are cached until the transcript changes: summaries.json, changed by one
+process at a time (config.locked), so the terminal dashboard and a window summarizing at once each
+keep the other's.
 """
 
 from __future__ import annotations
@@ -14,8 +16,9 @@ import subprocess
 import tempfile
 import threading
 from datetime import datetime
+from typing import NamedTuple
 
-from .config import read_json, write_json
+from .config import config_dir, locked, read_json, write_json
 from .sessions import Session, _is_real_prompt, _shorten, _text, sanitize
 from .teambus import PRINT_TIMEOUT_EXIT
 
@@ -29,11 +32,23 @@ what the goal was, what got done, and what was left open or where it stopped. Pl
 only: no headings, no lists, no preamble. Do not use any tools.
 """
 
+FAILED = "Summary failed: {error}"
+UNSAVED = ("The summary is shown but not saved: summaries.json is busy, or there and unreadable (left as it "
+           "is). s again saves it.")
+
 _lock = threading.Lock()
 
 
 class SummaryError(Exception):
     pass
+
+
+class Summary(NamedTuple):
+    """A summary written: its cache entry, and whether summaries.json took it (saved; else it is shown
+    from memory only, and the front says so: UNSAVED)."""
+
+    entry: dict
+    saved: bool
 
 
 def digest(session: Session, max_prompts: int = MAX_PROMPTS, keep_replies: int = 3) -> str:
@@ -81,20 +96,36 @@ def load_cache() -> dict[str, dict]:
     return data if isinstance(data, dict) else {}
 
 
-def _store(session_id: str, entry: dict | None) -> None:
-    with _lock:  # summaries can finish on several worker threads at once
-        data = load_cache()
-        if entry is None:
-            data.pop(session_id, None)
-        else:
-            data[session_id] = entry
-        write_json(FILE, data)
+def _store(session_id: str, entry: dict | None, tries: int | None = None) -> bool:
+    """One summary saved (entry None: dropped), the rest of the file kept: read and written under its
+    lock (config.locked), so another process's summary saved meanwhile is kept. False, the file left
+    as it was, when it is there but unreadable or holds no dict (writing ours alone would drop every
+    other summary), its lock could not be got (config.Busy), or the write failed. tries: as
+    config.locked's."""
+    with _lock:  # several worker threads of this process wait here, not on the lock file's tries
+        try:
+            with locked(FILE, tries):
+                data = read_json(FILE, tries)
+                if not isinstance(data, dict):
+                    if os.path.lexists(config_dir() / FILE):
+                        return False
+                    data = {}
+                if entry is None:
+                    if session_id not in data:
+                        return True  # nothing to drop: not written
+                    data.pop(session_id)
+                else:
+                    data[session_id] = entry
+                write_json(FILE, data)
+        except OSError:  # config.Busy, the lock not got, among them
+            return False
+    return True
 
 
-def forget(session_ids: list[str]) -> None:
-    """Drop cached summaries, for sessions that were deleted."""
-    for session_id in session_ids:
-        _store(session_id, None)
+def forget(session_ids: list[str]) -> bool:
+    """Drop cached summaries, for sessions that were deleted. False when one could not be dropped."""
+    dropped = [_store(session_id, None) for session_id in session_ids]  # each tried, a failure or not
+    return all(dropped)
 
 
 def session_digest(session: Session) -> str:
@@ -245,12 +276,12 @@ def _run(argv: list[str], timeout: float, cwd) -> tuple[int | None, str, str]:
         return None, "", str(error)
 
 
-def summarize(session: Session) -> dict:
-    """Ask Claude for a summary, cache it and return the cache entry."""
+def summarize(session: Session) -> Summary:
+    """Ask for a summary (ask: Claude's MODEL, or agy's chain), cache it and return its entry, and
+    whether the cache took it."""
     text = session_digest(session)
     size = session.path.stat().st_size
     summary = " ".join(ask(INSTRUCTIONS + "\n" + text, MODEL).split())
     entry = {"summary": summary, "size": size, "model": MODEL,
              "at": datetime.now().isoformat(timespec="seconds")}
-    _store(session.session_id, entry)
-    return entry
+    return Summary(entry, _store(session.session_id, entry))

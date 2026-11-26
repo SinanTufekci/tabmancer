@@ -110,6 +110,17 @@ def enter_words(session: Session, launch: Callable[[], Launch], selected: Collec
     return words + " · m changes how"
 
 
+SUMMARY_GOES = "a digest of it"  # s on a session that ran on another organisation: what goes to this one
+
+
+def summary_note(summary: summarize.Summary | None, error: str | None) -> actions.Note | None:
+    """What s came to, said where it was pressed: the failure (error, as summarize says it), or a summary
+    shown but not saved (summarize.UNSAVED); None when it was written and saved."""
+    if summary is None:
+        return actions.Note(summarize.FAILED.format(error=error), "error", 8)
+    return None if summary.saved else actions.Note(summarize.UNSAVED, "warning", 10)
+
+
 def outcome(session: Session, summary: str | None) -> tuple[list[Part], str]:
     """A heading and a few words on what the session came to (shown when a row is opened). summary:
     the one written for it (s), if any."""
