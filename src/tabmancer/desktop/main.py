@@ -18,7 +18,8 @@ brings an open one's tab to the front (a team's card: its Team panel tab); j goe
 session waiting for you, and m changes how the picked one opens (opening.py, each on a thread of its
 own); p opens a closed one with a prompt, in a new tab or in the background, and r renames one (naming.py,
 in prompting.py's and rename.py's words); B lists the background sessions, to attach to, stop, remove
-and clean up (backgrounds.py, in backgroundwords.py's). M opens the picked team's monitor (a member's: its team's) in a window of its own (monitor.py), on
+and clean up (backgrounds.py, in backgroundwords.py's), and , picks which CLIs are listed and the main one
+(clisettings.py, in clis.py's). M opens the picked team's monitor (a member's: its team's) in a window of its own (monitor.py), on
 another screen when there is one; open already, here or from the terminal, it comes to the front. Space
 and a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the rail, the project; on a
 team with members open, x twice closes their tabs, as on /exit), X shows the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and
@@ -94,6 +95,7 @@ from ..store import DAYS, DashboardStore, DashSnapshot
 from . import commandbar, frame, look, monitor, teamgraph
 from .backgrounds import OPEN, BackgroundDialog, Jobs
 from .board import Board
+from .clisettings import CliSettingsDialog
 from .closing import CloseDialog
 from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
@@ -113,7 +115,7 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B"}
+        "j", "M", "h", "r", "p", "B", ","}
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
@@ -436,7 +438,7 @@ class MainWindow(QMainWindow):
                  "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
                  "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key,
                  "h": self.handover_key, "r": self.rename_key, "p": self.prompt_key,
-                 "B": self.background_key}
+                 "B": self.background_key, ",": self.settings_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -1318,6 +1320,22 @@ class MainWindow(QMainWindow):
     def attach_job(self, job: Job) -> None:
         """Enter on a background session: a tab attached to it (`claude attach`), opened as any other."""
         self.engine.open([backgroundwords.attach_launch(job)])
+
+    def settings_key(self) -> None:
+        """,: which CLIs are listed and the main one (CliSettingsDialog), as the terminal dashboard's ,
+        picks them."""
+        asked = CliSettingsDialog(self, self.accent)
+        asked.saved.connect(self.settings_saved)
+        asked.open()
+
+    def settings_saved(self, saved: clis.Saved) -> None:
+        """Saved: other CLIs listed now are said, and the list is read again with them (the terminal
+        dashboard's reload_sessions); config.json there but unreadable, that nothing was saved."""
+        if saved.words:
+            self.say_note(saved.words, 4 if saved.kept else 8, "" if saved.kept else "warning")
+        if saved.changed:
+            self.store.relist()
+            self.poll()
 
     def next_waiting(self) -> None:
         """j: the next open session that needs you, else the next one waiting for you: picked in the list
