@@ -89,6 +89,7 @@ from .. import (
 )
 from .. import viewmodel as VM
 from ..bgjobs import Job
+from ..config import UI_TRIES
 from ..keys import KEYS
 from ..palette import mix
 from ..sessions import Exit, Session, Status, folder_key
@@ -1439,10 +1440,12 @@ class MainWindow(QMainWindow):
         asked.open()
 
     def close_anyway(self) -> None:
-        """The handovers queued here dropped, the other dashboards told (they showed them queued), and closed."""
+        """The handovers queued here dropped, the other dashboards told (they showed them queued), and closed. On
+        the UI thread: a queue another window is saving is waited for a moment (UI_TRIES), not ~1 s; then left,
+        its entries by this window going once its process has (actions.save_queued keeps a running one's)."""
         self.leaving = True
         self.engine.state.queued.clear()
-        actions.save_queued({})
+        actions.save_queued({}, UI_TRIES)
         self.close()
 
     def finish_closing(self) -> None:

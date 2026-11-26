@@ -31,6 +31,7 @@ from tabmancer import (
     alerts,
     claudeupdate,
     clis,
+    config,
     demo,
     engine,
     handover,
@@ -364,6 +365,23 @@ def test_closing_with_handovers_queued_here_asks_first_and_keeps_them_unless_clo
     qapp.processEvents()
     assert not shown.isVisible() and not shown.engine.state.queued and actions.read_queued() == {}
 
+
+def test_closing_anyway_while_another_window_saves_the_queue_waits_only_a_moment(qapp, window, monkeypatch):
+    """Close anyway runs on the UI thread: with the queue's lock held elsewhere it waits UI_TRIES (~75 ms), not
+    ~1 s, and closes; the queue is left as it is (its entries by this window go once its process has)."""
+    shown = window()
+    read(qapp, shown)
+    busy = busy_one(shown)
+    shown.engine.handover(busy, "transcript")
+    shown.close()
+    waits: list[float] = []
+    monkeypatch.setattr(config, "time", SimpleNamespace(time=time.time, sleep=waits.append))  # config's clock only
+    with config.locked(actions.QUEUE):  # another window saving it
+        close_dialog_of(shown).leave.click()
+    qapp.processEvents()
+    assert not shown.isVisible() and not shown.engine.state.queued
+    assert waits == [config.BUSY_WAIT] * (config.UI_TRIES - 1)
+    assert actions.read_queued() == {busy.session_id: "transcript"}  # not saved: left for its process to end
 
 def test_closing_while_a_handover_is_written_waits_for_it_and_its_fresh_session(qapp, window, world, monkeypatch):
     """The handover's thread is never cut short (a session closed to write its own would lose it): the window
