@@ -31,8 +31,6 @@ from .clisettings import Row, parts_html
 from .formparts import keys_html
 from .handover import label
 
-TITLE = "Claude accounts"  # the dialog's window title, and its heading
-
 
 @dataclass
 class Seen:
@@ -50,10 +48,8 @@ class Seen:
 def read_seen() -> Seen:
     """As the terminal dashboard's A reads them; each module looked up when called (the demo stands in)."""
     current = accounts.claude()
-    seen = accounts.known()
-    if current is not None and not any(account.key == current.key for account, _ in seen):
-        seen.insert(0, (current, ""))
-    return Seen(current, seen, browsers.places(), accounts.opens_in(), usage.last_by_account())
+    return Seen(current, accountwords.listed(current, accounts.known()), browsers.places(), accounts.opens_in(),
+                usage.last_by_account())
 
 
 def open_tabs(launches: list[launch.Launch]) -> list[str]:
@@ -90,21 +86,16 @@ class Accounts(QObject):
             self.send("read", shown)
 
     def sign_in(self, email: str, place: str, places: list[Place]) -> None:
-        """Claude Code's own sign-in in a new tab, its page where place says (accountwords.sign_in_launch,
-        which writes browsers' launcher); said once the tab opened, or why it did not."""
+        """Claude Code's own sign-in in a new tab, its page where place says (accountwords.sign_in, which
+        writes browsers' launcher); said once the tab opened, or why it did not."""
         self.start(self.sign_in_now, email, place, list(places))
 
     def sign_in_now(self, email: str, place: str, places: list[Place]) -> None:
         if not self.demo:
             claudeupdate.before_opening(self.tell)
-        login = accountwords.sign_in_launch(email, place)
-        try:
-            left = open_tabs([login])
-        except OSError as error:
-            self.say(accountwords.open_failed_note(error))
-            return
-        if left or not self.demo:
-            self.say(accountwords.signing_in_note(email, accountwords.where_words(login, places, place), left))
+        said = accountwords.sign_in(email, place, places, open_tabs, demo=self.demo)
+        if said is not None:
+            self.say(said)
 
     def start(self, work: Callable[..., None], *args: object) -> None:
         self.workers = [thread for thread in self.workers if thread.is_alive()]
@@ -183,14 +174,14 @@ class AccountsDialog(QDialog):
         self.accent = accent
         self.answered = False
         self.at = next((at for at, key in enumerate(self.ids) if not self.is_current(key)), len(self.ids) - 1)
-        self.setWindowTitle(TITLE)
+        self.setWindowTitle(accountwords.TITLE)
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setMinimumWidth(720)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # the keys are the dialog's: nothing in it takes the focus
         box = QVBoxLayout(self)
         box.setContentsMargins(18, 14, 18, 12)
         box.setSpacing(8)
-        self.heading = label(look.span(TITLE, f"bold {look.TEXT}") + "&nbsp;&nbsp;"
+        self.heading = label(look.span(accountwords.TITLE, f"bold {look.TEXT}") + "&nbsp;&nbsp;"
                              + look.span(accountwords.title_words(self.current), look.MUTED))
         box.addWidget(self.heading)
         listed = QFrame()
@@ -264,13 +255,8 @@ class AccountsDialog(QDialog):
         another tabmancer past UI_TRIES), said under the note (this sign-in still opens there)."""
         if not self.places:
             return
-        key = self.ids[self.at]
-        now = accountwords.next_place([place.id for place in self.places], self.place.get(key, DEFAULT), step)
-        email = self.email.get(key, key)
-        for other, its_email in self.email.items():  # the same email's other organisations open there too
-            if its_email == email:
-                self.place[other] = now
-        self.not_kept.setVisible(not accounts.keep_opens_in(email, now, UI_TRIES))  # held: ~75 ms, no more
+        turned = accountwords.turn(self.place, self.email, self.ids[self.at], [place.id for place in self.places], step)
+        self.not_kept.setVisible(not accounts.keep_opens_in(turned.email, turned.place, UI_TRIES))  # held: ~75 ms
         self.draw()
 
     def choose(self) -> None:

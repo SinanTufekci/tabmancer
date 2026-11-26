@@ -7,9 +7,11 @@ puts them into rich Text, the desktop window into its own; both say the same."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from . import accounts, browsers, usage
 from .accounts import Account
@@ -22,6 +24,7 @@ from .teamwords import Part
 from .viewmodel import lifts
 
 ANOTHER = "+"  # the option for an account not seen yet
+TITLE = "Claude accounts"  # A's dialog: its heading, and in the window its title
 # ←/→ when accounts.keep_opens_in could not keep the place (accounts.json there but unreadable, or not written).
 NOT_KEPT = ("Not saved for next time: accounts.json could not be read or written, or another tabmancer was "
             "changing it, so it was left as it is. This sign-in still opens there.")
@@ -39,6 +42,14 @@ def shared(seen: list[tuple[Account, str]]) -> set[str]:
     """The emails listed more than once (one per organisation): shown with their organisation."""
     emails = [account.email for account, _ in seen]
     return {email for email in emails if emails.count(email) > 1}
+
+
+def listed(current: Account | None, seen: list[tuple[Account, str]]) -> list[tuple[Account, str]]:
+    """The accounts A lists: those seen (accounts.known, the latest first), and the one signed in now first
+    when it has not been seen yet (seen when the dashboard's poll next keeps it)."""
+    if current is not None and not any(account.key == current.key for account, _ in seen):
+        return [(current, ""), *seen]
+    return seen
 
 
 def opens_in(seen: list[tuple[Account, str]], places: list[Place],
@@ -61,6 +72,27 @@ def opens_in(seen: list[tuple[Account, str]], places: list[Place],
 def next_place(ids: list[str], now: str, step: int) -> str:
     """←/→: the place step away from now, round the list (from the first when now is gone)."""
     return ids[((ids.index(now) if now in ids else 0) + step) % len(ids)]
+
+
+class Turned(NamedTuple):
+    """A place turned with ←/→ (turn): for which email (accounts.ANY_OTHER for another account), where it
+    opens now, and the options it changed (the picked one first, then its email's other organisations)."""
+
+    email: str
+    place: str
+    keys: list[str]
+
+
+def turn(place: dict[str, str], email: dict[str, str], key: str, ids: list[str], step: int) -> Turned:
+    """←/→ on option key: its page's next place among ids (next_place), set in place (option id -> place id,
+    as opens_in made it) for it and for its email's other organisations, as they share the page. The caller
+    keeps it for next time: accounts.keep_opens_in(turned.email, turned.place)."""
+    now = next_place(ids, place.get(key, DEFAULT), step)
+    its = email.get(key, key)
+    keys = [key, *(other for other, other_email in email.items() if other_email == its and other != key)]
+    for turned in keys:
+        place[turned] = now
+    return Turned(its, now, keys)
 
 
 def place_words(places: list[Place], place: str) -> str:
@@ -144,6 +176,21 @@ def signing_in_note(email: str, where: str, left: list[str]) -> Note:
         return Note(f"No terminal to open it in. Run it yourself: {left[0]}", seconds=15)
     return Note(f"Signing in{f' as {email}' if email else ''} in a new tab: finish it in {where}. "
                 "The top bar says when it is done.", seconds=8)
+
+
+def sign_in(email: str, place: str, places: list[Place], open_tabs: Callable[[list[Launch]], list[str]],
+            demo: bool = False) -> Note | None:
+    """Claude Code's own sign-in (sign_in_launch) opened in a new tab by open_tabs (the caller's, looked up
+    when called: the demo stands in for it), and what to say of it: the tab opening, where its page opens,
+    or why it did not. demo: its stand-in says what would have opened, so only a command left is said."""
+    login = sign_in_launch(email, place)
+    try:
+        left = open_tabs([login])
+    except OSError as error:
+        return open_failed_note(error)
+    if left or not demo:
+        return signing_in_note(email, where_words(login, places, place), left)
+    return None
 
 
 def ran_elsewhere(account: Account | None, sessions: list[Session]) -> list[Session]:

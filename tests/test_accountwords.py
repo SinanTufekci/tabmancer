@@ -77,6 +77,41 @@ def test_the_sign_in(monkeypatch):
     assert accountwords.open_failed_note(OSError("no wt")).severity == "error"
 
 
+def test_the_accounts_listed_and_a_place_turned():
+    assert accountwords.listed(ME, [(OTHER, "t")]) == [(ME, ""), (OTHER, "t")]  # signed in, not seen yet: first
+    assert accountwords.listed(ME, [(OTHER, "t"), (ME, "u")]) == [(OTHER, "t"), (ME, "u")]
+    assert accountwords.listed(None, []) == []
+    seen = [(ME, ""), (TEAM, ""), (OTHER, "")]
+    email, place = accountwords.opens_in(seen, PLACES, {})
+    ids = [p.id for p in PLACES]
+    turned = accountwords.turn(place, email, TEAM.key, ids, 1)  # one page for the email's organisations
+    assert turned == accountwords.Turned("me@example.com", "chrome:Profile 3", [TEAM.key, ME.key])
+    assert place == {ME.key: "chrome:Profile 3", TEAM.key: "chrome:Profile 3", OTHER.key: "",
+                     accountwords.ANOTHER: ""}
+    assert accountwords.turn(place, email, accountwords.ANOTHER, ids, -1) == accountwords.Turned(
+        accounts.ANY_OTHER, "edge:private", [accountwords.ANOTHER])  # round the list
+    assert place[accountwords.ANOTHER] == "edge:private" and place[OTHER.key] == ""
+
+
+def test_the_sign_in_opened_and_said(monkeypatch):
+    monkeypatch.setattr(browsers, "launcher", lambda: Path("C:/tm/open-browser.cmd"))
+    opened: list = []
+    said = accountwords.sign_in("b@example.com", "chrome:Profile 3", PLACES, lambda tabs: opened.extend(tabs) or [])
+    assert [tab.options for tab in opened] == [("auth", "login", "--email", "b@example.com")]
+    assert said is not None and said.words == ("Signing in as b@example.com in a new tab: finish it in Chrome · Work. "
+                                               "The top bar says when it is done.")
+    # Over the demo its stand-in says what would have opened: nothing more, unless a command is left.
+    assert accountwords.sign_in("b@example.com", "", PLACES, lambda tabs: [], demo=True) is None
+    left = accountwords.sign_in("", "", PLACES, lambda tabs: ["claude auth login"], demo=True)
+    assert left is not None and left.words == "No terminal to open it in. Run it yourself: claude auth login"
+
+    def refused(tabs):
+        raise OSError("no wt")
+
+    failed = accountwords.sign_in("", "", PLACES, refused)
+    assert failed is not None and (failed.words, failed.severity) == ("Could not open the tab: no wt", "error")
+
+
 def test_a_session_that_ran_elsewhere():
     def s(sid, org, sensitive=()):
         return Session(session_id=sid, path=Path(f"C:/nowhere/{sid}.jsonl"), cwd="C:/work/shop", title="t",
