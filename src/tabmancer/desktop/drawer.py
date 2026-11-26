@@ -39,8 +39,10 @@ ROOM = 60  # the preview's room in characters, as the terminal's beside the list
 MORE = 3  # as much of each as the terminal's preview beside the list shows
 NOTHING = "Pick a card: how it stands, what was said in it, and its facts."
 # The buttons: (key, the dashboard action, its words where the footer gives none). Shown when the
-# footer offers the key on this row (footer.allowed is True).
-BUTTONS = (("Enter", "open", "Open"), ("p", "prompt", "Tell it…"), ("h", "handover", "Hand over"),
+# footer offers the key on this row (footer.allowed is True); s only on a team's (Start rest, Start team): a
+# session's summary is the terminal dashboard's for now.
+BUTTONS = (("Enter", "open", "Open"), ("s", "summarize", "Start"), ("p", "prompt", "Tell it…"),
+           ("h", "handover", "Hand over"),
            ("c", "continue_at_reset", "Continue"), ("M", "monitor", "Monitor"), ("f", "pin", "Pin"),
            ("x", "hide", "Hide"))
 PER_ROW = 3
@@ -227,6 +229,8 @@ class Drawer(QScrollArea):
         out = []
         for key, action, words in BUTTONS:
             if action == "continue_at_reset" and not at_limit:
+                continue
+            if action == "summarize" and row.kind not in footer.TEAM_ROWS:
                 continue
             if footer.allowed(action, on_top=False, monitor=False, projects_focused=False, live_mode=False,
                               own=(), sessions=snap.sessions.values(), at=lambda: row) is not True:

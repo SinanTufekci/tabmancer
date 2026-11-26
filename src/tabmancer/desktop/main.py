@@ -124,8 +124,9 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n"}
+        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s"}
 TEAMS_SAID = "The Team panel: T again starts a new team."
+START_ELSEWHERE = "s starts a team: pick its card. A session's summary is the terminal dashboard's for now (tabmancer)."
 # A goal the new-team dialog found a team at work has already, or adds to: the window types into no member's tab.
 TELL_ELSEWHERE = ("{team} is on this goal already: nothing was made. The message for {to} is on the clipboard, to "
                   "paste into its tab (Ctrl+V, Enter).")
@@ -419,6 +420,7 @@ class MainWindow(QMainWindow):
         box.setContentsMargins(12, 10, 12, 10)
         if title == "Team":
             self.team_panel = TeamPanel(self.accent)
+            self.team_panel.tabs.currentChanged.connect(self.forget_new_team)  # another team picked meanwhile
             box.setContentsMargins(0, 0, 0, 0)
             box.addWidget(self.team_panel)
         elif title == "Sessions":
@@ -464,7 +466,7 @@ class MainWindow(QMainWindow):
                  "h": self.handover_key, "r": self.rename_key, "p": self.prompt_key,
                  "B": self.background_key, ",": self.settings_key,
                  "A": self.accounts_key, "w": self.save_workspace_key, "o": self.open_workspace_key,
-                 "n": self.new_sessions_key}
+                 "n": self.new_sessions_key, "s": self.start_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -1062,6 +1064,20 @@ class MainWindow(QMainWindow):
         sessions = snap.sessions if snap is not None else {}
         return {name: sessions.get(s.session_id, s) if s is not None else None for name, s in state.sessions.items()}
 
+    def start_key(self) -> None:
+        """s on a team's card (or its row in the Table): every member not open started, a closed one resumed as
+        itself, one never started new, the lead last, as the terminal dashboard's s starts them
+        (WindowFront.start_team: teamkeys.TeamKeys.start, one copy; the members claimed under a lock, waited for
+        UI_TRIES at most here); its cache gone, s again starts it. A session's summary is the terminal
+        dashboard's for now: said."""
+        snap = self.snap
+        team = self.picked_team()
+        state = snap.team_states.get(team) if snap is not None and team is not None else None
+        if state is None:
+            self.say(START_ELSEWHERE)
+            return
+        self.front.start_team(state.team, self.members_now(state))
+
     def forget_closing(self) -> None:
         self.closing_timer.stop()
         self.closing_team = None
@@ -1280,6 +1296,11 @@ class MainWindow(QMainWindow):
         elif name in self.team_panel.names:
             self.new_team_shown = None
             self.team_tab(name)
+
+    def forget_new_team(self, _index: int = -1) -> None:
+        """Another team's tab picked (a click, a key, Enter on its card): the team just made is not picked
+        over it when it shows. A reading changes the tabs with their signals blocked: never this."""
+        self.new_team_shown = None
 
     # --- the keys that reach past the window -------------------------------------------------------
 

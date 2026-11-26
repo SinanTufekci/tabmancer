@@ -275,7 +275,31 @@ class WindowFront(QObject):
         """A team's sessions, as the terminal's open them (teamkeys.TeamKeys.open_team, one copy): its
         members in the background first where it runs them there, then the tabs; one opened a moment
         ago not again. What the team keys ask of a dashboard besides, the window answers below."""
-        teamkeys.TeamKeys(cast("teamkeys.Dashboard", self), time.monotonic).open_team(team, launches)
+        self.team_keys().open_team(team, launches)
+
+    def team_keys(self) -> teamkeys.TeamKeys:
+        """The team keys (teamkeys.TeamKeys, the terminal's one copy) on this window; what was pressed once
+        kept with the engine's state (EngineState.team_presses), so a second s finds the first."""
+        return teamkeys.TeamKeys(cast("teamkeys.Dashboard", self), time.monotonic,
+                                 self.window().engine.state.team_presses)
+
+    def start_team(self, team: teams.Team, members: dict[str, Session | None]) -> None:
+        """s on a team: every member not open, a closed one resumed as itself, one never started new, the lead
+        last; one opened a moment ago left to come up; its cache gone, said first (s again starts it). A team
+        handover written and kept is dropped (TeamKeys.start)."""
+        self.team_keys().start(team, members)
+
+    def cold_start_ok(self, team: teams.Team, members: dict[str, Session | None]) -> bool:
+        return self.team_keys().cold_start_ok(team, members)
+
+    def recent(self) -> set[str] | None:
+        """The sessions opened from here a moment ago, still starting (the Opener's openings: Enter's and the
+        engine's one copy)."""
+        return self.window().opener.openings.recent()
+
+    def kept_handovers(self) -> dict:
+        """The teams' handovers written and not taken yet (EngineState.kept_handovers)."""
+        return self.window().engine.state.kept_handovers
 
     def say(self, note: actions.Note) -> None:
         self.say_note(note)
