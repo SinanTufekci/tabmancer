@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import sessions
 from tabmancer.app import SessionPicker
@@ -30,10 +31,7 @@ async def test_the_session_table_never_scrolls_sideways(fake_home, monkeypatch, 
         {"sessionId": "one", "kind": "interactive", "status": "idle"}])
     app = SessionPicker(days=14)
     async with app.run_test(size=(cols, 40)) as pilot:
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if app.sessions.get("wide") and app.sessions["wide"].live_state:
-                break
+        await wait_until(pilot, lambda: app.sessions.get("wide") and app.sessions["wide"].live_state)
         for view in ("list", "live"):
             if view == "live":
                 await pilot.press("l")

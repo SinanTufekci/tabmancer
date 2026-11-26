@@ -1,3 +1,5 @@
+from conftest import wait_until
+
 from tabmancer import mascot as M
 from tabmancer.blocks import OCTANTS
 
@@ -154,10 +156,7 @@ async def test_bit_lives_in_the_dashboard(fake_home):
 
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         await pilot.pause(0.2)
         assert app.mascot.display and app.mascot.size.height == M.ROWS
         assert app.mascot.bubbles  # it greets you
@@ -305,10 +304,7 @@ async def test_the_dashboard_tells_bit_where_the_pointer_is(fake_home):
 
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         before = app.mascot.pointer_seen
         await pilot.hover("#table", offset=(10, 2))
         await pilot.pause(0.1)

@@ -71,10 +71,7 @@ async def test_a_session_that_never_comes_up_is_named(fake_home, opened, monkeyp
         await loaded(pilot, app)
         app.table.move_cursor(row=app.table.get_row_index("one"))
         await pilot.press("enter")  # Claude Code would not resume it: no process ever shows up
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if any("did not come up" in note for note in told(app)):
-                break
+        await wait_until(pilot, lambda: any("did not come up" in note for note in told(app)))
         assert [launch.session_id for launch in opened] == ["one"]
         assert any("demo did not come up: its tab says why" in note for note in told(app))
 

@@ -6,7 +6,7 @@ import os
 import sys
 import time
 
-from conftest import _records
+from conftest import _records, wait_until
 
 from tabmancer import cli
 from tabmancer.app import SessionPicker
@@ -31,10 +31,7 @@ def test_list_says_where_else_to_look_when_the_window_is_empty(fake_home, capsys
 async def test_the_dashboard_says_what_to_do_with_no_sessions():
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
-        for _ in range(50):
-            await pilot.pause(0.05)
-            if "No Claude Code sessions yet" in str(app.detail.render()):
-                break
+        await wait_until(pilot, lambda: "No Claude Code sessions yet" in str(app.detail.render()))
         assert "press n" in str(app.detail.render())
         assert any("No sessions here yet" in saying.text for saying in app.mascot.bubbles)
 

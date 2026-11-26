@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from conftest import wait_until
+
 from tabmancer.app import SessionPicker
 from tabmancer.keysview import KEYS, KeysScreen
 
@@ -17,10 +19,7 @@ async def test_question_mark_lists_every_key_and_runs_the_one_picked(fake_home):
 
     app = SessionPicker(days=14)
     async with app.run_test(size=(120, 30)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         await pilot.press("question_mark")
         assert isinstance(app.screen, KeysScreen)
         menu = app.screen.query_one(OptionList)
@@ -49,10 +48,7 @@ async def test_no_key_is_cut_off_the_footer_it_takes_rows_instead(fake_home):
 
     app = SessionPicker(days=14)
     async with app.run_test(size=(200, 30)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         footer = app.query_one(KeysFooter)
         for cols, rows in ((200, 1), (120, 2), (80, 3), (200, 1)):  # and back: a resize fits it again
             await pilot.resize_terminal(cols, 30)

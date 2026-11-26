@@ -7,6 +7,7 @@ import io
 import json
 import subprocess
 
+from conftest import wait_until
 from rich.console import Console
 
 from tabmancer import gitstate
@@ -77,10 +78,7 @@ async def test_the_sidebar_and_the_preview_say_where_the_folder_stands(fake_home
                                      encoding="utf-8")
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if app.git:
-                break
+        await wait_until(pilot, lambda: app.git)
         key = folder_key(str(work))
         assert app.git[key].changed == 1
         line = next(app.projects.get_option_at_index(i).prompt for i in range(app.projects.option_count)

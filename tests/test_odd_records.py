@@ -4,6 +4,7 @@ version does not expect costs at most that record, never the session, the list o
 import json
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import doctor, safework, sessions, tokens
 from tabmancer.app import SessionPicker
@@ -97,10 +98,7 @@ async def test_an_error_in_the_background_is_told_and_logged_and_the_dashboard_s
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
         app.refresh_tokens()
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if any("went wrong" in note.message for note in app._notifications):
-                break
+        await wait_until(pilot, lambda: any("went wrong" in note.message for note in app._notifications))
         assert app.is_running
         told = [note.message for note in app._notifications if "went wrong" in note.message]
         assert told and "the token count fell over" in told[0] and safework.LOG in told[0]

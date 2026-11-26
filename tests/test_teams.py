@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from conftest import box_has_focus, role_of
+from conftest import box_has_focus, role_of, wait_until
 
 from tabmancer import app as app_module
 from tabmancer import teams
@@ -161,10 +161,7 @@ async def test_the_dashboard_creates_a_team_and_shows_it(fake_home, tmp_path, mo
     folder.mkdir()
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         await pilot.press("T")  # no teams yet: straight to a new one
         assert isinstance(app.screen, NewTeamDialog)
         dialog = app.screen
@@ -182,10 +179,7 @@ async def test_the_dashboard_creates_a_team_and_shows_it(fake_home, tmp_path, mo
         dialog.query_one("#team-folder").value = str(folder)
         dialog.query_one("#team-goal").text = "Add a checkout"
         await pilot.press("ctrl+s")
-        for _ in range(60):  # a loaded machine takes a while
-            await pilot.pause(0.05)
-            if isinstance(app.screen, TeamScreen):
-                break
+        await wait_until(pilot, lambda: isinstance(app.screen, TeamScreen))  # a loaded machine takes a while
         assert isinstance(app.screen, TeamScreen)
         assert [launch.title for launch in opened] == ["shop: api", "shop: ui", "shop: tests", "shop: lead"]
         assert "shop" in teams.load()

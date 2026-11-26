@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from conftest import box_has_focus
+from conftest import box_has_focus, wait_until
 
 from tabmancer import actions, alerts, app, cli, demo, focus, launch, teamview
 from tabmancer.app import SessionPicker
@@ -64,25 +64,16 @@ async def test_the_demo_sets_the_dashboard_up_once(in_demo, monkeypatch):
 async def test_the_demo_lists_the_made_up_sessions_says_so_and_opens_nothing(in_demo):
     app = in_demo
     async with app.run_test(size=(150, 40)) as pilot:
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if len(app.sessions) >= len(demo.SESSIONS):
-                break
+        await wait_until(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS))
         assert {"pcb-router", "web-app", "api-server"} <= set(app.sessions)
         assert {"pcb-router", "web-app"} <= app.preselected  # open at the made-up shutdown
         assert "demo" in str(app.query_one("#brand").render())
         assert demo.NOTE in told(app)
         # On a session's row: on the team's, which may come in first, Enter unfolds the team.
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if "pcb-router" in app.table.rows:
-                break
+        await wait_until(pilot, lambda: "pcb-router" in app.table.rows)
         app.table.move_cursor(row=app.table.get_row_index("pcb-router"))
         await pilot.press("enter")
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if any("Nothing opens in the demo" in note for note in told(app)):
-                break
+        await wait_until(pilot, lambda: any("Nothing opens in the demo" in note for note in told(app)))
         opening = [note for note in told(app) if "Nothing opens in the demo" in note]
         assert opening and "claude --resume" in opening[0]
         await pilot.pause(0.3)
@@ -93,18 +84,12 @@ async def test_the_demo_lists_the_made_up_sessions_says_so_and_opens_nothing(in_
 async def test_a_prompt_written_in_the_demo_opens_nothing_and_says_so(in_demo):
     app = in_demo
     async with app.run_test(size=(150, 40)) as pilot:
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if "mobile" in app.table.rows:
-                break
+        await wait_until(pilot, lambda: "mobile" in app.table.rows)
         app.table.move_cursor(row=app.table.get_row_index("mobile"))
         await pilot.press("p")
         await box_has_focus(pilot, app)
         await pilot.press(*"go on", "enter")
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if any("Nothing opens in the demo" in note for note in told(app)):
-                break
+        await wait_until(pilot, lambda: any("Nothing opens in the demo" in note for note in told(app)))
         assert any("claude --resume mobile" in note for note in told(app))
         assert not [note for note in told(app) if note.startswith("Opened")]
 
@@ -185,29 +170,20 @@ async def test_the_demo_shows_a_second_account_and_a_session_from_another_organi
     app = in_demo
     work = demo._account(demo.WORK)
     async with app.run_test(size=(160, 44)) as pilot:
-        for _ in range(200):
-            await pilot.pause(0.05)
-            if {"ml", "wiki"} <= app.told_limit:
-                break
+        await wait_until(pilot, lambda: {"ml", "wiki"} <= app.told_limit)
         assert app.ran_elsewhere([app.sessions["wiki"]]) and not app.ran_elsewhere([app.sessions["ml"]])
         assert app.sessions["wiki"].sensitive == ["browser"]
         said = " ".join(saying.text for saying in app.mascot.bubbles)
         assert "you@work.example.com has room (session reset since, 5h" in said and said.endswith("ago): A to switch")
         await pilot.press("c")
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if isinstance(app.screen, LimitDialog):
-                break
+        await wait_until(pilot, lambda: isinstance(app.screen, LimitDialog))
         assert str(app.screen.query_one(".away", Label).render()) == (
             "One of the ticked ran on another organisation: its conversation goes to your personal account "
             "if it goes on (browser content in it).")
         await pilot.press("escape")
         await pilot.pause(0.1)
         await pilot.press("A")
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if isinstance(app.screen, AccountsDialog):
-                break
+        await wait_until(pilot, lambda: isinstance(app.screen, AccountsDialog))
         options = app.screen.query_one(OptionList)
         line = next(str(options.get_option_at_index(i).prompt) for i in range(options.option_count)
                     if options.get_option_at_index(i).id == work.key)

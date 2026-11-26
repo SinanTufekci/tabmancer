@@ -6,6 +6,7 @@ while a picture cannot be shown (scrolled partly out of sight), the block charac
 from __future__ import annotations
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import bitart, demo, sixel
 from tabmancer.tokenchart import draw_bars, draw_week
@@ -65,15 +66,10 @@ def in_demo(tmp_path, monkeypatch):
 
 
 async def open_stats(app, pilot):
-    for _ in range(100):
-        await pilot.pause(0.05)
-        if app.token_report is not None:
-            break
+    await wait_until(pilot, lambda: app.token_report is not None)
     await pilot.press("u")
-    for _ in range(100):  # counted again with the kept days, and the period before for the overview
-        await pilot.pause(0.05)
-        if not app.screen.counting:
-            break
+    # counted again with the kept days, and the period before for the overview
+    await wait_until(pilot, lambda: not app.screen.counting)
     await pilot.pause(0.3)
     return app.screen
 

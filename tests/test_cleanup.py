@@ -3,6 +3,7 @@ import os
 import time
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import cleanup, diskclean, sessions, summarize
 from tabmancer.theme import DEFAULT_THEME
@@ -105,10 +106,7 @@ async def test_cleanup_app_select_confirm_and_delete(home, monkeypatch):
     monkeypatch.setattr(diskclean, "_trash_one", lambda path: trashed.append(path.name))
     app = cleanup.CleanupApp()
     async with app.run_test() as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.items:
-                break
+        await wait_until(pilot, lambda: app.items)
         assert app.theme == DEFAULT_THEME  # the dashboard's black theme, not Textual's default
         await pilot.press("o")  # older than 7 days
         assert app.selected == {"old"}
@@ -130,10 +128,7 @@ async def test_a_problem_shows_as_plain_words_not_markup(home, monkeypatch):
     monkeypatch.setattr(diskclean, "_trash_one", refuse)
     app = cleanup.CleanupApp()
     async with app.run_test() as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.items:
-                break
+        await wait_until(pilot, lambda: app.items)
         await pilot.press("o", "enter", "y")
         await pilot.pause()
         said = [note.message for note in app._notifications]

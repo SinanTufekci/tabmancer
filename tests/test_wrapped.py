@@ -9,6 +9,7 @@ import zlib
 from datetime import date, datetime, timedelta
 
 import pytest
+from conftest import wait_until
 from test_stats import at, reply, write
 
 from tabmancer import card, wrapped
@@ -203,10 +204,7 @@ async def test_w_shows_the_card_in_pixels_saves_and_copies_it(fake_home, monkeyp
     monkeypatch.setattr(card, "copy_picture", lambda canvas: copied.append(canvas.height) or True)
     app = SessionPicker(days=14)
     async with app.run_test(size=(160, 50)) as pilot:
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if app.token_report is not None:
-                break
+        await wait_until(pilot, lambda: app.token_report is not None)
         await pilot.press("W")
         await pilot.pause(0.3)
         assert isinstance(app.screen, WrappedScreen)
@@ -243,10 +241,7 @@ async def test_f_turns_the_card_to_a_story_and_p_takes_it_where_it_is_shared(fak
     monkeypatch.setattr(share, "reveal", shown.append)
     app = SessionPicker(days=14)
     async with app.run_test(size=(160, 50)) as pilot:
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if app.token_report is not None:
-                break
+        await wait_until(pilot, lambda: app.token_report is not None)
         await pilot.press("W")
         await pilot.pause(0.3)
         screen = app.screen
@@ -301,10 +296,7 @@ async def test_without_pixels_the_card_is_its_numbers_in_words(fake_home):
 
     app = SessionPicker(days=14)
     async with app.run_test(size=(160, 50)) as pilot:
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if app.token_report is not None:
-                break
+        await wait_until(pilot, lambda: app.token_report is not None)
         await pilot.press("W")
         await pilot.pause(0.3)
         words = app.screen.query_one(CardPicture).render().plain

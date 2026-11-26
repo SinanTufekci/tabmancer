@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from conftest import role_of, team_preview
+from conftest import role_of, team_preview, wait_until
 from test_team_tree import peer, send, transcript
 from textual.app import App
 from textual.widgets import Input, Static, TextArea
@@ -107,11 +107,8 @@ async def test_peers_stand_side_by_side_and_idle_ones_wait_for_you(fake_home, tm
     team = peers_at_work(fake_home, tmp_path, monkeypatch)
     app = SessionPicker(days=14)
     async with app.run_test(size=(160, 44)) as pilot:
-        for _ in range(100):
-            await pilot.pause(0.05)
-            state = app.team_states.get("docs")
-            if state is not None and state.open_count() == 2:
-                break
+        await wait_until(pilot, lambda: app.team_states.get("docs") is not None
+                         and app.team_states["docs"].open_count() == 2)
         state = app.team_states["docs"]
         assert not app.resting_members() & {"api-1", "web-1"}  # idle peers wait for you, not for a lead
         lines = [line.plain for line in teamtree.tree(state, 120, {}, {})]

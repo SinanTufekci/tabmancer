@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
+from conftest import wait_until
+
 from tabmancer import cli, doctor, updates
 from tabmancer.app import SessionPicker
 from tabmancer.widgets import TopBar
@@ -92,10 +94,7 @@ async def test_the_dashboard_tells_of_a_newer_tabmancer_once(fake_home, monkeypa
     monkeypatch.setattr(updates, "news", news)
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if app.told_update:
-                break
+        await wait_until(pilot, lambda: app.told_update)
         brand = app.query_one(TopBar).query_one("#brand").render()
         assert "↑ 9.0.0" in str(brand)
         assert any("9.0.0 is out" in n.message and "uv tool upgrade tabmancer" in n.message

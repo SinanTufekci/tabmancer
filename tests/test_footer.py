@@ -58,10 +58,8 @@ async def test_a_dimmed_key_does_nothing_and_j_dims_when_nobody_waits(fake_home,
         {"sessionId": "one", "kind": "interactive", "status": "busy"}])
     app = SessionPicker(days=14)
     async with app.run_test(size=(200, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions.get("one") is not None and app.sessions["one"].live_state:
-                break
+        await wait_until(pilot, lambda: app.sessions.get("one") is not None
+                         and app.sessions["one"].live_state)
         keys = await on_row(pilot, app, "one")
         assert keys["next_waiting"][1]  # "one" works: nobody waits for you
         await pilot.press("space")
@@ -71,10 +69,7 @@ async def test_a_dimmed_key_does_nothing_and_j_dims_when_nobody_waits(fake_home,
 async def test_the_keys_keep_to_their_groups(fake_home):
     app = SessionPicker(days=14)
     async with app.run_test(size=(200, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         await pilot.pause(0.2)
         await whole_footer(pilot, app)  # not in the middle of making it (seen on the Windows runner)
         starts = [key.action for key in app.query(FooterKey) if key.has_class("-group-start")]
@@ -86,10 +81,8 @@ async def test_the_preview_says_what_enter_does_and_the_bar_keeps_the_ticks(fake
         {"sessionId": "one", "kind": "interactive", "status": "idle"}])
     app = SessionPicker(days=14)
     async with app.run_test(size=(120, 30)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions.get("one") is not None and app.sessions["one"].live_state:
-                break
+        await wait_until(pilot, lambda: app.sessions.get("one") is not None
+                         and app.sessions["one"].live_state)
         app.selected.clear()
         assert app.enter_words(app.sessions["one"]) == "goes to its tab, to type there"
         two = app.sessions["two"]

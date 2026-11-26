@@ -8,6 +8,8 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from conftest import wait_until
+
 from tabmancer import demo, sessionwords, teams, teamwords
 from tabmancer.app import TEAM_ROW
 from tabmancer.launch import Launch, Mode
@@ -149,10 +151,8 @@ async def test_a_teams_preview_says_as_many_open_as_the_list(tmp_path, monkeypat
     for module, name, value in demo.stand_ins(tmp_path, live, app.told):
         monkeypatch.setattr(module, name, value)
     async with app.run_test(size=(200, 50)) as pilot:
-        for _ in range(200):
-            await pilot.pause(0.05)
-            if app.team_states and all(f"{TEAM_ROW}{n}" in app.table.rows for n in app.team_states):
-                break
+        await wait_until(pilot, lambda: app.team_states
+                         and all(f"{TEAM_ROW}{n}" in app.table.rows for n in app.team_states))
         assert app.team_states
         for split in (False, True):
             if app.split != split:

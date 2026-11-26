@@ -8,6 +8,8 @@ Opus 4.8 for an hour unnoticed). The dashboard says so, once, and marks the mode
 import json
 from datetime import datetime, timedelta, timezone
 
+from conftest import wait_until
+
 from tabmancer import app as app_module
 from tabmancer import context, sessions, teamview
 from tabmancer.app import SessionPicker
@@ -108,18 +110,12 @@ async def test_the_dashboard_says_once_that_the_model_fell_back(fake_home, monke
     async with app.run_test(size=(160, 40)) as pilot:
         real = app.notify
         monkeypatch.setattr(app, "notify", lambda text, **kw: said.append((text, kw)) or real(text, **kw))
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions.get("one") and app.sessions["one"].live_state:
-                break
+        await wait_until(pilot, lambda: app.sessions.get("one") and app.sessions["one"].live_state)
         assert str(app.model_cell(app.sessions["one"])) == "opus 5.5"
         with path.open("a", encoding="utf-8") as f:
             for record in (prompt("next"), notice(), reply("claude-opus-4-8")):
                 f.write(json.dumps(record) + "\n")
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions["one"].fell_back:
-                break
+        await wait_until(pilot, lambda: app.sessions["one"].fell_back)
         await pilot.pause(0.5)  # more polls: it is said once
         told = [kw for text, kw in said if "Opus 5.5 → Opus 4.8 (safeguards)" in text]
         assert len(told) == 1 and told[0]["severity"] == "warning"

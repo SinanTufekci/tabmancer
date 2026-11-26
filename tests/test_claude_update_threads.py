@@ -5,6 +5,8 @@ from __future__ import annotations
 import threading
 from dataclasses import replace
 
+from conftest import wait_until
+
 from tabmancer import app as app_module
 from tabmancer import claudeupdate
 from tabmancer.app import SessionPicker
@@ -30,10 +32,7 @@ async def test_what_opens_unasked_waits_for_the_update_in_a_worker(fake_home, mo
         claudeupdate.set_enabled(True)  # due now: the day turned while the dashboard was open
         stopped = replace(app.sessions["one"], exit=Exit.CLEAN)
         app.continue_these([stopped], unasked=True)  # its limit lifted
-        for _ in range(20):
-            await pilot.pause(0.05)
-            if ran:
-                break
+        await wait_until(pilot, lambda: ran)
         frame = app.frame
         await pilot.pause(0.3)
         assert app.frame > frame  # the screen goes on while the update runs
@@ -59,8 +58,5 @@ async def test_a_key_press_waits_for_the_update_without_freezing(fake_home, monk
         assert app.updating_claude and not tabs and ran == [False]
         assert any("Claude Code is updating: the session opens" in n.message for n in app._notifications)
         release.set()
-        for _ in range(50):
-            await pilot.pause(0.05)
-            if tabs:
-                break
+        await wait_until(pilot, lambda: tabs)
     assert len(tabs) == 1 and ran == [False]

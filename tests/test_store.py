@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from conftest import wait_until
 from test_team_tree import peer, send, shop, transcript
 
 from tabmancer import accounts, actor, agy, gitstate, marks, sessions, shutdowns, store, teams, tokens, usage
@@ -347,16 +348,10 @@ async def test_the_dashboards_live_read_tells_of_idle_background_sessions_once(f
     monkeypatch.setattr(app_module.Mascot, "react", lambda self, mood, words, *args, **kwargs: said.append(words))
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if app.full_polls:
-                break
+        await wait_until(pilot, lambda: app.full_polls)
         assert app.background_live == {"bg": idle}
         app.poll_live(full=True)
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if app.full_polls > 1:
-                break
+        await wait_until(pilot, lambda: app.full_polls > 1)
         assert app.full_polls > 1
     assert said == ["1 background session sits idle. B tidies up."]
 

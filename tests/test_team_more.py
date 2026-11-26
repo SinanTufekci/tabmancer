@@ -3,7 +3,7 @@ new-team dialog keeps line-ups of your own."""
 
 from __future__ import annotations
 
-from conftest import box_has_focus
+from conftest import box_has_focus, wait_until
 from textual.app import App
 from textual.widgets import Input, Static, TextArea
 
@@ -42,10 +42,7 @@ async def test_x_twice_closes_every_open_member(fake_home, tmp_path, monkeypatch
         screen.action_close_team()  # once: it asks first
         assert not closed and screen.closing
         screen.action_close_team()
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if len(closed) == 2:
-                break
+        await wait_until(pilot, lambda: len(closed) == 2)
         assert closed == ["shop-lead", "shop-api"]  # the closed one (ui) is left alone
 
 

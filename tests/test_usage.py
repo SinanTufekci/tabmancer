@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from conftest import wait_until
+
 from tabmancer import usage
 
 SAMPLE = """You are currently using your subscription to power your Claude Code usage
@@ -46,11 +48,8 @@ async def test_top_bar_shows_session_and_week_limits(fake_home, monkeypatch):
     monkeypatch.setattr(usage, "read_usage", lambda: usage.parse(SAMPLE, NOW))
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            shown = str(app.topbar.query_one("#usage").render())
-            if "33%" in shown:
-                break
+        await wait_until(pilot, lambda: "33%" in str(app.topbar.query_one("#usage").render()))
+        shown = str(app.topbar.query_one("#usage").render())
     assert "session" in shown and "33%" in shown and "week" in shown and "74%" in shown
     assert "Fable" not in shown  # a per-model week at 0 % is left out
 

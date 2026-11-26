@@ -4,7 +4,7 @@ weaker than the session's model."""
 
 from __future__ import annotations
 
-from conftest import box_has_focus
+from conftest import box_has_focus, wait_until
 from textual.app import App
 from textual.widgets import Input, TextArea
 
@@ -68,15 +68,9 @@ async def test_the_n_dialog_has_an_advisor_row(fake_home, tmp_path, monkeypatch)
     monkeypatch.setattr(newsessions, "projects", lambda sessions: [newsessions.Project(str(folder))])
     app = SessionPicker(days=14)
     async with app.run_test(size=(120, 30)) as pilot:
-        for _ in range(50):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         await pilot.press("n")
-        for _ in range(50):
-            await pilot.pause(0.05)
-            if isinstance(app.screen, NewSessions):
-                break
+        await wait_until(pilot, lambda: isinstance(app.screen, NewSessions))
         dialog = app.screen
         await box_has_focus(pilot, app)
         assert dialog.query_one("#pick-card").border_title == "Model · Effort · Context · Advisor"
@@ -92,10 +86,7 @@ async def test_the_n_dialog_has_an_advisor_row(fake_home, tmp_path, monkeypatch)
         assert "fable advisor" in dialog.pick_parts()
         assert dialog.query_one(".hint").region.bottom <= 30  # the keys line still on a 120x30 screen
         await pilot.press("space", "ctrl+s")
-        for _ in range(50):
-            await pilot.pause(0.05)
-            if opened:
-                break
+        await wait_until(pilot, lambda: opened)
     argv = opened[0].argv
     assert argv[argv.index("--advisor") + 1] == "fable"
 

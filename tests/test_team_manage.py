@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
-from conftest import box_has_focus
+from conftest import box_has_focus, wait_until
 from test_team_tree import peer, ready, shop, stamp
 
 from tabmancer import app as app_module
@@ -48,10 +48,7 @@ async def test_enter_opens_ticked_members_as_members_with_the_lead_last(fake_hom
     monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if {"lead-1", "api-1", "ui-1"} <= app.sessions.keys():
-                break
+        await wait_until(pilot, lambda: {"lead-1", "api-1", "ui-1"} <= app.sessions.keys())
         app.selected = {"lead-1", "api-1", "ui-1", "one"}  # as after a restart: all were open
         await pilot.press("enter")
         await pilot.pause(0.1)
@@ -115,10 +112,7 @@ async def test_keys_on_an_open_teams_row(fake_home, tmp_path, monkeypatch):
         assert app.cursor_key() == row and app.team_open("shop")
         await pilot.press("x")
         assert app.closing_team is None  # the second press went to the team: its tabs are closing
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if len(closed) == 2:
-                break
+        await wait_until(pilot, lambda: len(closed) == 2)
         assert sorted(closed) == ["shop-api", "shop-lead"]
         opened.clear()
         await pilot.press("a")  # a member for a team at work: it opens and says hello to the lead
@@ -146,10 +140,7 @@ async def test_a_member_added_to_a_closed_team_waits_to_start_with_it(fake_home,
     monkeypatch.setattr(app_module, "open_tabs", lambda launches: opened.extend(launches) or [])
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if f"{TEAM_ROW}shop" in app.table.rows:
-                break
+        await wait_until(pilot, lambda: f"{TEAM_ROW}shop" in app.table.rows)
         app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
         await pilot.press("a")
         await box_has_focus(pilot, app)

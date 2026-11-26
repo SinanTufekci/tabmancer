@@ -3,7 +3,7 @@ a limit, with `tabmancer team add`, the one command it may run without asking.""
 
 from __future__ import annotations
 
-from conftest import role_of, team_preview
+from conftest import role_of, team_preview, wait_until
 from textual.app import App
 from textual.widgets import Input, Static, TextArea
 
@@ -122,8 +122,5 @@ async def test_the_team_view_shows_members_the_lead_adds(fake_home, tmp_path, mo
         assert [m.name for m in screen.graph.order] == ["lead"]
         assert "the lead picks up to 3 members" in str(screen.query_one("#team-head", Static).render())
         teams.add_members(teams.load()["shop"], "api: endpoints; ui: screens")  # from the lead's tab
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if len(screen.graph.order) == 3:
-                break
+        await wait_until(pilot, lambda: len(screen.graph.order) == 3)
         assert [m.name for m in screen.graph.order] == ["lead", "api", "ui"]

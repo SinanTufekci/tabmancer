@@ -131,10 +131,7 @@ async def test_summary_key_shows_result_and_failure(fake_home, monkeypatch):
     async with app.run_test() as pilot:
         await loaded(pilot, app)
         await pilot.press("s")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if app.current().session_id in app.summaries:
-                break
+        await wait_until(pilot, lambda: app.current().session_id in app.summaries)
         console = Console(width=120, file=io.StringIO(), record=True)
         console.print(app.detail.content)
         assert "Did the thing." in console.export_text()
@@ -144,10 +141,7 @@ async def test_summary_key_shows_result_and_failure(fake_home, monkeypatch):
 
         monkeypatch.setattr(summarize, "summarize", boom)
         await pilot.press("down", "s")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if not app.summarizing:
-                break
+        await wait_until(pilot, lambda: not app.summarizing)
         assert app.current().session_id not in app.summaries
 
 

@@ -8,6 +8,7 @@ import io
 from datetime import date
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import card, history, wrapped
 
@@ -120,10 +121,7 @@ async def test_the_screen_goes_through_slides_periods_and_saves_one_moving(in_de
     monkeypatch.setattr(wrapped, "moving", lambda week, accent, shape, slide, names=False, **_: b"GIF89a" + slide.encode())
     app = in_demo
     async with app.run_test(size=(160, 50)) as pilot:
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if app.token_report is not None:
-                break
+        await wait_until(pilot, lambda: app.token_report is not None)
         await pilot.press("W")
         await pilot.pause(0.3)
         screen = app.screen
@@ -135,23 +133,14 @@ async def test_the_screen_goes_through_slides_periods_and_saves_one_moving(in_de
         await pilot.press("n")
         assert screen.names and picture.names and "n leaves it off" in screen.query_one("#wrapped-about").render().plain
         await pilot.press("2")
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if not screen.counting:
-                break
+        await wait_until(pilot, lambda: not screen.counting)
         assert screen.period == 30 and screen.week.days == 30 and picture.week is screen.week
         assert "month" in screen.query_one("#wrapped-title").render().plain
         await pilot.press("3")
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if not screen.counting:
-                break
+        await wait_until(pilot, lambda: not screen.counting)
         assert screen.period == 0 and screen.week.whole
         await pilot.press("g")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if saved:
-                break
+        await wait_until(pilot, lambda: saved)
         assert saved == [(b"GIF89a", f"claude-code-wrapped-{date.today().isoformat()}-all-time-tokens.gif")]
 
 
@@ -162,10 +151,7 @@ async def test_the_picture_follows_the_slide_the_shape_the_names_and_the_period(
     monkeypatch.setattr(sixel, "_terminal", sixel.Terminal(bitart.WT_CELL))
     app = in_demo
     async with app.run_test(size=(160, 50)) as pilot:
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if app.token_report is not None:
-                break
+        await wait_until(pilot, lambda: app.token_report is not None)
         await pilot.press("W")
         await pilot.pause(0.3)
         shown = app.screen.query_one(CardPicture)
@@ -173,10 +159,7 @@ async def test_the_picture_follows_the_slide_the_shape_the_names_and_the_period(
         # a slide, the story shape, on to the tools slide (the one the top project's name is on), the names, the month
         for key in ("right", "f", "right", "right", "right", "n", "2"):
             await pilot.press(key)
-            for _ in range(100):
-                await pilot.pause(0.05)
-                if not app.screen.counting:
-                    break
+            await wait_until(pilot, lambda: not app.screen.counting)
             assert shown.drawn is not None and shown.drawn[0] == shown.picture_key(), key  # not the last one's
             assert shown.picture.data != seen[-1], key
             seen.append(shown.picture.data)
@@ -189,10 +172,7 @@ async def test_a_card_larger_than_the_room_is_in_words_with_no_picture_over_them
     monkeypatch.setattr(sixel, "_terminal", sixel.Terminal(bitart.WT_CELL))
     app = in_demo
     async with app.run_test(size=(120, 40)) as pilot:  # the story card needs more rows than this has
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if app.token_report is not None:
-                break
+        await wait_until(pilot, lambda: app.token_report is not None)
         await pilot.press("W")
         await pilot.pause(0.3)
         shown = app.screen.query_one(CardPicture)

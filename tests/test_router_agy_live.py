@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import agy
 from tabmancer.sessions import Exit, Session, Status
@@ -149,28 +150,19 @@ async def test_the_dashboard_shows_an_agy_conversation_at_work_and_then_done(hom
     index(home, [SID])
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if SID in app.sessions:
-                break
+        await wait_until(pilot, lambda: SID in app.sessions)
         assert viewmodel.state_id(app.sessions[SID]) == "working"
         con = sqlite3.connect(path)
         con.execute("INSERT INTO steps (idx, step_type, status) VALUES (2, 132, 9)")  # now held for your OK
         con.commit()
         con.close()
         app.poll_live(full=True)
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions[SID].live_state == "permission":
-                break
+        await wait_until(pilot, lambda: app.sessions[SID].live_state == "permission")
         assert viewmodel.state_id(app.sessions[SID]) == "needs-you"
         con = sqlite3.connect(path)
         con.execute("UPDATE steps SET status = 3")
         con.commit()
         con.close()
         app.poll_live(full=True)
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions[SID].exit is not Exit.RUNNING:
-                break
+        await wait_until(pilot, lambda: app.sessions[SID].exit is not Exit.RUNNING)
         assert app.sessions[SID].status is Status.DONE and app.sessions[SID].live_state == ""

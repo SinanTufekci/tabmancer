@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from conftest import team_preview
+from conftest import team_preview, wait_until
 from test_new_team import Host
 from textual.widgets import Input, Static, TextArea
 
@@ -66,10 +66,7 @@ async def test_the_members_start_in_the_background_before_the_leads_tab(fake_hom
     async with app.run_test(size=(150, 44)) as pilot:
         await pilot.pause(0.2)
         app.open_team(team, teams.start(team, {}))
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if len(order) == 3:
-                break
+        await wait_until(pilot, lambda: len(order) == 3)
     assert order == [("bg", "shop: api"), ("bg", "shop: ui"), ("tab", "shop: lead")]
 
 

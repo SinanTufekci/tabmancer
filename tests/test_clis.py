@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import agy, clis, codex, sessions
 from tabmancer.config import NOT_SAVED, config_dir
@@ -236,18 +237,12 @@ async def test_the_dashboard_lists_and_opens_codex_sessions(fake_home, codex_hom
                          event("task_complete")])
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         assert "c1" not in app.sessions  # Codex is off
         await pilot.press("comma")
         assert isinstance(app.screen, CliSettings)
         await pilot.press("down", "space", "enter")  # turn Codex on
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if "c1" in app.sessions:
-                break
+        await wait_until(pilot, lambda: "c1" in app.sessions)
         assert clis.enabled() == ["claude", "codex"]
         assert str(app.table.get_cell("c1", "exit")) == "codex"
         app.table.move_cursor(row=app.table.get_row_index("c1"))

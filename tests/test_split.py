@@ -6,6 +6,7 @@ import time
 from dataclasses import replace
 
 import pytest
+from conftest import wait_until
 from test_team_tree import peer, plain, ready, send, shop, transcript
 
 from tabmancer.app import PANE_LEAST, PANE_MOST, SPLIT_FROM, TEAM_ROW, SessionPicker
@@ -225,10 +226,7 @@ async def test_the_cards_have_their_measured_height_at_180_by_40(fake_home, tmp_
     async with app.run_test(size=(180, 40 + attempt % 2 * 2)) as pilot:
         await ready(pilot, app, unfold=True)
         app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if app.team_graph is not None and app.team_graph.region.height:
-                break
+        await wait_until(pilot, lambda: app.team_graph is not None and app.team_graph.region.height)
         await pilot.pause(0.3)
         ok, text = team_pane_ok(app)
         assert ok, text
@@ -310,10 +308,7 @@ async def test_moving_between_two_teams_rows_keeps_one_set_of_cards(fake_home, t
     app = SessionPicker(days=14)
     async with app.run_test(size=(200, 50)) as pilot:
         await ready(pilot, app)
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if f"{TEAM_ROW}docs" in app.table.rows:
-                break
+        await wait_until(pilot, lambda: f"{TEAM_ROW}docs" in app.table.rows)
         for name in ("shop", "docs", "shop", "docs", "shop"):
             app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}{name}"))
             await pilot.pause(0.05)  # quicker than a frame or two: the old cards may still be going
@@ -381,10 +376,7 @@ async def test_a_head_wider_than_the_pane_leaves_every_key_on_the_screen(fake_ho
     async with app.run_test(size=(190, 48)) as pilot:
         await ready(pilot, app, unfold=True)
         app.table.move_cursor(row=app.table.get_row_index(f"{TEAM_ROW}shop"))
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.team_graph is not None and app.team_graph.region.height:
-                break
+        await wait_until(pilot, lambda: app.team_graph is not None and app.team_graph.region.height)
         await pilot.pause(0.3)
         ok, text = team_pane_ok(app)
         assert ok, text

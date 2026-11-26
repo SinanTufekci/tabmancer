@@ -5,6 +5,7 @@ import re
 from types import SimpleNamespace
 
 import pytest
+from conftest import wait_until
 from rich.color import ColorSystem
 from rich.console import Console
 from rich.segment import Segment
@@ -281,10 +282,7 @@ async def test_bits_cells_always_show_its_picture_after_textuals_updates(fake_ho
             bit.x, bit.direction = 120.0, direction
             bit.tick()  # moved by hand: drawn there at once, as a tick of its own would
             start = len(set(checked))
-            for _ in range(50):
-                await pilot.pause(0.1)
-                if len(set(checked)) >= start + 4:
-                    break
+            await wait_until(pilot, lambda start=start: len(set(checked)) >= start + 4)
         assert len(set(checked)) >= 6  # it walked cells both ways
         bit.x = 20.0  # then near the left, so what it says goes on its right
         bit.tick()
@@ -323,10 +321,7 @@ async def test_after_a_resize_that_changes_the_cell_bit_is_drawn_to_the_new_one(
         monkeypatch.setattr(sixel, "window_cell", lambda: (9, 19))  # a smaller font, the same rows and columns (xterm)
         await pilot.resize_terminal(150, 38)
         assert '"1;1;110;78' not in bit.picture.data  # the old size is not sent again
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if bit.picture.data:
-                break
+        await wait_until(pilot, lambda: bit.picture.data)
         assert '"1;1;99;72' in bit.picture.data
         below = {(row, col) for row in range(y + 4, y + 7) for col in range(x, x + 14)}
         assert below <= written  # where the old, bigger picture reached, text was written again
@@ -340,10 +335,8 @@ async def test_after_a_resize_that_changes_the_cell_bit_is_drawn_to_the_new_one(
 async def test_bits_picture_takes_the_strips_shade_as_the_terminal_shows_it(fake_home, pixels_on, system, register):
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 40)) as pilot:
-        for _ in range(60):  # the dashboard fades in: until it has
-            await pilot.pause(0.05)
-            if app.mascot.backdrop().lower() == "#0b0b0b":
-                break
+        # the dashboard fades in: until it has
+        await wait_until(pilot, lambda: app.mascot.backdrop().lower() == "#0b0b0b")
         app.console._color_system = system
         bit = app.mascot
         bit.drawn = None

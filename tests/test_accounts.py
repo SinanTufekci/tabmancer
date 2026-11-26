@@ -4,6 +4,7 @@ import base64
 import json
 import os
 
+from conftest import wait_until
 from textual.widgets import Static
 
 from tabmancer import accounts, clis
@@ -139,10 +140,7 @@ async def test_signed_in_with_another_account_the_sessions_a_limit_stopped_can_g
     write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if "lim" in app.sessions and accounts.limited_on():
-                break
+        await wait_until(pilot, lambda: "lim" in app.sessions and accounts.limited_on())
         assert app.signed_as == "a@example.com" and accounts.limited_on() == {"lim": "a@example.com"}
         assert not app.sessions["lim"].signed_in_again  # stopped on the account signed in now: it waits
         claude_signed_in(fake_home, "b@example.com")  # A, or claude auth login, or /login anywhere
@@ -168,19 +166,13 @@ async def test_a_signs_in_with_another_account_through_claude_codes_own_sign_in(
     async with app.run_test(size=(150, 44)) as pilot:
         await pilot.pause(0.3)
         await pilot.press("A")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if isinstance(app.screen, AccountsDialog):
-                break
+        await wait_until(pilot, lambda: isinstance(app.screen, AccountsDialog))
         options = app.screen.query_one(OptionList)
         ids = [options.get_option_at_index(i).id for i in range(options.option_count)]
         assert ids == ["a@example.com", "b@example.com", "+"] and options.get_option_at_index(0).disabled
         assert options.highlighted == 1  # the first one to switch to
         await pilot.press("enter")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if opened:
-                break
+        await wait_until(pilot, lambda: opened)
         assert opened[0].argv == ["claude", "auth", "login", "--email", "b@example.com"]  # its own sign-in
         assert opened[0].env == ()  # no browsers found (as in every test): the page opens as it always did
 
@@ -206,10 +198,7 @@ async def test_a_opens_each_accounts_sign_in_page_where_you_picked_for_it(fake_h
 
     async def open_dialog(pilot):
         await pilot.press("A")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if isinstance(app.screen, AccountsDialog):
-                break
+        await wait_until(pilot, lambda: isinstance(app.screen, AccountsDialog))
         options = app.screen.query_one(OptionList)
         return options, {options.get_option_at_index(i).id: str(options.get_option_at_index(i).prompt)
                          for i in range(options.option_count)}
@@ -229,10 +218,7 @@ async def test_a_opens_each_accounts_sign_in_page_where_you_picked_for_it(fake_h
         assert str(options.get_option_at_index(1).prompt).endswith("opens in Chrome · Work")
         assert accounts.opens_in() == {"b@example.com": "chrome:Profile 3"}  # kept at once, Esc or not
         await pilot.press("enter")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if opened:
-                break
+        await wait_until(pilot, lambda: opened)
         login = opened[0]
         assert login.argv == ["claude", "auth", "login", "--email", "b@example.com"]  # still its own sign-in
         env = dict(login.env)
@@ -243,10 +229,7 @@ async def test_a_opens_each_accounts_sign_in_page_where_you_picked_for_it(fake_h
         await pilot.press("left", "left")
         await pilot.pause(0.1)
         await pilot.press("enter")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if len(opened) == 2:
-                break
+        await wait_until(pilot, lambda: len(opened) == 2)
         assert opened[1].env == ()  # back to the browser as links open: nothing set
         assert accounts.opens_in() == {"b@example.com": browsers.DEFAULT}
 
@@ -338,10 +321,7 @@ async def test_the_same_email_in_another_organisation_frees_the_sessions_a_limit
     write(fake_home, "lim", stopped_at("You've hit your session limit · resets 11:59pm"))
     app = SessionPicker(days=14)
     async with app.run_test(size=(200, 44)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if "lim" in app.sessions and accounts.limited_on():
-                break
+        await wait_until(pilot, lambda: "lim" in app.sessions and accounts.limited_on())
         assert app.signed_as == f"{ME}:{TEAM_A}" and accounts.limited_on() == {"lim": f"{ME}:{TEAM_A}"}
         assert not app.sessions["lim"].signed_in_again
         account = app.topbar.query_one("#account", Static)
@@ -373,18 +353,12 @@ async def test_a_lists_each_organisation_of_an_email_and_signs_in_with_that_emai
     async with app.run_test(size=(150, 44)) as pilot:
         await pilot.pause(0.3)
         await pilot.press("A")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if isinstance(app.screen, AccountsDialog):
-                break
+        await wait_until(pilot, lambda: isinstance(app.screen, AccountsDialog))
         options = app.screen.query_one(OptionList)
         ids = [options.get_option_at_index(i).id for i in range(options.option_count)]
         assert ids == [f"{ME}:{TEAM_A}", f"{ME}:{MINE}", "+"] and options.get_option_at_index(0).disabled
         said = [str(options.get_option_at_index(i).prompt) for i in range(2)]
         assert "Example Labs" in said[0] and "personal" in said[1]
         await pilot.press("enter")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if opened:
-                break
+        await wait_until(pilot, lambda: opened)
         assert opened[0].argv == ["claude", "auth", "login", "--email", "s@example.com"]

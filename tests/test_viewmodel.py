@@ -9,6 +9,7 @@ import sys
 from datetime import datetime, timedelta
 
 import pytest
+from conftest import wait_until
 from test_team_tree import ready, shop
 
 from tabmancer import app as app_module
@@ -129,10 +130,7 @@ def test_the_info_line_says_what_the_list_holds():
 async def test_the_dashboards_info_line_is_the_view_models(fake_home):
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
-        for _ in range(100):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         app.card_filter, app.selected = "continue", {"two"}
         app.update_status()
         assert (app.bar_info, app.sub_title) == VM.info_words(2, 0, 14, card=("3", "TO CONTINUE"), selected=1)

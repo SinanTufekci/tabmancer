@@ -362,10 +362,7 @@ async def test_a_new_team_picked_at_the_start_says_where_and_asks_again(fake_hom
 
     app = SessionPicker(days=14, watch="")
     async with app.run_test(size=(120, 30)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if isinstance(app.screen, TeamsDialog):
-                break
+        await wait_until(pilot, lambda: isinstance(app.screen, TeamsDialog))
         await pilot.press("n")  # a new team: not made here
         await pilot.pause(0.2)
         assert isinstance(app.screen, TeamsDialog) and app.is_running
@@ -553,10 +550,7 @@ async def test_m_is_in_the_footer_at_120_and_it_still_takes_two_rows(fake_home):
 
     app = SessionPicker(days=14)
     async with app.run_test(size=(120, 30)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         await pilot.pause(0.3)
         assert app.query_one(KeysFooter).size.height == 2
         visible_screen_stack.set([])

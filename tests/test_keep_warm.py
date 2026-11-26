@@ -12,6 +12,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import sessions, teamview
 from tabmancer.sessions import mark_live, read_session
@@ -171,18 +172,12 @@ async def test_the_dashboard_rings_when_its_turn_ends_with_a_sleep_running(fake_
     bells = []
     monkeypatch.setattr(app, "bell", lambda: bells.append(1))
     async with app.run_test() as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions.get("one") and app.sessions["one"].live_state == "busy":
-                break
+        await wait_until(pilot, lambda: app.sessions.get("one") and app.sessions["one"].live_state == "busy")
         assert app.sessions["one"].live_state == "busy"
         with path.open("a", encoding="utf-8") as f:  # it ends its turn and keeps its cache warm
             for record in (background("t1", "sleep 3300", 0.1), started("t1", 0.1), reply(minutes_ago=0)):
                 f.write(json.dumps(record) + "\n")
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions["one"].live_state == "idle":
-                break
+        await wait_until(pilot, lambda: app.sessions["one"].live_state == "idle")
         assert app.sessions["one"].live_state == "idle"  # Claude Code still says busy
         assert bells == [1]
 

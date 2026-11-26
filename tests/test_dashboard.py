@@ -119,10 +119,7 @@ async def test_prompt_can_run_in_the_background(fake_home, monkeypatch):
     async with app.run_test() as pilot:
         await loaded(pilot, app)
         await pilot.press("p", *"keep going", "ctrl+b")
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if started:
-                break
+        await wait_until(pilot, lambda: started)
     assert started and started[0].argv[-1] == "keep going"
 
 
@@ -138,10 +135,7 @@ async def test_prompt_on_an_open_session_goes_to_its_tab(fake_home, monkeypatch)
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
         await loaded(pilot, app)
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions["one"].exit is Exit.RUNNING and not app.full_poll_due:
-                break
+        await wait_until(pilot, lambda: app.sessions["one"].exit is Exit.RUNNING and not app.full_poll_due)
         app.table.move_cursor(row=app.table.get_row_index("one"))
         session = app.current()
         assert session.status is Status.RUNNING
@@ -149,15 +143,9 @@ async def test_prompt_on_an_open_session_goes_to_its_tab(fake_home, monkeypatch)
         assert not isinstance(app.screen, PromptDialog)  # nothing to type into from here
         # Going to a tab is one job at a time: a second press at once replaces the first
         # before it has run (seen on the Windows CI runner), so wait as a person would.
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if asked:
-                break
+        await wait_until(pilot, lambda: asked)
         await pilot.press("enter")  # Enter on an open session goes there too
-        for _ in range(40):
-            await pilot.pause(0.05)
-            if len(asked) == 2:
-                break
+        await wait_until(pilot, lambda: len(asked) == 2)
         assert app.is_running  # going to a tab does not close the dashboard
     assert asked == [session.title, session.title]
 

@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import (
     background,
@@ -196,10 +197,7 @@ async def test_hiding_a_row_leaves_the_cursor_where_it_was(tmp_path, monkeypatch
         os.utime(path, (now - i * 600, now - i * 600))
     app = SessionPicker(days=14)
     async with app.run_test(size=(140, 40)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         await pilot.press("down", "down", "down", "down", "down")
         row, first = app.table.cursor_row, app.current().session_id
         await pilot.press("x")
@@ -233,10 +231,7 @@ async def test_a_filter_starts_at_its_newest_match(tmp_path, monkeypatch):
         os.utime(path, (now - i * 600, now - i * 600))
     app = SessionPicker(days=14)
     async with app.run_test(size=(140, 40)) as pilot:
-        for _ in range(60):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         await pilot.press(*["down"] * 6)
         assert app.current().session_id.startswith("s") and "beta" in app.current().title
         await pilot.press("slash", *"alpha")

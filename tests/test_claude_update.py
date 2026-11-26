@@ -7,6 +7,8 @@ import subprocess
 import threading
 from datetime import date
 
+from conftest import wait_until
+
 from tabmancer import app as app_module
 from tabmancer import claudeupdate, launch
 from tabmancer.app import SessionPicker
@@ -98,19 +100,13 @@ async def test_the_dashboard_opens_sessions_once_claude_is_updated(fake_home, mo
     monkeypatch.setattr(app_module, "open_tabs", lambda launches: tabs.extend(launches) or [])
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
-        for _ in range(50):
-            await pilot.pause(0.05)
-            if app.sessions:
-                break
+        await wait_until(pilot, lambda: app.sessions)
         assert app.updating_claude
         await pilot.press("enter")
         await pilot.pause(0.1)
         assert not tabs and len(app.after_claude_update) == 1
         assert any("Claude Code is updating: the session opens" in n.message for n in app._notifications)
         release.set()
-        for _ in range(50):
-            await pilot.pause(0.05)
-            if tabs:
-                break
+        await wait_until(pilot, lambda: tabs)
         assert len(tabs) == 1 and not app.updating_claude
         assert any("2.1.322 → 2.1.323" in n.message for n in app._notifications)
