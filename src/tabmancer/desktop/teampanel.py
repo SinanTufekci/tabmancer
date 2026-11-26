@@ -21,7 +21,7 @@ from .conversation import Conversation
 from .teamgraph import TeamGraph
 from .widgets import text_label
 
-NO_TEAM = "No team yet. T in the terminal dashboard starts one; it shows here once a member has run."
+NO_TEAM = "No team yet. T starts one; it shows here once a member has run."
 HINT = "click: its messages lit · again: everyone's"
 NEEDS = " ●"  # on a team's tab while a member needs you
 

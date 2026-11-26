@@ -51,6 +51,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from functools import partial
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
@@ -82,6 +83,7 @@ from .. import (
     engine,
     handoverwords,
     marks,
+    newforms,
     prompting,
     rename,
     search,
@@ -91,12 +93,13 @@ from .. import (
 )
 from .. import viewmodel as VM
 from ..bgjobs import Job
-from ..config import UI_TRIES
+from ..config import UI_TRIES, Busy
 from ..keys import KEYS
 from ..palette import mix
 from ..sessions import Exit, Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
-from . import commandbar, frame, look, monitor, teamgraph
+from ..teamforms import JoinTeam, TellTeam
+from . import commandbar, frame, look, monitor, newsession, newteam, teamgraph
 from .backgrounds import OPEN, BackgroundDialog, Jobs
 from .board import Board
 from .clisettings import CliSettingsDialog
@@ -121,7 +124,14 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o"}
+        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n"}
+TEAMS_SAID = "The Team panel: T again starts a new team."
+# A goal the new-team dialog found a team at work has already, or adds to: the window types into no member's tab.
+TELL_ELSEWHERE = ("{team} is on this goal already: nothing was made. The message for {to} is on the clipboard, to "
+                  "paste into its tab (Ctrl+V, Enter).")
+JOIN_ELSEWHERE = ("{team} is at work on this goal: nothing was made. Adding members to a team at work is the terminal "
+                  "dashboard's for now (T there, then Ctrl+R); the goal is on the clipboard.")
+NEW_TEAM_SECONDS = 60  # a team just made: its Team panel tab picked once a reading shows it, for this long
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
 CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs, as in the terminal
@@ -218,6 +228,8 @@ class MainWindow(QMainWindow):
         self.front = WindowFront(self, update=not demo)  # what each reading turns up, and h: the terminal's one copy decides
         # Never acts (state.acts stays False). What opened from here is one copy: Enter's and the engine's (h's fresh one).
         self.engine = engine.Engine(self.front, datetime.now, engine.EngineState(openings=self.opener.openings))
+        self.asker = newsession.Asker(self)  # n and T: the router's pick, a rewrite, a line-up, agy's quota
+        self.new_team_shown: tuple[str, float] | None = None  # a team just made, its tab picked until then
         self.view = "board"  # what the Sessions panel shows (VIEWS)
         self.before_live = "board"  # the view l goes back to
         self.project = VM.ALL_PROJECTS  # what the board is narrowed to: a project (the rail),
@@ -444,14 +456,15 @@ class MainWindow(QMainWindow):
         bar = self.menus
         bar.setFont(look.font(9.5))
         self.actions_by_key: dict[str, QAction] = {}
-        doing = {"?": self.show_keys, "q": self.close, "T": self.show_teams, "/": self.find_words,
+        doing = {"?": self.show_keys, "q": self.close, "T": self.teams_key, "/": self.find_words,
                  "1": self.only_open, "2": self.only_waiting, "3": self.only_continue, "l": self.toggle_live,
                  "Space": self.toggle, "a": self.toggle_all, "e": self.expand, "E": self.fold_teams, "x": self.hide,
                  "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
                  "Enter": self.open_key, "m": self.cycle_mode, "j": self.next_waiting, "M": self.monitor_key,
                  "h": self.handover_key, "r": self.rename_key, "p": self.prompt_key,
                  "B": self.background_key, ",": self.settings_key,
-                 "A": self.accounts_key, "w": self.save_workspace_key, "o": self.open_workspace_key}
+                 "A": self.accounts_key, "w": self.save_workspace_key, "o": self.open_workspace_key,
+                 "n": self.new_sessions_key}
         self.menus_by_group = {}
         for group, keys in KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -528,6 +541,7 @@ class MainWindow(QMainWindow):
         self.renamer.settle(seconds)
         self.jobs.settle(seconds)
         self.signin.settle(seconds)
+        self.asker.settle(seconds)
         self.front.settle(seconds)
         for shown in self.monitors.values():
             shown.settle(seconds)  # a read of its own (Python's: there after the window is deleted too)
@@ -558,6 +572,7 @@ class MainWindow(QMainWindow):
             self.say_note(came_up.words, came_up.seconds or 4, came_up.severity)
         self.refilter()
         self.team_panel.set(snap)
+        self.pick_new_team()
         if len(self.words.strip()) >= search.SHORTEST:
             self.index_words()  # what the sessions said since
 
@@ -1151,6 +1166,120 @@ class MainWindow(QMainWindow):
         dock.show()
         dock.raise_()
         self.team_panel.tabs.setFocus()
+
+    def teams_key(self) -> None:
+        """T: the Team panel to the front (show_teams); with it in front already, a new team (new_team), as the
+        terminal dashboard's T lists the teams and makes a new one."""
+        dock = self.docks["Team"]
+        if dock.isVisible() and not dock.visibleRegion().isEmpty():
+            self.new_team()
+            return
+        self.show_teams()
+        self.say(TEAMS_SAID)
+
+    # --- n and T: fresh sessions, a new team -------------------------------------------------------------
+
+    def new_sessions_key(self) -> None:
+        """n: fresh sessions in several projects at once (NewSessionDialog), as the terminal dashboard's n
+        starts them; the project the rail narrows to comes ticked."""
+        snap = self.snap
+        found = newforms.projects(list(snap.sessions.values()) if snap is not None else [])
+        ticked = {self.project} if self.project != VM.ALL_PROJECTS else set()
+        asked = newsession.NewSessionDialog(self, found, ticked, self.asker, self.accent)
+        asked.requested.connect(self.start_new)
+        asked.open()
+
+    def start_new(self, request: newforms.Request) -> None:
+        """n's Enter: a fresh session in each folder for each line, or the lines linked as a team of peers,
+        saved under the teams' lock (UI_TRIES: ~75 ms at most here), started and shown in the Team panel.
+        Nothing starts, and that is said, while another tabmancer changes the teams or teams.json can't be read."""
+        if not request.folders:
+            return
+        try:
+            built = newforms.build(request, UI_TRIES)
+        except Busy as error:
+            self.tell_note(actions.Note(teams.not_saved_words("Nothing was started", error), "warning", 8))
+            return
+        if built.team is None:
+            self.engine.open(built.launches)
+            return
+        self.front.open_team(built.team, built.launches)
+        self.show_new_team(built.team.name)
+
+    def new_team(self) -> None:
+        """A new team (NewTeamDialog), as the terminal dashboard's T makes one: in team_folder; the folder box
+        completes the folders the sessions are in, newest first; a goal a team at work has already, or adds
+        to, is pointed at that team (its open members as the last reading has them)."""
+        snap = self.snap
+        sessions = list(snap.sessions.values()) if snap is not None else []
+        newest = sorted(sessions, key=lambda s: s.last_active, reverse=True)
+        folders = list(dict.fromkeys(s.cwd for s in newest if s.cwd))
+        working: list[tuple[teams.Team, set[str]]] = []
+        for state in snap.team_states.values() if snap is not None else []:
+            open_now = {name for name, s in self.members_now(state).items() if s is not None and s.exit is Exit.RUNNING}
+            if open_now:
+                working.append((state.team, open_now))
+        asked = newteam.NewTeamDialog(self, self.team_folder(), set(teams.load()), folders, working, self.asker,
+                                      self.accent)
+        asked.made.connect(self.team_made)
+        asked.open()
+
+    def team_folder(self) -> str:
+        """Where T's new team starts: the project the rail narrows to, else the picked session's folder (a
+        picked team's: its own), else your home."""
+        snap = self.snap
+        if snap is None:
+            return str(Path.home())
+        if self.project != VM.ALL_PROJECTS:
+            found = next((s.cwd for s in snap.sessions.values() if s.cwd and folder_key(s.cwd) == self.project), "")
+        elif (team := self.picked_team()) is not None and team in snap.team_states:
+            found = snap.team_states[team].team.cwd
+        else:
+            picked = snap.sessions.get(self.picked_now())
+            found = picked.cwd if picked is not None else ""
+        return found or str(Path.home())
+
+    def team_made(self, made: object) -> None:
+        """The new team's Ctrl+S: saved under the teams' lock (UI_TRIES), started, its members first and the
+        lead last, and shown in the Team panel; not made, and that is said, while another tabmancer changes the
+        teams or teams.json can't be read. A goal a team at work has already, or adds to, is the terminal
+        dashboard's for now (the window types into no member's tab): said, its words on the clipboard."""
+        if isinstance(made, TellTeam):
+            QApplication.clipboard().setText(made.message)
+            self.tell_note(actions.Note(TELL_ELSEWHERE.format(team=made.team, to=made.to), "warning", 14))
+            return
+        if isinstance(made, JoinTeam):
+            QApplication.clipboard().setText(made.goal)
+            self.tell_note(actions.Note(JOIN_ELSEWHERE.format(team=made.team), "warning", 14))
+            return
+        if not isinstance(made, teams.Team):
+            return
+        try:
+            teams.put(made, UI_TRIES)
+        except Busy as error:
+            self.tell_note(actions.Note(teams.not_saved_words(f"{made.name} was not made", error), "warning", 8))
+            return
+        self.front.open_team(made, teams.start(made, {}))
+        self.show_new_team(made.name)
+
+    def show_new_team(self, name: str) -> None:
+        """A team just made: the Team panel to the front, the team's tab picked as soon as a reading shows it
+        (once a member has run), for NEW_TEAM_SECONDS."""
+        self.new_team_shown = (name, time.monotonic() + NEW_TEAM_SECONDS)
+        self.show_teams()
+        self.pick_new_team()
+
+    def pick_new_team(self) -> None:
+        """The team just made: its tab picked once the Team panel has it (each reading asks), then forgotten;
+        forgotten too once NEW_TEAM_SECONDS have gone by."""
+        if self.new_team_shown is None:
+            return
+        name, deadline = self.new_team_shown
+        if time.monotonic() > deadline:
+            self.new_team_shown = None
+        elif name in self.team_panel.names:
+            self.new_team_shown = None
+            self.team_tab(name)
 
     # --- the keys that reach past the window -------------------------------------------------------
 
