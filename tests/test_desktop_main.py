@@ -60,6 +60,7 @@ from tabmancer.desktop import (
     teampanel,
 )
 from tabmancer.desktop.table import COLUMN, PARTS
+from tabmancer.desktop.teamkeysdialogs import AddMembersDialog
 from tabmancer.keys import KEYS
 from tabmancer.launch import Mode
 from tabmancer.search import matches
@@ -155,14 +156,15 @@ def test_it_opens_on_the_demo(qapp, window):
 def test_every_dashboard_key_is_in_the_menus(qapp, window):
     shown = window()
     in_menus = {action.data() for menu in shown.menus.findChildren(QMenu) for action in menu.actions()}
-    for _group, keys in KEYS:
+    for _group, keys in main.WINDOW_KEYS:  # keys.py's, and the terminal team view's g, d and H
         for key, _action, words in keys:
             made = shown.actions_by_key[key]
             assert key in in_menus
             assert made.isEnabled() is (key in main.HERE)
             assert made.toolTip() == (words if key in main.HERE else f"{words}. {main.ELSEWHERE}")
             assert made.shortcuts()  # its key is named beside it, greyed or not
-    assert {key for _group, keys in KEYS for key, _a, _w in keys} == set(shown.actions_by_key)
+    assert {key for _group, keys in main.WINDOW_KEYS for key, _a, _w in keys} == set(shown.actions_by_key)
+    assert {key for _group, keys in KEYS for key, _a, _w in keys} | {"g", "d", "H"} == set(shown.actions_by_key)
     assert set(shown.keybar.keys) - {commandbar.KEY} <= set(shown.actions_by_key)  # the dashboard's keys, and the palette
     assert shown.actions_by_key["?"].shortcuts()[0].toString() == "?"
 
@@ -389,7 +391,7 @@ def test_ctrl_k_lists_every_key_and_runs_the_menus_own_action(qapp, window):
     QTest.keyClick(shown, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
     bar = shown.command_bar
     assert bar.isVisible() and bar.line.text() == ""
-    assert [(c.key, c.said) for c in bar.shown] == every_key(KEYS)  # keys.py's, in its order, as its menus name them
+    assert [(c.key, c.said) for c in bar.shown] == every_key(main.WINDOW_KEYS)  # in the menus' order and words
     assert bar.rows.count() == len(bar.shown) and not bar.grab().isNull()
     assert {c.key for c in bar.shown if c.enabled} == main.HERE
     ran = []
@@ -992,8 +994,11 @@ def test_the_table_ticks_with_space_and_its_box_and_e_and_shift_e_unfold_teams(q
     assert table.unfolded == {team}
     press(shown, "e")
     assert table.unfolded == set()
-    press(shown, "a")
-    assert shown.bit_line.text().startswith("Adding members is in the terminal dashboard for now")
+    press(shown, "a")  # on a team's row: its new members asked for (teamkeysdialogs.ask_add), none here
+    (asked,) = [d for d in shown.findChildren(AddMembersDialog) if d.isVisible()]
+    asked.reject()
+    shown.activateWindow()  # its keys again
+    assert QTest.qWaitForWindowActive(shown, 3000)
     press(shown, "x")  # an open team: x again closes its members' tabs (hidden: none)
     assert shown.bit_line.text().startswith("Press x again to close the") and saved_marks()["hidden"] == []
     shown.forget_closing()
@@ -1320,7 +1325,7 @@ def test_it_never_acts(qapp, window, world, monkeypatch):
     shown = window()
     for _ in range(3):
         read(qapp, shown)
-    for _group, keys in KEYS:
+    for _group, keys in main.WINDOW_KEYS:
         for key, _action, _words in keys:
             if key in ("q", "?", "Esc"):
                 continue

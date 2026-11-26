@@ -197,10 +197,15 @@ class WindowFront(QObject):
         window = self.window()
         HandoverDialog(window, session, then, window.accent).open()
 
-    def hand_over(self, session: Session, how: str) -> None:
+    def hand_over(self, session: Session, how: str | None = None) -> None:
         """The handover written on a thread of its own (actions.write_handover: a minute or more, the old
         session closed on the way); back on the window's thread by a Signal, Engine.handover_ready opens
-        the fresh one."""
+        the fresh one. Not told how (H on a member, teamkeys.Surface.hand_over): asked first, as h asks
+        (Engine.handover: its checks, the dialog, a busy one queued till it finishes), which then comes
+        back here with the way picked."""
+        if how is None:
+            self.window().engine.handover(session)
+            return
         self.start(self.write, session, how, handing=session.project)
 
     def write(self, session: Session, how: str) -> None:
@@ -300,6 +305,21 @@ class WindowFront(QObject):
     def kept_handovers(self) -> dict:
         """The teams' handovers written and not taken yet (EngineState.kept_handovers)."""
         return self.window().engine.state.kept_handovers
+
+    def adopt(self, team: teams.Team) -> None:
+        """The team as saved now: the sessions and the teams read again (the store reads both)."""
+        self.window().poll()
+
+    def go_to_tab(self, session: Session) -> None:
+        """Its tab to the front, on a thread of its own (Opener.go_to: what actions.go_to_tab says)."""
+        self.window().opener.go_to(session)
+
+    def put_on_clipboard(self, text: str) -> None:
+        QApplication.clipboard().setText(text)
+
+    def close_tabs(self, names: list[str]) -> None:
+        """These members' tabs closed, as on /exit, on a thread of its own (Opener.close_team)."""
+        self.window().opener.close_team(names)
 
     def say(self, note: actions.Note) -> None:
         self.say_note(note)

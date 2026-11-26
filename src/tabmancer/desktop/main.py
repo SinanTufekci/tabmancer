@@ -28,7 +28,10 @@ the sessions, Esc clears what the list is narrowed to. Pins and hides go to mark
 dashboard changes it (marks.change): what another one changed meanwhile stays, and each shows them at
 its next read; Bit says what a key did. The panels fill in slice by slice; till then a key not done here is greyed in its
 menu and in the key bar, and done in the terminal dashboard (tabmancer). The Team panel (teampanel), a tab beside the list, shows each team's
-picture over its conversation; T brings it to the front. Ctrl+K finds any command by a few of its
+picture over its conversation; T brings it to the front. On a team (its card, or its tab with the panel in
+front) s starts it, a adds members and g changes its goal; on the member clicked there (or its row in the
+Table) d twice takes it off and H hands it alone over: the terminal team view's keys (teamkeys, one copy), g, d
+and H in a Team menu of their own. Ctrl+K finds any command by a few of its
 words (commandbar): every key as the menus name it, and a team, a project or a session by name.
 
 The board narrows as the terminal dashboard's list does (viewmodel.visible): to a project (a click
@@ -94,12 +97,12 @@ from .. import (
 from .. import viewmodel as VM
 from ..bgjobs import Job
 from ..config import UI_TRIES, Busy
-from ..keys import KEYS
+from ..keys import KEYS, MONITOR_KEYS
 from ..palette import mix
 from ..sessions import Exit, Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
 from ..teamforms import JoinTeam, TellTeam
-from . import commandbar, frame, look, monitor, newsession, newteam, teamgraph
+from . import commandbar, frame, look, monitor, newsession, newteam, teamgraph, teamkeysdialogs
 from .backgrounds import OPEN, BackgroundDialog, Jobs
 from .board import Board
 from .clisettings import CliSettingsDialog
@@ -124,7 +127,16 @@ LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s"}
+        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H"}
+TEAM_GROUP = "The team"
+# The terminal team view's own keys (keys.MONITOR_KEYS' "The team": its a, s, h and x are the dashboard's
+# too, on a team's card): g the team's goal; on a member, picked in the Team panel or its row in the Table, d
+# takes it off and H hands it alone over. A menu of their own after a session's, in their words.
+TEAM_KEYS = [entry for entry in dict(MONITOR_KEYS)[TEAM_GROUP] if entry[0] in {"g", "d", "H"}]
+AFTER_SESSION = [group for group, _ in KEYS].index("Work with a session") + 1
+WINDOW_KEYS = [*KEYS[:AFTER_SESSION], (TEAM_GROUP, TEAM_KEYS), *KEYS[AFTER_SESSION:]]
+PICK_MEMBER = "d and H act on a team's member: click one in the Team panel (T), or pick its row in the Table."
+GOAL_PICK = "g changes a team's goal: pick its card, or bring its tab in the Team panel (T)."
 TEAMS_SAID = "The Team panel: T again starts a new team."
 START_ELSEWHERE = "s starts a team: pick its card. A session's summary is the terminal dashboard's for now (tabmancer)."
 # A goal the new-team dialog found a team at work has already, or adds to: the window types into no member's tab.
@@ -139,6 +151,7 @@ CLOSING_MS = 6000  # x again this soon on the same team closes its members' tabs
 MENU_TITLE = 48  # a right-click menu's heading: the title clipped to this
 SEVERITY = {"warning": look.AMBER, "error": look.RED}  # how loud what Bit says is (actions.Note's)
 MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a session": "&Session",
+         TEAM_GROUP: "Te&am",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
 KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), ("c", "continue"), ("M", "monitor"),
            ("V", "split"), ("/", "filter"), ("A", "accounts"), (commandbar.KEY, "commands"), ("?", "all keys"),
@@ -466,9 +479,10 @@ class MainWindow(QMainWindow):
                  "h": self.handover_key, "r": self.rename_key, "p": self.prompt_key,
                  "B": self.background_key, ",": self.settings_key,
                  "A": self.accounts_key, "w": self.save_workspace_key, "o": self.open_workspace_key,
-                 "n": self.new_sessions_key, "s": self.start_key}
+                 "n": self.new_sessions_key, "s": self.start_key, "g": self.goal_key, "d": self.remove_key,
+                 "H": self.member_handover_key}
         self.menus_by_group = {}
-        for group, keys in KEYS:
+        for group, keys in WINDOW_KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
             self.menus_by_group[group] = menu
             menu.setToolTipsVisible(True)
@@ -982,9 +996,13 @@ class MainWindow(QMainWindow):
             self.flip(ids)
 
     def toggle_all(self) -> None:
-        """a: every session shown ticked, or unticked when they all were; on a team, its new members."""
-        if self.picked_team() is not None:
-            self.say("Adding members is in the terminal dashboard for now: a on the team's row there.")
+        """a: every session shown ticked, or unticked when they all were; on a team (its card, or its tab in the
+        Team panel in front), new members asked for and added (teamkeysdialogs.ask_add: TeamKeys.add, at work
+        they open and introduce themselves to the lead, closed they join it)."""
+        state = self.team_at_hand()
+        if state is not None:
+            teamkeysdialogs.ask_add(self, self.accent, self.front.team_keys, state.team,
+                                    self.team_members(state.team.name))
             return
         ids = {s.session_id for s in self.shown() if VM.tickable(s)}
         if ids:
@@ -1070,13 +1088,95 @@ class MainWindow(QMainWindow):
         (WindowFront.start_team: teamkeys.TeamKeys.start, one copy; the members claimed under a lock, waited for
         UI_TRIES at most here); its cache gone, s again starts it. A session's summary is the terminal
         dashboard's for now: said."""
-        snap = self.snap
-        team = self.picked_team()
-        state = snap.team_states.get(team) if snap is not None and team is not None else None
+        state = self.team_at_hand()
         if state is None:
             self.say(START_ELSEWHERE)
             return
         self.front.start_team(state.team, self.members_now(state))
+
+    def team_panel_in_front(self) -> bool:
+        dock = self.docks["Team"]
+        return dock.isVisible() and not dock.visibleRegion().isEmpty()
+
+    def team_at_hand(self) -> teams.TeamState | None:
+        """The team a, s and g act on: the one picked (its card, or its row in the Table); none picked, the
+        Team panel's tab with the panel in front (the terminal's team view's keys)."""
+        snap = self.snap
+        if snap is None:
+            return None
+        name = self.picked_team()
+        if name is None and self.team_panel_in_front():
+            name = self.team_panel.team
+        return snap.team_states.get(name) if name is not None else None
+
+    def team_members(self, name: str) -> Callable[[], dict[str, Session | None]]:
+        """A team's members as the newest reading has them when a dialog's answer comes, not when it opened:
+        it stays open while the window reads the sessions again."""
+        return partial(self.members_of, name)
+
+    def members_of(self, name: str) -> dict[str, Session | None]:
+        snap = self.snap
+        state = snap.team_states.get(name) if snap is not None else None
+        return self.members_now(state) if state is not None else {}
+
+    def member_at_hand(self) -> tuple[teams.TeamState, teams.Member, Session | None] | None:
+        """The member d and H act on: the one picked in the Team panel with the panel in front, else the member
+        whose row is picked in the Table; with its session as the newest reading has it (None: never run)."""
+        snap, panel = self.snap, self.team_panel
+        if snap is None:
+            return None
+        if self.team_panel_in_front() and panel.team is not None and panel.picked is not None:
+            found: tuple[str, str] | None = (panel.team, panel.picked)
+        else:
+            key = self.picked_now()
+            found = next(((team, name) for team, state in snap.team_states.items()
+                          for name, session in state.sessions.items() if session is not None
+                          and session.session_id == key), None)
+        state = snap.team_states.get(found[0]) if found is not None else None
+        member = next((m for m in state.team.members if m.name == found[1]), None) if state and found else None
+        if state is None or member is None:
+            return None
+        return state, member, self.members_now(state).get(member.name)
+
+    def goal_key(self) -> None:
+        """g: the team's goal in a box of several lines (teamkeysdialogs.ask_goal); saved, its lead told
+        (TeamKeys.change_goal: over the team bus, or on the clipboard with you in its tab), as the terminal's
+        team view's g."""
+        state = self.team_at_hand()
+        if state is None:
+            self.say(GOAL_PICK)
+            return
+        teamkeysdialogs.ask_goal(self, self.accent, self.front.team_keys, state.team,
+                                 self.team_members(state.team.name))
+
+    def remove_key(self) -> None:
+        """d, twice: the member at hand taken off its team, its sessions kept (TeamKeys.remove: the first press
+        says what the second does, never the lead; under the teams' lock, waited for UI_TRIES at most); then
+        everyone's again in the Team panel, the teams read again and the lead told (TeamKeys.changed)."""
+        found = self.member_at_hand()
+        if found is None:
+            self.say(PICK_MEMBER)
+            return
+        state, member, session = found
+        keys = self.front.team_keys()
+        changed = keys.remove(state.team, member, session)
+        if changed is None:
+            return
+        if self.team_panel.picked == member.name:
+            self.team_panel.picked = None
+            self.team_panel.show_team()
+        keys.changed(changed, self.members_now(state))
+
+    def member_handover_key(self) -> None:
+        """H: the member at hand alone handed over to a fresh session with its name and role, asked how first
+        as h asks (TeamKeys.hand_over, then WindowFront.hand_over: Engine.handover); one never run has
+        nothing to hand over: said."""
+        found = self.member_at_hand()
+        if found is None:
+            self.say(PICK_MEMBER)
+            return
+        _state, member, session = found
+        self.front.team_keys().hand_over(member, session)
 
     def forget_closing(self) -> None:
         self.closing_timer.stop()
@@ -1125,12 +1225,12 @@ class MainWindow(QMainWindow):
             self.table.tick(now)  # its stars turn, its light sweeps, its red breathes
 
     def show_keys(self) -> None:
-        KeysDialog(self, "Keys · tabmancer", KEYS, HERE, ELSEWHERE).show()
+        KeysDialog(self, "Keys · tabmancer", WINDOW_KEYS, HERE, ELSEWHERE).show()
 
     def open_commands(self) -> None:
         """Ctrl+K: the palette, over every key of the dashboard (the ones done in the terminal dashboard
         greyed, saying so), the teams, the projects and the sessions in sight."""
-        entries = commands.commands(KEYS, HERE, ELSEWHERE)
+        entries = commands.commands(WINDOW_KEYS, HERE, ELSEWHERE)
         sessions = {}
         if self.snap is not None:
             entries += commands.team_jumps(self.snap.view.teams)
@@ -1186,8 +1286,7 @@ class MainWindow(QMainWindow):
     def teams_key(self) -> None:
         """T: the Team panel to the front (show_teams); with it in front already, a new team (new_team), as the
         terminal dashboard's T lists the teams and makes a new one."""
-        dock = self.docks["Team"]
-        if dock.isVisible() and not dock.visibleRegion().isEmpty():
+        if self.team_panel_in_front():
             self.new_team()
             return
         self.show_teams()

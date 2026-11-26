@@ -1,9 +1,10 @@
 """The main window's Team panel: a tab a team, its Orbit (teamgraph) over its conversation's lanes
 (conversation), from what the dashboard read (store.DashSnapshot: view.teams and team_states).
 
-It watches, as the window does: a click on a member lights its messages (again: everyone's); its
-tab, its actions and the rest stay the terminal dashboard's and the monitor's (M). A team with a
-member who needs you says so on its tab."""
+A click on a member lights its messages (again: everyone's) and picks it for the window's d and H
+(main.py: taken off the team, handed over alone); with the panel in front, a, s and g act on its team. Its
+tab and the rest stay the terminal dashboard's and the monitor's (M). A team with a member who needs you says
+so on its tab."""
 
 from __future__ import annotations
 
