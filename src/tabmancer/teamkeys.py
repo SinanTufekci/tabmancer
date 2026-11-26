@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from . import actions, handover, teambus, teams
 from .actions import Changed, Note
-from .config import UI_TRIES
+from .config import UI_TRIES, Busy
 from .launch import Launch
 from .sessions import Exit, Session, Status
 
@@ -215,7 +215,7 @@ class TeamKeys:
     def add(self, team: teams.Team, text: str | None, at_work: bool) -> None:
         """a's answer: new members for the team. At work, each opens and introduces itself to the lead;
         closed, they join it and start with it."""
-        added = actions.add_members(team, text or "")
+        added = actions.add_members(team, text or "", UI_TRIES)  # on a UI thread: no long wait for the lock
         if added.warning:
             self.say(added.warning, 8, "warning")
         if not added.new:
@@ -237,7 +237,21 @@ class TeamKeys:
         if not self.again("remove", member.name, REMOVE_AGAIN_SECONDS):
             self.surface.say(actions.removal_ask(member, session))
             return None
-        return actions.remove_member(team, member.name)
+        try:
+            return actions.remove_member(team, member.name, UI_TRIES)
+        except Busy as error:
+            self.say(teams.not_saved_words(f"{member.name} is still on the team", error), 8, "warning")
+            return None
+
+    def change_goal(self, team: teams.Team, goal: str, members: dict[str, Session | None]) -> None:
+        """g's answer: the team's goal changed (actions.change_goal) and its lead told; said when the
+        teams could not be changed now."""
+        try:
+            changed = actions.change_goal(team, goal, UI_TRIES)
+        except Busy as error:
+            self.say(teams.not_saved_words("The goal is not changed", error), 8, "warning")
+            return
+        self.changed(changed, members)
 
     def changed(self, changed: Changed | None, members: dict[str, Session | None]) -> None:
         """A member taken off, the goal changed: the team as saved now, and its lead told."""
@@ -313,12 +327,19 @@ class TeamKeys:
             self.say(f"There is no team {join.team} any more.", 6, "warning")
             return
         asked = [m.name for m in teams.parse_members(join.members)]
-        new, note = teams.add_members(team, join.members)
+        try:
+            new, note = teams.add_members(team, join.members, UI_TRIES)
+        except Busy as error:
+            self.say(teams.not_saved_words(f"Nobody joined {team.name}", error), 8, "warning")
+            return
         if note:
             self.say(note[0].upper() + note[1:] + ".", 8, "warning")
         message = join.message
         if new:  # the goal grows only for members who joined; the lead hears who did not, after all
-            teams.add_to_goal(team.name, join.goal)
+            try:
+                teams.add_to_goal(team.name, join.goal, UI_TRIES)
+            except Busy as error:  # they joined: they open and the lead hears of them all the same
+                self.say(teams.not_saved_words(f"{team.name}'s goal did not grow", error), 8, "warning")
             team = teams.load().get(team.name, team)
             surface.open_team(team, teams.joining(team, new, adds=join.goal))
             if left := [name for name in asked if name not in {m.name for m in new}]:

@@ -41,7 +41,7 @@ from . import (
     wrapped,
 )
 from .actions import Note
-from .config import UI_TRIES
+from .config import UI_TRIES, Busy
 from .launch import Launch
 from .openings import Openings
 from .sessions import Exit, Session
@@ -611,14 +611,17 @@ class Engine:
             return
         lines, cap = answer
         try:
-            fresh = handover.next_team(teams.load().get(team.name, team), lines, cap)
+            with teams.changing(UI_TRIES) as saved:  # made from the team as saved now, and saved, under the lock
+                fresh = handover.next_team(saved.get(team.name, team), lines, cap)
+                saved[fresh.name] = fresh
         except handover.HandoverError as error:
             self.state.kept_handovers.pop(team.name, None)
             front.say_note(Note(f"{team.name} is not handed over. {error}", "warning", 10))
             return
-        saved = teams.load()
-        saved[fresh.name] = fresh
-        teams.save(saved)
+        except Busy as error:  # the handover is kept: h shows it again
+            front.say_note(Note(teams.not_saved_words(f"{team.name} is not handed over", error)
+                                + " h shows the handover again.", "warning", 10))
+            return
         self.state.kept_handovers.pop(team.name, None)
         front.adopt_team(fresh)
         front.open_team(fresh, handover.team_launches(fresh, lead, written))

@@ -43,6 +43,7 @@ from .actions import (  # noqa: F401  (re-exported)
     open_names,
     team_handover_problem,
 )
+from .config import UI_TRIES, Busy
 from .dialogs import Choice, FolderSuggester, cards, frame, light_rows, pill, pills, tilde, title
 from .safework import work
 from .sessions import Exit, Session, folder_key
@@ -810,7 +811,7 @@ class TeamScreen(Screen):
         """g: the team's goal, changed. Members started from now on get the new one; the lead is told."""
 
         def chosen(goal: str | None) -> None:
-            self.team_keys.changed(actions.change_goal(self.team, goal or ""), self.sessions)
+            self.team_keys.change_goal(self.team, goal or "", self.sessions)
 
         # In a box of several lines, as the new-team form writes it: one line flattened a plan pasted
         # there for good, the moment it was changed at all.
@@ -933,9 +934,11 @@ class TeamsDialog(ModalScreen[tuple[str, str] | None]):
             self.armed = name
             self.notify(f"Press d again to delete the team {name}. Its sessions stay.", timeout=4)
             return
-        saved = teams.load()
-        saved.pop(name, None)
-        teams.save(saved)
+        try:
+            teams.drop(name, UI_TRIES)
+        except Busy as error:
+            self.notify(teams.not_saved_words(f"{name} is not deleted", error), severity="warning", timeout=8)
+            return
         self.saved.pop(name, None)
         options.clear_options()
         options.add_options(self.options())

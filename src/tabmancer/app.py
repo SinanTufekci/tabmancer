@@ -78,7 +78,13 @@ from .actions import (
 )
 from .actions import clip as _clip
 from .clisettings import CliSettings
-from .config import NOT_SAVED, merge_json, read_json  # NOT_SAVED: merge_json refused, said as is
+from .config import (  # NOT_SAVED: merge_json refused, said as is
+    NOT_SAVED,
+    UI_TRIES,
+    Busy,
+    merge_json,
+    read_json,
+)
 from .dialogs import frame, title
 from .engine import (  # the timers' schedule (engine.SCHEDULE)
     ACCOUNTS_SECONDS,
@@ -1917,9 +1923,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
                 return
             if team is None:
                 return
-            saved = teams.load()
-            saved[team.name] = team
-            teams.save(saved)
+            try:
+                teams.put(team, UI_TRIES)
+            except Busy as error:
+                self.notify(teams.not_saved_words(f"{team.name} was not made", error), severity="warning", timeout=8)
+                return
             self.open_team(team, teams.start(team, {}))  # the members first, the orchestrator last
             self.push_screen(TeamScreen(team, self.accent()))
 
@@ -2280,7 +2288,11 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         def start(request: newsessions.Request | None) -> None:
             if not request or not request.folders:
                 return
-            built = newforms.build(request)
+            try:
+                built = newforms.build(request, UI_TRIES)
+            except Busy as error:
+                self.notify(teams.not_saved_words("Nothing was started", error), severity="warning", timeout=8)
+                return
             if built.team is not None:  # the lines as a team of peers: saved, opened, and shown
                 self.open_team(built.team, built.launches)
                 self.push_screen(TeamScreen(built.team, self.accent()))

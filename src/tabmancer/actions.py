@@ -560,9 +560,13 @@ class Added:
         return f"{', '.join(m.name for m in self.new)} joined {self.team.name}: they start with the team (Enter on its row)."
 
 
-def add_members(team: teams.Team, text: str) -> Added:
-    """New members for a team, from a line as name: area (teams.add_members)."""
-    new, note = teams.add_members(team, text)
+def add_members(team: teams.Team, text: str, tries: int | None = None) -> Added:
+    """New members for a team, from a line as name: area (teams.add_members; tries: how long a held lock is
+    waited for, a dashboard's UI_TRIES). None join when it could not be got, and the warning says so."""
+    try:
+        new, note = teams.add_members(team, text, tries)
+    except Busy as error:
+        return Added(team, [], teams.not_saved_words("Nobody joined", error))
     return Added(teams.load().get(team.name, team) if new else team, new,
                  note[0].upper() + note[1:] + "." if note else "")
 
@@ -591,20 +595,20 @@ def removal_ask(member: teams.Member, session: Session | None) -> Note:
     return Note(f"Press d again to take {member.name} off the team. Its sessions stay.{still}", seconds=6)
 
 
-def remove_member(team: teams.Team, name: str) -> Changed | None:
+def remove_member(team: teams.Team, name: str, tries: int | None = None) -> Changed | None:
     """A member taken off the team. Its session stays, an ordinary one from then on, and the lead (or,
-    among peers, the others) is to be told: it started with the old line-up."""
-    left = teams.remove_member(team.name, name)
+    among peers, the others) is to be told: it started with the old line-up. config.Busy: not taken off."""
+    left = teams.remove_member(team.name, name, tries)
     return None if left is None else Changed(left, teams.left_note(left, name), f"{name} is off the team.")
 
 
-def change_goal(team: teams.Team, goal: str) -> Changed | None:
+def change_goal(team: teams.Team, goal: str, tries: int | None = None) -> Changed | None:
     """The team's goal, changed. Members started from now on get the new one; the lead is to be told.
-    None when it is empty or the same."""
+    None when it is empty or the same. config.Busy: not changed."""
     goal = teams.tidy(goal)
     if not goal or goal == teams.tidy(team.goal):
         return None
-    changed = teams.set_goal(team.name, goal)
+    changed = teams.set_goal(team.name, goal, tries)
     return None if changed is None else Changed(changed, teams.goal_note(changed), "The goal is changed.")
 
 

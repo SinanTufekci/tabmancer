@@ -270,15 +270,15 @@ class Built:
     team: teams.Team | None = None
 
 
-def build(asked: Request) -> Built:
+def build(asked: Request, tries: int | None = None) -> Built:
     """A request's sessions: fresh ones in each folder for each line, or, linked, the lines as a team
-    of peers in the one folder, saved (teams.save) and started."""
+    of peers in the one folder, named and saved under the teams' lock (teams.changing: config.Busy, with
+    nothing saved or started; tries: a dashboard's UI_TRIES) and started."""
     if not asked.linked:
         return Built(launches(asked.folders, asked.cli, asked.message, asked.pick))
-    saved = teams.load()
-    team = linked_team(asked.folders[0], asked.message, asked.pick, set(saved))
-    saved[team.name] = team
-    teams.save(saved)
+    with teams.changing(tries) as saved:  # a name no other team has, as they are now
+        team = linked_team(asked.folders[0], asked.message, asked.pick, set(saved))
+        saved[team.name] = team
     return Built(teams.start(team, {}), team)
 
 

@@ -32,7 +32,7 @@ def lead() -> Session:
 def test_a_team_made_peers_since_its_handover_is_refused_and_nothing_is_saved_or_opened(monkeypatch):
     written = teams.new_team("shop", "C:/work/shop", "sell", teams.parse_members("lead: steer\napi: a", lead_ok=True))
     peers = teams.new_team("shop", "C:/work/shop", "sell", teams.parse_members("api: a; ui: b"), peers=True)
-    monkeypatch.setattr(teams, "load", lambda: {"shop": peers})
+    teams.save({"shop": peers})  # as saved now: a team of peers (read under the teams' lock)
     saves: list = []
     monkeypatch.setattr(teams, "save", saves.append)
     front = Front()

@@ -27,12 +27,14 @@ import subprocess
 import sys
 import time
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import clis, picks, router, teambus
-from .config import config_dir, locked, read_json, write_json
+from .config import Busy, config_dir, locked, read_json, write_json
 from .launch import Launch, Mode
 from .sessions import (
     Exit,
@@ -274,50 +276,51 @@ def new_team(name: str, cwd: str, goal: str, members: list[Member], decide: int 
                 stamp, decide, background, worktrees, cap)
 
 
-def add_members(team: Team, text: str) -> tuple[list[Member], str]:
+def add_members(team: Team, text: str, tries: int | None = None) -> tuple[list[Member], str]:
     """Members from "name: area @model @effort; ..." joined to the team and saved: (who joined, a note on
-    who did not). A team whose lead decides takes no more than its limit."""
+    who did not). A team whose lead decides takes no more than its limit. Checked against the team as
+    saved now, under the lock (changing: config.Busy when it could not be got, nothing joined)."""
     new = parse_members(text)
-    taken = {m.name for m in team.members}
+    if not new:
+        return [], ""
     note = []
-    if dropped := [m.name for m in new if m.name in taken]:
-        note.append(f"already on the team: {', '.join(dropped)}")
-    new = [m for m in new if m.name not in taken]
-    if team.decide:
-        room = max(0, team.decide - sum(not m.lead for m in team.members))
-        if len(new) > room:
-            note.append(f"the team has room for {team.decide} members, so {', '.join(m.name for m in new[room:])} "
-                        "did not join")
-            new = new[:room]
-    if new:
-        saved = load()  # as it is now: the dashboard may have changed it meanwhile
+    with changing(tries) as saved:  # as it is now: another window may have changed it meanwhile
         team = saved.get(team.name, team)
-        team.members += new
-        saved[team.name] = team
-        save(saved)
+        taken = {m.name for m in team.members}
+        if dropped := [m.name for m in new if m.name in taken]:
+            note.append(f"already on the team: {', '.join(dropped)}")
+        new = [m for m in new if m.name not in taken]
+        if team.decide:
+            room = max(0, team.decide - sum(not m.lead for m in team.members))
+            if len(new) > room:
+                note.append(f"the team has room for {team.decide} members, so "
+                            f"{', '.join(m.name for m in new[room:])} did not join")
+                new = new[:room]
+        if new:
+            team.members += new
+            saved[team.name] = team
     return new, "; ".join(note)
 
 
-def remove_member(name: str, member: str) -> Team | None:
+def remove_member(name: str, member: str, tries: int | None = None) -> Team | None:
     """Take a member off a team, as saved now, and save it; never the lead. Its sessions stay: from
-    now on they are ordinary ones. None: no such team."""
-    saved = load()
-    team = saved.get(name)
-    if team is None:
-        return None
-    team.members = [m for m in team.members if m.lead or m.name != member]
-    save(saved)
+    now on they are ordinary ones. None: no such team. Under the lock (changing: config.Busy)."""
+    with changing(tries) as saved:
+        team = saved.get(name)
+        if team is None:
+            return None
+        team.members = [m for m in team.members if m.lead or m.name != member]
     return team
 
 
-def set_goal(name: str, goal: str) -> Team | None:
-    """A team's goal, changed and saved. Members started from now on get it in their role."""
-    saved = load()
-    team = saved.get(name)
-    if team is None:
-        return None
-    team.goal = tidy(goal)  # its lines kept, as a new team's (and the "\n\nAdded" marks after it)
-    save(saved)
+def set_goal(name: str, goal: str, tries: int | None = None) -> Team | None:
+    """A team's goal, changed and saved. Members started from now on get it in their role. Under the lock
+    (changing: config.Busy)."""
+    with changing(tries) as saved:
+        team = saved.get(name)
+        if team is None:
+            return None
+        team.goal = tidy(goal)  # its lines kept, as a new team's (and the "\n\nAdded" marks after it)
     return team
 
 
@@ -414,7 +417,10 @@ def has_cli(cli: str) -> bool:
 
 
 def load() -> dict[str, Team]:
-    data = read_json(FILE)
+    return _teams(read_json(FILE))
+
+
+def _teams(data: object) -> dict[str, Team]:
     teams = {}
     for item in data.get("teams", []) if isinstance(data, dict) else []:
         try:
@@ -439,7 +445,50 @@ def _cap(saved: object) -> str:
 
 
 def save(teams: dict[str, Team]) -> None:
+    """All the teams written as they are: a change to the saved ones goes through changing, under the lock."""
     write_json(FILE, {"teams": [asdict(t) for t in teams.values()]}, indent=2)
+
+
+class Unreadable(Busy):
+    """teams.json is there but could not be read: written over, every team in it would be lost."""
+
+
+@contextmanager
+def changing(tries: int | None = None) -> Iterator[dict[str, Team]]:
+    """The saved teams, to change in place, saved again (when changed) on the way out: read and written under
+    teams.json's lock, so two windows, or a window and `tabmancer team`, changing teams at once each keep the
+    other's change (each read them, then wrote back its own). config.Busy when the lock could not be got
+    (tries: config.locked's; UI_TRIES on a UI thread), Unreadable when the file is there but could not be
+    read: nothing is saved then, nor when the change raises."""
+    with locked(FILE, tries):
+        data = read_json(FILE, tries)
+        if data is None and os.path.lexists(config_dir() / FILE):
+            raise Unreadable(f"{FILE} could not be read")
+        saved = _teams(data)
+        before = {name: asdict(team) for name, team in saved.items()}
+        yield saved
+        if {name: asdict(team) for name, team in saved.items()} != before:
+            save(saved)
+
+
+def put(team: Team, tries: int | None = None) -> None:
+    """One team saved, made or changed as a whole; the others as they are now (changing)."""
+    with changing(tries) as saved:
+        saved[team.name] = team
+
+
+def drop(name: str, tries: int | None = None) -> None:
+    """A team deleted, the others as they are now (changing). Its sessions stay."""
+    with changing(tries) as saved:
+        saved.pop(name, None)
+
+
+def not_saved_words(what: str, error: Busy) -> str:
+    """What a team change that changing refused says: what was not done, and why."""
+    if isinstance(error, Unreadable):
+        return (f"{what}: {FILE} could not be read, so it was left as it was. Try again in a moment; if it "
+                f"stays so, look at the file in {config_dir()}.")
+    return f"{what}: another tabmancer window is changing the teams right now. Try again in a moment."
 
 
 LINEUPS_FILE = "lineups.json"
@@ -973,15 +1022,14 @@ def read_suggestion(answer: str, working: list[Team] | None = None, goal: str = 
                       to, message)
 
 
-def add_to_goal(name: str, more: str) -> Team | None:
+def add_to_goal(name: str, more: str, tries: int | None = None) -> Team | None:
     """A team at work's goal, with what a new goal adds kept under it, dated: members who start from now
-    on read both in their role. None: no such team."""
-    saved = load()
-    team = saved.get(name)
-    if team is None:
-        return None
-    team.goal = tidy(f"{team.goal}{ADDED}{datetime.now():%d %b}: {tidy(more)}")
-    save(saved)
+    on read both in their role. None: no such team. Under the lock (changing: config.Busy)."""
+    with changing(tries) as saved:
+        team = saved.get(name)
+        if team is None:
+            return None
+        team.goal = tidy(f"{team.goal}{ADDED}{datetime.now():%d %b}: {tidy(more)}")
     return team
 
 

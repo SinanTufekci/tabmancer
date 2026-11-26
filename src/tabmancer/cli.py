@@ -315,7 +315,11 @@ def add_to_team(name: str, spec: str) -> int:
     if team is None:
         print(f"There is no team called {name}. Teams: {', '.join(saved) or 'none'}.")
         return 1
-    added, note = teams.add_members(team, spec)
+    try:
+        added, note = teams.add_members(team, spec)
+    except Busy as error:
+        print(teams.not_saved_words("Nobody joined", error))
+        return 1
     if not added:
         print(f"Nobody joined{f': {note}' if note else ''}. Write members as \"name: area @model @effort; name: area\".")
         return 1
@@ -821,7 +825,7 @@ def _cap(word: str) -> str:
 
 def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: float, pick: Pick | None = None,
                 linked: bool = False) -> None:
-    from . import newforms
+    from . import newforms, teams
 
     cli = cli or newforms.default_cli()
     problem = newforms.fresh_problem(names, prompt, cli, pick, linked)
@@ -830,7 +834,10 @@ def start_fresh(names: list[str], prompt: str | None, cli: str | None, days: flo
     folders, missing = newforms.folders_for(names, newforms.projects(find_sessions(days, quick=True)))
     if missing:
         sys.exit(f"Not a folder, and no recent project of that name: {', '.join(missing)}")
-    built = newforms.build(newforms.Request(folders, cli, prompt or "", pick or Pick(), linked))
+    try:
+        built = newforms.build(newforms.Request(folders, cli, prompt or "", pick or Pick(), linked))
+    except Busy as error:
+        sys.exit(teams.not_saved_words("Nothing was started", error))
     launch_all(built.launches)
     if built.team is not None:
         print(f"The team of peers {built.team.name}: "
