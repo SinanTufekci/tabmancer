@@ -509,9 +509,24 @@ def watched_team(name: str) -> tuple[str, str]:
 def team_watch(name: str, days: float, tabs_window: str = "") -> int:
     """`tabmancer team watch [team]`: the team's monitor, in this window. It acts only when asked
     (no limits continued, no toasts, no updates): the dashboard stays the one that does. Without
-    Textual, the desktop monitor (`tabmancer desktop --monitor`), or how to get it."""
+    Textual, the desktop monitor (`tabmancer desktop --monitor`); without Qt too, who is in the team
+    (as `team who` says it) and how to get the monitor."""
     if not has_textual():
-        return without_textual(team=name or "")
+        from . import desktop
+
+        if desktop.available():
+            return without_textual(team=name or "")
+        team, problem = watched_team(name)
+        if problem:
+            print(problem, file=sys.stderr)
+        elif team:
+            team_who(team)
+        else:  # none named and not one at work: the window would ask which
+            from . import teams
+
+            print(f"Teams: {', '.join(sorted(teams.load()))}. `tabmancer team who TEAM` lists one's members.")
+        without_textual(team=name or "")
+        return 1 if problem else 0
     team, problem = watched_team(name)
     if problem:
         print(problem, file=sys.stderr)

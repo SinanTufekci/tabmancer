@@ -202,6 +202,32 @@ def test_without_textual_or_qt_they_say_how_to_get_the_window(home, command, wha
     assert f'{what} is a desktop window, which needs Qt: uv tool install "tabmancer[desktop]"' in done.stdout
 
 
+WATCHED = {  # team watch with neither Textual nor Qt: what `team who` says, then the hint; exit code
+    "named": (["shop"], ["shop-lead", "· claude ·", "· lead"], 0),
+    "named, any case": (["SHOP"], ["shop-lead"], 0),
+    "none named, none at work": ([], ["Teams: shop. `tabmancer team who TEAM` lists one's members."], 0),
+}
+
+
+@pytest.mark.parametrize("name", list(WATCHED))
+def test_team_watch_without_textual_or_qt_says_who_is_in_the_team(home, name):
+    given, words, code = WATCHED[name]
+    done = run(home, "team", "watch", *given)
+    assert "the test " not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == code and "LOADED []" in done.stderr, done.stderr[-3000:]
+    for word in words:
+        assert word in done.stdout, done.stdout[-3000:]
+    hint = "A team's monitor is a desktop window, which needs Qt"
+    assert done.stdout.rstrip().endswith(f'{hint}: uv tool install "tabmancer[desktop]"'), done.stdout[-3000:]
+
+
+def test_team_watch_without_textual_or_qt_says_there_is_no_such_team(home):
+    done = run(home, "team", "watch", "docs")
+    assert "the test " not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == 1 and "There is no team docs. Teams: shop." in done.stderr
+    assert "A team's monitor is a desktop window, which needs Qt" in done.stdout
+
+
 def test_live_without_textual_says_the_terminal_dashboard_is_not_installed(home):
     done = run(home, "live")
     assert "the test " not in done.stderr and "Traceback" not in done.stderr, done.stderr[-3000:]
