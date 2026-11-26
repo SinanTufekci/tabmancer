@@ -6,6 +6,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import report, summarize
 from tabmancer import tokens as T
@@ -121,20 +122,14 @@ async def test_the_report_tab_writes_saves_and_copies(fake_home, monkeypatch, tm
     monkeypatch.setattr(statsview, "copy_text", lambda app, text: copied.append(text))
     app = SessionPicker(days=14)
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if app.token_report is not None:
-                break
+        await wait_until(pilot, lambda: app.token_report is not None, "the token report")
         await pilot.press("u")
         screen = app.screen
         await pilot.press("c")  # nothing yet
         assert not copied
         await pilot.press("r")
         assert screen.query_one("TabbedContent").active == "report"
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if saved and not screen.writing:
-                break
+        await wait_until(pilot, lambda: saved and not screen.writing, "the written report")
         assert saved and "- Did the tasks." in saved[0]["text"]
         await pilot.press("c")
         assert copied == [saved[0]["text"]]

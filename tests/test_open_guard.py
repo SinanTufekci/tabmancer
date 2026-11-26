@@ -2,7 +2,7 @@
 one transcript would both write to it. The list can be a moment behind, so opening asks afresh."""
 
 import pytest
-from conftest import box_has_focus
+from conftest import box_has_focus, wait_until
 
 from tabmancer import app as app_module
 from tabmancer import openings, store
@@ -84,14 +84,29 @@ async def test_a_session_that_never_comes_up_is_named(fake_home, opened, monkeyp
 
 
 async def test_a_session_that_comes_up_is_not_named(fake_home, opened, monkeypatch):
-    monkeypatch.setattr(openings, "CAME_UP_SECONDS", 1.0)
+    """It shows up open within the window: the check at the window's end names nobody. The window's end
+    is the timer the engine sets (kept, and run once the poll has seen it), not a race between a 1 s
+    timer and a poll on a thread that a loaded machine can lose."""
+    ends: list = []
+    real_later = SessionPicker.later
+
+    def later(self, seconds, then):
+        if seconds == openings.CAME_UP_SECONDS:
+            ends.append(then)  # the window's end: run below, once the session came up
+        else:
+            real_later(self, seconds, then)
+
+    monkeypatch.setattr(SessionPicker, "later", later)
     app = SessionPicker(days=14)
     async with app.run_test() as pilot:
         await loaded(pilot, app)
         app.table.move_cursor(row=app.table.get_row_index("one"))
         await pilot.press("enter")
+        assert len(ends) == 1  # the check is set for the end of the window
         monkeypatch.setattr(store, "_registry_sessions", lambda: [{"sessionId": "one", "pid": 1}])  # the poll's read
         app.poll_live(full=False)  # its pid file is there: it came up
-        await pilot.pause(1.5)
+        await wait_until(pilot, lambda: "one" in app.openings.came_up, "the poll that sees it open")
+        ends.pop()()  # the window ends
+        await pilot.pause(0.05)
         assert "one" in app.openings.came_up
         assert not any("did not come up" in note for note in told(app))

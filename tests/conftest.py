@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,20 @@ async def box_has_focus(pilot, app, tries: int = 150) -> None:
             return
         await pilot.pause(0.02)
     raise AssertionError(f"{type(app.screen).__name__} never gave anything the focus")
+
+
+LOADED_SECONDS = 30.0  # how long a TUI test waits for work on another thread: a full run beside four more
+
+
+async def wait_until(pilot, check, what: str = "the condition", seconds: float = LOADED_SECONDS) -> None:
+    """Wait on the app's own loop until check() is true, by the clock: work on a thread (a token report,
+    a count) takes many times longer while other suites share the machine, so a few seconds' bound
+    fails a test that is right (test_stats_overview failed once so under five parallel lanes)."""
+    deadline = time.monotonic() + seconds
+    while not check():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"{what} did not come within {seconds:.0f} s")
+        await pilot.pause(0.05)
 
 
 @pytest.fixture(autouse=True)

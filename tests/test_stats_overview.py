@@ -7,6 +7,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from conftest import wait_until
 
 from tabmancer import history, stats
 from tabmancer.sessions import folder_key
@@ -160,20 +161,14 @@ async def test_the_screen_looks_back_over_all_time_and_one_project(in_demo):
 
     app = in_demo
     async with app.run_test(size=(150, 44)) as pilot:
-        for _ in range(80):
-            await pilot.pause(0.05)
-            if app.token_report is not None:
-                break
+        await wait_until(pilot, lambda: app.token_report is not None, "the token report")
         await pilot.press("u")
         screen = app.screen
         assert isinstance(screen, StatsScreen)
 
         async def counted():
-            for _ in range(100):
-                await pilot.pause(0.05)
-                if not screen.counting:
-                    return
-            raise AssertionError("still counting")
+            await pilot.pause(0.05)  # the key's count under way first
+            await wait_until(pilot, lambda: not screen.counting, "the end of the count")
 
         await counted()
         await pilot.press("5")
