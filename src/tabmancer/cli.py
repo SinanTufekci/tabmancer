@@ -13,7 +13,7 @@ import sys
 from dataclasses import asdict
 from datetime import timedelta
 
-from . import claudeupdate, clis, shortcuts, workspaces
+from . import claudeupdate, clis, shortcuts, workspaces, workspacewords
 from .config import Busy, merge_json, read_json, write_json
 from .launch import Launch, continue_prompt, open_tabs
 from .picks import EFFORTS, NO_CAP, Pick, cap_tokens
@@ -776,13 +776,14 @@ def manage_continue_prompt(text: str | None, reset: bool) -> None:
 
 
 def manage_workspaces(delete: str | None) -> None:
-    saved = workspaces.load()
     if delete:
         workspace = _get_workspace(delete)
-        del saved[workspace.name]
-        workspaces.save(saved)
-        print(f"Deleted workspace {workspace.name!r}.")
+        if not workspaces.drop(workspace.name):  # unreadable, held past the full wait, or not written
+            print(workspacewords.not_kept_note(workspace.name, deleting=True).words)
+            sys.exit(1)
+        print(workspacewords.deleted_note(workspace.name).words)
         return
+    saved = workspaces.load()
     if not saved:
         print("No workspaces yet. In the picker, tick sessions and press w to save one.")
     for workspace in saved.values():

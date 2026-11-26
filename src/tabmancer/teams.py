@@ -483,32 +483,44 @@ def drop(name: str, tries: int | None = None) -> None:
         saved.pop(name, None)
 
 
-def not_saved_words(what: str, error: Busy) -> str:
-    """What a team change that changing refused says: what was not done, and why."""
+def not_saved_words(what: str, error: Busy, file: str = FILE) -> str:
+    """What a team change that changing (or a line-up keep_lineup: file LINEUPS_FILE) refused says: what was
+    not done, and why."""
     if isinstance(error, Unreadable):
-        return (f"{what}: {FILE} could not be read, so it was left as it was. Try again in a moment; if it "
+        return (f"{what}: {file} could not be read, so it was left as it was. Try again in a moment; if it "
                 f"stays so, look at the file in {config_dir()}.")
-    return f"{what}: another tabmancer window is changing the teams right now. Try again in a moment."
+    things = "the teams" if file == FILE else "the kept line-ups"
+    return f"{what}: another tabmancer window is changing {things} right now. Try again in a moment."
 
 
 LINEUPS_FILE = "lineups.json"
 
 
 def saved_lineups() -> dict[str, str]:
-    """Line-ups of your own, kept with Ctrl+K in the new-team dialog: name -> one member a line."""
-    data = read_json(LINEUPS_FILE)
+    """Line-ups of your own, kept with Ctrl+L in the new-team dialog: name -> one member a line."""
+    return _lineups(read_json(LINEUPS_FILE))
+
+
+def _lineups(data: object) -> dict[str, str]:
     lineups = data.get("lineups") if isinstance(data, dict) else None
     return {str(k): str(v) for k, v in lineups.items()} if isinstance(lineups, dict) else {}
 
 
-def keep_lineup(name: str, members: str | None) -> None:
-    """Keep a line-up under a name, or (members None) forget it."""
-    lineups = saved_lineups()
-    if members is None:
-        lineups.pop(name, None)
-    else:
-        lineups[name] = members
-    write_json(LINEUPS_FILE, {"lineups": lineups}, indent=2)
+def keep_lineup(name: str, members: str | None, tries: int | None = None) -> None:
+    """Keep a line-up under a name, or (members None) forget it: lineups.json read and written back under its
+    lock, so two windows each keep the other's line-up. Raises Busy when another window holds the lock past
+    tries (UI_TRIES on a UI thread), and Unreadable when lineups.json is there but cannot be read, or holds no
+    dict (read as none: written over, every line-up in it would be lost)."""
+    with locked(LINEUPS_FILE, tries):
+        data = read_json(LINEUPS_FILE, tries)
+        if not isinstance(data, dict) and os.path.lexists(config_dir() / LINEUPS_FILE):
+            raise Unreadable(f"{LINEUPS_FILE} could not be read")
+        lineups = _lineups(data)
+        if members is None:
+            lineups.pop(name, None)
+        else:
+            lineups[name] = members
+        write_json(LINEUPS_FILE, {"lineups": lineups}, indent=2)
 
 
 def settings_file() -> Path:

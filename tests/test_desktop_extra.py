@@ -45,7 +45,8 @@ def test_the_package_and_its_cli_load_no_qt():
 
 BLOCKED = ("textual", "PySide6", "shiboken6")
 # The core works headless, with neither Textual nor Qt importable: what the MCP server, the bus, the
-# agy plugin, teams and the CLI's twins stand on, and what the desktop window reads. Each is used a
+# agy plugin, teams and the CLI's twins stand on, and what the desktop window reads and says (the words
+# modules). Each is used a
 # little on made-up data, in folders of the test's own.
 HEADLESS = """
 import json, sys
@@ -68,6 +69,9 @@ assert "api" in handover.team_request(teams.load()["shop"])
 assert router.guess("rename the design doc").pick.model == "haiku"
 assert json.loads(agyplugin.files()["plugin.json"])["name"]
 assert store.TeamStore("shop").name == "shop"
+from tabmancer import accountwords, workspacewords
+assert workspacewords.deleted_note("web").words == "Deleted workspace 'web'."
+assert accountwords.title_words(None) == "not signed in"
 from tabmancer import sessions, usage
 sessions._agents_json = lambda include_finished=False: []  # never the real `claude agents`
 usage.read_all = list  # nor `claude -p /usage`

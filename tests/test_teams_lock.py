@@ -1,7 +1,8 @@
 """teams.json changed under its lock (teams.changing): two windows, or a window and `tabmancer team`, each
 keep the other's change; a held lock is waited for a moment on a UI thread (UI_TRIES) and the full wait on
 the command line, then said in plain words; a teams.json that is there but cannot be read is never
-written over (every team in it would be lost)."""
+written over (every team in it would be lost). lineups.json, the line-ups kept with Ctrl+L, the same
+way."""
 
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from test_team_keys import Recorder, keys_on, shop
 
 from tabmancer import actions, cli, config, engine, newforms, picks, teams
 from tabmancer.actions import Note
-from tabmancer.teamforms import JoinTeam
+from tabmancer.teamforms import JoinTeam, Keep, TeamForm
 
 
 @pytest.fixture
@@ -191,3 +192,54 @@ def test_tabmancer_team_add_says_why_nobody_joined(tmp_path, waits, capsys):
     assert capsys.readouterr().out.strip() == (
         "Nobody joined: another tabmancer window is changing the teams right now. Try again in a moment.")
     assert waits == [config.BUSY_WAIT] * (config.BUSY_TRIES - 1)
+
+
+def lineups_file() -> Path:
+    return config.config_dir() / teams.LINEUPS_FILE
+
+
+def test_two_windows_each_keep_the_others_line_ups():
+    """Each form read the kept line-ups when it opened; each keep and forget reads them again under the lock."""
+    first, second = TeamForm(set()), TeamForm(set())
+    assert first.keep("api pair", ["api: x", "ui: y"], False).changed
+    assert second.keep("docs", ["docs: z"], True).changed
+    assert teams.saved_lineups() == {"api pair": "api: x\nui: y", "docs": f"{teams.PEERS_MARK}docs: z"}
+    shown = second.template_text("docs", "")
+    second.keep_step(shown)  # the first press only asks
+    assert second.keep_step(shown).changed
+    assert teams.saved_lineups() == {"api pair": "api: x\nui: y"}  # first's kept, though second never read it
+
+
+def test_a_held_lineups_lock_is_waited_for_a_moment_then_said(waits):
+    form = TeamForm(set())
+    assert form.keep("docs", ["docs: z"], False).changed
+    before = lineups_file().read_bytes()
+    shown = form.template_text("docs", "")
+    with config.locked(teams.LINEUPS_FILE):
+        refused = form.keep("api", ["api: x"], False)
+        form.keep_step(shown)  # the first press only asks
+        still = form.keep_step(shown)
+    busy = "another tabmancer window is changing the kept line-ups right now. Try again in a moment."
+    assert refused == Keep(Note(f"The line-up api is not kept: {busy}", "warning", 8))
+    assert still == Keep(Note(f"The line-up docs is still kept: {busy}", "warning", 8))
+    assert waits == [config.BUSY_WAIT] * (2 * (config.UI_TRIES - 1))
+    assert lineups_file().read_bytes() == before
+    assert "api" not in form.lineups and form.picked() == "docs" and "docs" in form.saved
+    assert form.keep_step(shown).changed and teams.saved_lineups() == {}  # free again: Ctrl+L once more forgets
+
+
+@pytest.mark.parametrize("held", ['{"lineups": {"api": "api: x', "[]"])
+def test_a_lineups_file_that_cannot_be_read_is_never_written_over(held, waits):
+    """Cut short, or holding no dict: read as none, so written over, every line-up in it would be lost."""
+    lineups_file().parent.mkdir(parents=True, exist_ok=True)
+    lineups_file().write_text(held, encoding="utf-8")
+    kept = TeamForm(set()).keep("docs", ["docs: z"], False)
+    assert kept.note is not None and not kept.changed
+    assert kept.note.words.startswith(
+        f"The line-up docs is not kept: {teams.LINEUPS_FILE} could not be read, so it was left as it was")
+    with pytest.raises(teams.Unreadable):
+        teams.keep_lineup("api", None)
+    assert lineups_file().read_text(encoding="utf-8") == held
+    lineups_file().unlink()  # none yet: made at the first keep
+    teams.keep_lineup("docs", "docs: z")
+    assert teams.saved_lineups() == {"docs": "docs: z"}

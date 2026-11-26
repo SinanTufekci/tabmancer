@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import improve, picks, teams
 from .actions import Note
+from .config import UI_TRIES, Busy
 from .newforms import CAP_SHORT
 
 LEAD_LINE = f"{teams.LEAD}: {teams.LEAD_FOCUS}"
@@ -298,8 +299,12 @@ class TeamForm:
             if self.forgetting != current:
                 self.forgetting = current
                 return Keep(Note(f"Press Ctrl+L again to forget the line-up {current}.", seconds=4))
+            try:
+                teams.keep_lineup(current, None, UI_TRIES)
+            except Busy as error:  # Ctrl+L again tries again
+                return Keep(Note(teams.not_saved_words(f"The line-up {current} is still kept", error,
+                                                       teams.LINEUPS_FILE), "warning", 8))
             self.forgetting = None
-            teams.keep_lineup(current, None)
             del self.saved[current]
             self.lineups.remove(current)
             self.template = 0
@@ -319,7 +324,11 @@ class TeamForm:
         if name in teams.TEMPLATES or name in teams.PEER_TEMPLATES or name in (teams.DECIDE, OWN):
             return Keep(Note(f"{name} is a ready-made line-up: give yours another name.", "warning"))
         kept = (teams.PEERS_MARK if peers else "") + "\n".join(members)
-        teams.keep_lineup(name, kept)
+        try:
+            teams.keep_lineup(name, kept, UI_TRIES)
+        except Busy as error:
+            return Keep(Note(teams.not_saved_words(f"The line-up {name} is not kept", error, teams.LINEUPS_FILE),
+                             "warning", 8))
         self.saved[name] = kept
         if name not in self.lineups:
             self.lineups.insert(len(self.lineups) - 1, name)  # before lead decides
