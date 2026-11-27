@@ -2054,6 +2054,9 @@ class SessionPicker(sixel.SixelHost, App[list[str]]):
         if states == self.team_states:
             return
         self.team_states = states
+        # A member done for now rests from the moment its team is known, not from the first live read that brings
+        # it up to date (the full one, 16 s on): till then its row said, in red, that it waits for you.
+        store.rest(self.sessions.values(), store.resting_ids(states))
         self.sync_rows({s.session_id for state in states.values() for s in state.sessions.values() if s is not None})
 
     def fly(self, now: float) -> None:
