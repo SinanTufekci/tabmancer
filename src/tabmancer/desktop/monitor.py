@@ -135,6 +135,18 @@ def look_alone(relay: Relay) -> None:
         pass  # the window has gone meanwhile
 
 
+def switch_tab(relay: Relay, title: str, name: str) -> None:
+    """Enter's tab switch on a thread of its own (finding the tab takes a moment), what it came to said on
+    Bit's line; as switch_failed, it holds the relay, never the window."""
+    found = focus.focus_tab(title)
+    try:
+        relay.said.emit(f"Switched to {name}'s tab." if found else
+                        f"Could not find {name}'s tab. It may be open outside Windows Terminal, or renamed.",
+                        look.TEXT if found else look.AMBER)
+    except RuntimeError:
+        pass  # the window has gone meanwhile
+
+
 def switch_failed(relay: Relay, error: BaseException, path) -> None:
     """Enter's tab switch raised: said on Bit's line (the details in errors.log); it holds the relay, never the
     window."""
@@ -687,15 +699,10 @@ class MonitorWindow(QMainWindow):
         if session.status is Status.BACKGROUND:
             self.say(f"{name} runs in the background, with no tab: B in the dashboard attaches to it.", look.MUTED)
             return
-
-        def switch() -> None:
-            found = focus.focus_tab(session.title)
-            self.relay.said.emit(f"Switched to {name}'s tab." if found else
-                                 f"Could not find {name}'s tab. It may be open outside Windows Terminal, or renamed.",
-                                 look.TEXT if found else look.AMBER)
-
-        threading.Thread(target=errorlog.guarded, args=("desktop.monitor.switch", switch), daemon=True,
-                         kwargs={"failed": partial(switch_failed, self.relay)}, name="tabmancer-focus").start()
+        threading.Thread(target=errorlog.guarded, args=("desktop.monitor.switch", switch_tab, self.relay,
+                                                        session.title, name),
+                         kwargs={"failed": partial(switch_failed, self.relay)}, daemon=True,
+                         name="tabmancer-focus").start()
 
     def choose_team(self) -> None:
         names = sorted(teams.load())

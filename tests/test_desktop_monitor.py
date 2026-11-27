@@ -6,6 +6,7 @@ import gc
 import importlib
 import os
 import sys
+import threading
 import time
 import weakref
 from datetime import datetime, timedelta
@@ -25,7 +26,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from qt_later import later  # noqa: F401  (a fixture)
 
-from tabmancer import actor, agy, cli, demo, teambus, teams
+from tabmancer import actor, agy, cli, demo, errorlog, teambus, teams
 from tabmancer import viewmodel as VM
 from tabmancer.config import merge_json, read_json
 from tabmancer.desktop import commandbar, look, monitor, teamgraph, widgets
@@ -284,6 +285,38 @@ def test_enter_goes_to_the_tab_and_says_where_it_cannot(qapp, window, monkeypatc
     shown.go_to_tab()
     wait(qapp, lambda: "Switched" in shown.bit_line.text())
     assert asked == [shown.snap.state.sessions["api"].title]
+
+
+def test_a_tab_switch_ending_after_the_window_went_is_no_error(qapp, window, monkeypatch):
+    """Enter's switch finding the tab as the monitor goes: its words have no window to go to, and that is no
+    error for errors.log (as everywhere a window goes meanwhile)."""
+    shown = window()
+    read(qapp, shown)
+    looking, gone = threading.Event(), threading.Event()
+
+    def focus_tab(title):
+        looking.set()
+        gone.wait(10)
+        return True
+
+    monkeypatch.setattr(monitor.focus, "focus_tab", focus_tab)
+    log = errorlog.config_dir() / errorlog.LOG
+    own, stand_in = shown.relay, monitor.Relay()
+    shown.relay = stand_in
+    try:
+        shown.picked = "api"
+        shown.go_to_tab()
+        assert looking.wait(10)
+        switching = [thread for thread in threading.enumerate() if thread.name == "tabmancer-focus"]
+        shiboken6.delete(stand_in)  # gone, as with its window
+        gone.set()
+        for thread in switching:
+            thread.join(10)
+    finally:
+        gone.set()
+        shown.relay = own  # the window's own, for its close
+    written = log.read_text(encoding="utf-8") if log.exists() else ""
+    assert switching and "desktop.monitor.switch" not in written
 
 
 def test_it_never_acts(qapp, window, world, monkeypatch):

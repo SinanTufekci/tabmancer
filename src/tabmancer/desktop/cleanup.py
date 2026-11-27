@@ -176,8 +176,13 @@ class CleanupDialog(QDialog):
             self.draw()
 
     def went_wrong(self, words: str) -> None:
-        """Measuring or moving failed: said, and the keys work again on the list as it stands."""
+        """Measuring or moving failed: said, and the keys work again on the list as it stands: drawn again,
+        or, none measured, no detail (never left at "Measuring…", nor "No sessions on disk", not known)."""
         self.busy = False
+        if self.items:
+            self.draw()
+        else:
+            self.detail.setText("")
         self.say([Note(words, "error")])
 
     def say(self, notes: list[Note]) -> None:

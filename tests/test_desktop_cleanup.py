@@ -170,3 +170,31 @@ def test_an_open_session_is_never_picked(qapp, home, trashed, monkeypatch):
     assert dialog.selected == set() and marks(dialog) == [" · "]
     assert cleanupwords.OPEN_NOW in dialog.detail.text()
     dialog.close()
+
+
+def test_a_measure_that_fails_is_said_and_never_left_measuring(qapp, home, monkeypatch):
+    """diskclean.collect raising (logged, said in red): no "Measuring…" left, nor "No sessions on disk", which
+    the dialog does not know."""
+    def broken():
+        raise PermissionError("projects folder locked")
+
+    monkeypatch.setattr(diskclean, "collect", broken)
+    dialog = opened(qapp)
+    assert not dialog.busy and "projects folder locked" in dialog.note.text()
+    assert dialog.detail.text() == "" and dialog.heading.text() == ""
+    dialog.close()
+
+
+def test_a_move_that_fails_is_said_and_the_list_still_works(qapp, home, monkeypatch):
+    """diskclean.trash raising, not a problem it answers itself: said in red, the list drawn as it stands and its
+    keys working again."""
+    _, add = home
+    add("old", days_old=20)
+    dialog = opened(qapp)
+    monkeypatch.setattr(diskclean, "trash", lambda items: 1 / 0)
+    press(qapp, dialog, "o", Qt.Key.Key_Return, "y")
+    assert not dialog.busy and "(trash): division by zero" in dialog.note.text()
+    assert dialog.table.rowCount() == 1 and "On disk:" in dialog.detail.text()
+    press(qapp, dialog, "a")
+    assert dialog.selected == set()  # the keys work again
+    dialog.close()
