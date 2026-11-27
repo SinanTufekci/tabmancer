@@ -14,7 +14,7 @@ else:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QColor, QContextMenuEvent
+from PySide6.QtGui import QColor, QContextMenuEvent, QPainter
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -233,6 +233,27 @@ def test_hover_says_who_and_click_and_right_click_ask_the_window(graph):
     assert menus == ["api"]
     QTest.mouseClick(g, Qt.MouseButton.LeftButton, pos=QPoint(2, g.height() - 2))  # nothing there
     assert clicked == ["api"]
+
+
+def test_a_member_done_with_its_cache_kept_warm_says_till_when(graph, monkeypatch):
+    """The wide picture writes it under the member, as the terminal's team view does; the compact one has
+    no room (its label alone): hovering says it in both."""
+    view = team(member("lead"), member("api", warm_until=datetime(2026, 11, 27, 14, 32)))
+    drawn = []
+    draw = QPainter.drawText
+
+    def drawing(painter, *args):
+        drawn.extend(a for a in args if isinstance(a, str))
+        return draw(painter, *args)
+
+    monkeypatch.setattr(QPainter, "drawText", drawing)
+    for compact in (False, True):
+        g = graph(compact=compact)
+        g.set(view, [], COLOURS)
+        drawn.clear()
+        g.grab()
+        assert ("idle · warm to 14:32" in drawn) is not compact and drawn.count("idle") == (2 if compact else 1)
+        assert "idle · warm to 14:32" in g.words_at(g.drawn["api"])
 
 
 def test_a_wire_says_how_much_it_carried(graph):

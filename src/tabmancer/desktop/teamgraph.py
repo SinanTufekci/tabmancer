@@ -44,7 +44,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QMenu, QToolTip, QWidget
 
-from .. import teams
+from .. import teams, teamwords
 from .. import viewmodel as VM
 from ..config import merge_json, read_json
 from . import look
@@ -736,7 +736,8 @@ class TeamGraph(QWidget):
             return
         p.setFont(look.font(8.4, True))
         p.setPen(QColor(tone))
-        p.drawText(QRectF(spot.x() - 90, spot.y() + r + 6, 180, 16), Qt.AlignmentFlag.AlignCenter, member.label)
+        p.drawText(QRectF(spot.x() - 90, spot.y() + r + 6, 180, 16), Qt.AlignmentFlag.AlignCenter,
+                   teamwords.member_status_words(member))  # the compact one: its label (no room; hover says)
         facts = facts_line(member)
         if facts:
             p.setFont(look.font(8))
@@ -765,7 +766,8 @@ class TeamGraph(QWidget):
             member = next(m for m in view.members if m.name == name)
             colour = self.colours.get(name, look.TEXT)
             facts = facts_line(member)
-            lines = [look.span(name, f"bold {colour}") + look.span("  " + member.label, tone_colour(member.tone))]
+            lines = [look.span(name, f"bold {colour}")
+                     + look.span("  " + teamwords.member_status_words(member), tone_colour(member.tone))]
             if facts:
                 lines.append(look.span(facts, look.MUTED))
             if member.last is not None:

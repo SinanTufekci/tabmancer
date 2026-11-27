@@ -176,7 +176,7 @@ class MemberCard(QFrame):
         self.title.setText(("★ " if member.lead else "") + member.name)
         self.title.setStyleSheet(f"color:{colours.get(member.name, look.TEXT)}; background:transparent;")
         self.cli.set(f"@{member.cli}" if member.cli != "claude" else "", look.CYAN, "#0f2326")
-        self.state.set(member.label, colour)
+        self.state.set(teamwords.member_status_words(member), colour)  # as the terminal's card says it
         self.focus.setText(member.focus)
         self.model.setText(model_words(member))
         self.model.setStyleSheet(f"color:{look.CYAN if member.cli != 'claude' else look.TEXT}; background:transparent;")

@@ -110,6 +110,19 @@ def test_the_window_shows_the_team(qapp, window):
     assert card.bar.share == member.context and member.context
 
 
+def test_a_member_done_with_its_cache_kept_warm_says_till_when(qapp, window):
+    """Its card and the picked line, as the terminal's team view says it."""
+    shown = window()
+    read(qapp, shown)
+    member = shown.snap.view.members[1]
+    member.label, member.warm_until = "idle", datetime(2026, 11, 27, 14, 32)
+    shown.show_cards(shown.snap.view)
+    assert shown.cards[member.name].state.text() == "idle · warm to 14:32"
+    shown.picked = member.name
+    shown.refresh_pick()
+    assert f"{member.name}  ·  idle · warm to 14:32  ·  " in plain(shown.picked_lines.text())
+
+
 def test_ctrl_k_finds_the_monitors_keys_and_its_members(qapp, window):
     shown = window()
     read(qapp, shown)

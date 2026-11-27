@@ -479,7 +479,8 @@ class MonitorWindow(QMainWindow):
                       if newest is not None else look.span("Nothing said yet.", look.MUTED))
         else:
             first = (look.span(member.name, f"bold {self.colours.get(member.name, look.TEXT)}")
-                     + look.span("  ·  ", look.DIM) + look.span(member.label, tone_colour(member.tone))
+                     + look.span("  ·  ", look.DIM)
+                     + look.span(teamwords.member_status_words(member), tone_colour(member.tone))
                      + look.span("  ·  ", look.DIM) + facts_html(member, leave_out_model=False))
             second = last_words(member, self.colours)
         self.picked_lines.setText(f"{first}<br>{second}")

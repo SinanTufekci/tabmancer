@@ -221,7 +221,8 @@ class Drawer(QScrollArea):
         lines = []
         for member in view.members:
             lines.append(look.span(member.name, f"bold {colours.get(member.name, look.TEXT)}")
-                         + look.span("  ·  ", look.DIM) + look.span(member.label, tone_colour(member.tone))
+                         + look.span("  ·  ", look.DIM)
+                         + look.span(teamwords.member_status_words(member), tone_colour(member.tone))
                          + look.span("  ·  ", look.DIM) + facts_html(member, leave_out_model=False)
                          + "<br>" + last_words(member, colours))
         self.said.setText("<br><br>".join(lines))

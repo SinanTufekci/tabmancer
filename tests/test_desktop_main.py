@@ -772,6 +772,10 @@ def test_the_drawer_shows_a_teams_card_and_its_buttons_wait_for_the_window(qapp,
     assert pressed == ["Enter"]
     shown.show_pick("")
     assert drawer.NOTHING in side.plain() and not side.buttons.isVisible() and side.rows == ([], [])
+    member = view.members[0]  # done for now, a keep-warm sleep keeping its cache: said till when
+    member.warm_until = datetime(2026, 11, 27, 14, 32)
+    side.show_team(snap, view.name)
+    assert f"{member.name}  ·  {member.label} · warm to 14:32  ·  " in side.plain()
 
 
 def test_the_drawer_says_where_the_filters_words_were_said(qapp, window):
