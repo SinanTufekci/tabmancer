@@ -88,7 +88,6 @@ from .. import (
     actor,
     alerts,
     backgroundwords,
-    bitart,
     clis,
     commands,
     diskclean,
@@ -109,13 +108,25 @@ from .. import (
 )
 from .. import viewmodel as VM
 from ..bgjobs import Job
-from ..config import UI_TRIES, Busy
+from ..config import NOT_SAVED, UI_TRIES, Busy
 from ..keys import KEYS, MONITOR_KEYS
 from ..palette import mix
 from ..sessions import Exit, Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
 from ..teamforms import JoinTeam, TellTeam
-from . import commandbar, frame, limit, look, monitor, newsession, newteam, teamgraph, teamkeysdialogs, tray
+from . import (
+    bitpet,
+    commandbar,
+    frame,
+    limit,
+    look,
+    monitor,
+    newsession,
+    newteam,
+    teamgraph,
+    teamkeysdialogs,
+    tray,
+)
 from .backgrounds import OPEN, BackgroundDialog, Jobs
 from .board import Board
 from .cleanup import CleanupDialog
@@ -133,7 +144,7 @@ from .stats import StatsDialog
 from .summaries import Summarizer
 from .table import Table, drawer_key
 from .teampanel import TeamPanel
-from .widgets import KeyBar, bit_pixmap, text_label
+from .widgets import KeyBar, text_label
 from .workspacelist import WorkspacesDialog
 from .wrapped import WrappedDialog
 
@@ -152,14 +163,17 @@ TERMINALS = {"V": "The terminal dashboard's own: here the panels drag, split and
 LEFT_OUT = {"t"}
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H", "c", "u", "W"}
+        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H", "c", "u", "W", "b"}
+# The window's own words for a key it does its own way: b, Bit here has no pixels or blocks to pick between.
+OWN_WORDS = {"b": "Bit lively, calm, or away (remembered, for the terminal's Bit too)"}
 TEAM_GROUP = "The team"
 # The terminal team view's own keys (keys.MONITOR_KEYS' "The team": its a, s, h and x are the dashboard's
 # too, on a team's card): g the team's goal; on a member, picked in the Team panel or its row in the Table, d
 # takes it off and H hands it alone over. A menu of their own after a session's, in their words.
 TEAM_KEYS = [entry for entry in dict(MONITOR_KEYS)[TEAM_GROUP] if entry[0] in {"g", "d", "H"}]
 AFTER_SESSION = [group for group, _ in KEYS].index("Work with a session") + 1
-WINDOW_KEYS = [(group, [entry for entry in entries if entry[0] not in LEFT_OUT])
+WINDOW_KEYS = [(group, [(key, action, OWN_WORDS.get(key, words)) for key, action, words in entries
+                        if key not in LEFT_OUT])
                for group, entries in [*KEYS[:AFTER_SESSION], (TEAM_GROUP, TEAM_KEYS), *KEYS[AFTER_SESSION:]]]
 PICK_MEMBER = "d and H act on a team's member: click one in the Team panel (T), or pick its row in the Table."
 GOAL_PICK = "g changes a team's goal: pick its card, or bring its tab in the Team panel (T)."
@@ -624,14 +638,11 @@ class MainWindow(QMainWindow):
             box.setContentsMargins(12, 10, 6, 0)
             box.addWidget(self.drawer)
         elif title == "Bit":
-            line = QHBoxLayout()
-            self.bit = QLabel()
-            self.bit.setStyleSheet("background:transparent;")
-            self.bit.setPixmap(bit_pixmap(bitart.Pose(eyes="happy"), 0.6))
-            self.bit_line = text_label("", look.MUTED, 9.5, wrap=True)
-            line.addWidget(self.bit, 0, Qt.AlignmentFlag.AlignBottom)
-            line.addWidget(self.bit_line, 1, Qt.AlignmentFlag.AlignVCenter)
-            box.addLayout(line)
+            self.pet = bitpet.Pet(self.accent)  # Bit on its panel's floor, its line beside it
+            self.pet.way = bitpet.saved_way()
+            self.pet.set_motion(teamgraph.motion())
+            self.bit_line = self.pet.line
+            box.addWidget(self.pet)
         made.setWidget(inside)
         return made
 
@@ -651,7 +662,7 @@ class MainWindow(QMainWindow):
                  "A": self.accounts_key, "w": self.save_workspace_key, "o": self.open_workspace_key,
                  "n": self.new_sessions_key, "s": self.start_key, "g": self.goal_key, "d": self.remove_key,
                  "H": self.member_handover_key, "c": self.continue_key, "u": self.stats_key,
-                 "W": self.wrapped_key}
+                 "W": self.wrapped_key, "b": self.bit_key}
         self.menus_by_group = {}
         for group, keys in WINDOW_KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -753,6 +764,7 @@ class MainWindow(QMainWindow):
         listed = snap.sessions.keys()
         self.selected, self.preselected = self.selected & listed, self.preselected & listed
         self.front.live(snap)  # what changed is said and lit, one open after all unticked (Engine.live)
+        self.pet.set_mood(*bitpet.mood(snap.sessions.values(), snap.hidden))  # calls while one needs you
         if snap.limits_read != self.limits_read:  # a new plan reading: Bit on a limit at 85%, every agy model out
             self.limits_read = snap.limits_read
             self.engine.usage(snap.limits, snap.agy_bar)
@@ -1467,10 +1479,22 @@ class MainWindow(QMainWindow):
             self.team_panel.tabs.setCurrentIndex(self.team_panel.names.index(name))  # its pick_team
 
     def motion_changed(self) -> None:
-        """View ▸ Reduce motion picked: the Team panel, the rail's teams and the table move as it says now."""
+        """View ▸ Reduce motion picked (or b made Bit calm, or lively again): the Team panel, the rail's teams, the
+        table and Bit move as it says now."""
         self.team_panel.show_team()
         self.rail.teams.set_motion(teamgraph.motion())
         self.table.set_motion(teamgraph.motion())
+        self.pet.set_motion(teamgraph.motion())
+
+    def bit_key(self) -> None:
+        """b: Bit lively, calm or away, in turn, as the terminal's b (one choice for both: config.json "mascot");
+        calm, the team views go calm with it (teamgraph.motion)."""
+        way = bitpet.next_way(self.pet.way)
+        saved = bitpet.save_way(way)
+        self.pet.way = way
+        self.motion_changed()
+        said = bitpet.SAID[way]
+        self.say(said if saved else f"{said} {NOT_SAVED}", 3 if saved else 8)
 
     def show_teams(self) -> None:
         """T: the Team panel to the front (back where it was, if it was closed), its tabs to pick with."""

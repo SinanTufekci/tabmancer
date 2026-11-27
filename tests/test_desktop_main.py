@@ -53,6 +53,7 @@ from tabmancer import sessionwords as preview_words
 from tabmancer import viewmodel as VM
 from tabmancer.config import config_dir, merge_json, read_json
 from tabmancer.desktop import (
+    bitpet,
     commandbar,
     drawer,
     frame,
@@ -452,11 +453,11 @@ def test_a_greyed_command_says_why_and_does_nothing(qapp, window):
     read(qapp, shown)
     shown.open_commands()
     bar = shown.command_bar
-    QTest.keyClicks(bar.line, "bit in pixels")
-    assert bar.picked().key == "b" and not bar.picked().enabled  # Bit's look first, greyed here till the pet
-    assert bar.note.text() == main.ELSEWHERE
+    QTest.keyClicks(bar.line, "preview beside the list")
+    assert bar.picked().key == "V" and not bar.picked().enabled  # the terminal's own: greyed here
+    assert bar.note.text() == main.TERMINALS["V"]
     ran = []
-    shown.actions_by_key["b"].triggered.connect(lambda *_: ran.append(1))
+    shown.actions_by_key["V"].triggered.connect(lambda *_: ran.append(1))
     QTest.keyClick(bar.line, Qt.Key.Key_Return)
     assert bar.isVisible() and ran == []
     QTest.keyClicks(bar.line, "zzqqx")
@@ -1540,7 +1541,7 @@ def test_one_look_here_t_in_no_list_and_the_theme_picked_in_the_terminal_never_r
 def test_v_is_the_terminals_own_said_so_wherever_it_shows_and_j_has_its_place_on_the_key_bar(qapp, window):
     """V lays the terminal's list and preview out; here the panels drag, split and float (Sinan's call,
     2026-11-26). Greyed with those words in its menu, in ? and in the palette (never "for now"), and off the key
-    bar, whose place is j's; the keys still to come say "for now" as before."""
+    bar, whose place is j's. b, the last key still to come, is the window's own since the pet (2026-11-27)."""
     shown = window()
     own = main.TERMINALS["V"]
     made = shown.actions_by_key["V"]
@@ -1548,12 +1549,12 @@ def test_v_is_the_terminals_own_said_so_wherever_it_shows_and_j_has_its_place_on
     assert "V" not in dict(main.KEY_BAR) and dict(main.KEY_BAR)["j"] == "needs you" and "j" not in shown.keybar.dim
     lines = keys_list(qapp, shown).splitlines()
     (v_line,) = [line for line in lines if line.startswith("V ")]
-    (b_line,) = [line for line in lines if line.startswith("b ")]  # Bit's look: to come with the pet
-    assert v_line.endswith(f"({own})") and b_line.endswith(f"({main.ELSEWHERE})")
+    (b_line,) = [line for line in lines if line.startswith("b ")]
+    assert v_line.endswith(f"({own})") and b_line == f"{'b':<6}{main.OWN_WORDS['b']}"
     shown.open_commands()
     by_key = {entry.key: entry for entry in shown.command_bar.entries if entry.kind == "key"}
     assert not by_key["V"].enabled and by_key["V"].why == own
-    assert not by_key["b"].enabled and by_key["b"].why == main.ELSEWHERE
+    assert by_key["b"].enabled
     shown.command_bar.hide()
 
 
@@ -1593,23 +1594,51 @@ def test_enter_on_a_line_of_question_mark_runs_its_key_as_the_terminals_menu_doe
 
 
 def test_a_greyed_line_of_question_mark_says_why_and_runs_nothing(qapp, window, monkeypatch):
-    """b (Bit's look, to come with the pet) and V (the terminal's own): picked, the line under the list says where
-    it is done; Enter says it louder and runs nothing, the list staying."""
+    """V (the terminal's own): picked, the line under the list says where it is done; Enter says it louder and runs
+    nothing, the list staying."""
     shown = window()
     ran = []
     monkeypatch.setattr(shown, "run_key", ran.append)
     dialog = keys_dialog(qapp, shown)
-    pick_line(dialog, "b")
-    assert dialog.note.text() == main.ELSEWHERE and look.AMBER not in dialog.note.styleSheet()
+    pick_line(dialog, "V")
+    assert dialog.note.text() == main.TERMINALS["V"] and look.AMBER not in dialog.note.styleSheet()
     QTest.keyClick(dialog.rows, Qt.Key.Key_Return)
     qapp.processEvents()
     assert dialog.isVisible() and ran == [] and look.AMBER in dialog.note.styleSheet()
-    pick_line(dialog, "V")
-    assert dialog.note.text() == main.TERMINALS["V"]
     pick_line(dialog, "j")
     QTest.keyClick(dialog.rows, Qt.Key.Key_Return)
     qapp.processEvents()
     assert ran == ["j"]  # what is done here goes to the window's own run_key
+
+
+def test_b_makes_bit_lively_calm_or_away_and_the_terminals_bit_too(qapp, window):
+    """b in the window (Sinan's call, 2026-11-27: the pet): lively, calm, away and lively again, saved as the
+    terminal's b saves it (config.json "mascot"), said on Bit's line. Calm makes the team views calm too
+    (teamgraph.motion); away leaves no Bit, its line staying. The terminal's "blocks" reads lively here."""
+    merge_json("config.json", mascot="blocks")
+    shown = window()
+    pet = shown.pet
+    assert shown.bit_line is pet.line and pet.way == "pixels" and not pet.at.isNull()
+    for way in ("calm", "away", "pixels"):
+        shown.actions_by_key["b"].trigger()
+        assert pet.way == way and read_json("config.json")["mascot"] == way
+        assert shown.bit_line.text() == bitpet.SAID[way]
+        assert pet.life.calm == (way == "calm") and (teamgraph.motion() == "calm") == (way == "calm")
+        assert pet.at.isNull() == (way == "away")
+        if way == "away":
+            assert not any(timer.isActive() for timer in pet.timers) and pet.line.x() == 0
+
+
+def test_bit_knows_what_the_sessions_do_after_each_reading(qapp, window):
+    """Each reading tells Bit how many sessions work and how many need you (the terminal's counts): it calls
+    while one needs you."""
+    shown = window()
+    read(qapp, shown)
+    snap = shown.snap
+    working, waiting = bitpet.mood(snap.sessions.values(), snap.hidden)
+    assert (shown.pet.life.working, shown.pet.life.waiting) == (working, waiting)
+    shown.pet.set_mood(working, waiting + 1)
+    assert shown.pet.life.waiting == waiting + 1 and (waiting or shown.pet.life.action == "call")
 
 
 def test_q_and_question_mark_close_the_keys_list_and_never_quit(qapp, window):
