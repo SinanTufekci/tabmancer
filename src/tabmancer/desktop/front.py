@@ -46,6 +46,7 @@ from .. import (
     actor,
     alerts,
     claudeupdate,
+    errorlog,
     handover,
     launch,
     picks,
@@ -101,8 +102,12 @@ def who_acts(held: dict) -> str:
 
 
 def show_toast(title: str, body: str) -> None:
-    """A desktop note (toast.show: a PowerShell run on Windows) on a thread of its own, holding the words alone."""
-    toast.show(title, body, dashboard=DASHBOARD_TAB)
+    """A desktop note (toast.show: a PowerShell run on Windows) on a thread of its own, holding the words alone.
+    One that fails is logged (errors.log), never said: a desktop note is a nicety."""
+    try:
+        toast.show(title, body, dashboard=DASHBOARD_TAB)
+    except Exception as error:  # noqa: BLE001 - logged only
+        errorlog.log_error("desktop.show_toast", error)
 
 
 def continue_handed(names: list[str]) -> actions.Note:
@@ -638,6 +643,11 @@ class WindowFront(QObject):
     def work_on(self, work: Callable[..., None], args: tuple[object, ...], handing: str) -> None:
         try:
             work(*args)
+        except Exception as error:  # noqa: BLE001 - the boundary: whatever went wrong, the window stays up
+            name = getattr(work, "__name__", "work")
+            path = errorlog.log_error(f"desktop.{getattr(work, '__qualname__', name)}", error)
+            self.emit("noted", actions.Note(f"Something went wrong in the background ({name}): {error}. "
+                                            f"The details are in {path}; please report it.", "error", 15))
         finally:
             if handing:
                 self.handing.pop(threading.current_thread(), None)

@@ -92,6 +92,7 @@ from .. import (
     commands,
     diskclean,
     engine,
+    errorlog,
     handoverwords,
     limitwords,
     marks,
@@ -244,6 +245,7 @@ def read_store(store: DashboardStore, relay: Relay) -> None:
         snap, error = store.poll(), ""
         first = bool(snap.agy_bar) and clis.main_cli() == "agy"  # agy the main CLI: its chain before the limits
     except Exception as caught:  # noqa: BLE001 - said in the window, tried again at the next poll
+        errorlog.log_error("desktop.read_store", caught)
         snap, first, error = None, False, f"{type(caught).__name__}: {caught}"
     try:
         relay.polled.emit(store, snap, first, error)
@@ -255,7 +257,11 @@ def look_at_lock(acts: bool, relay: Relay) -> None:
     """The actor lock looked at on a thread of its own (engine.look: reading another process can take a moment,
     `ps` on macOS, and actor.json held open is waited for), what it found sent back by the relay; as read_store,
     it holds the relay, never the window."""
-    found = engine.look(False, acts)
+    try:
+        found = engine.look(False, acts)
+    except Exception as caught:  # noqa: BLE001 - logged; the next ACTOR_MS tick looks again (tick_actor)
+        errorlog.log_error("desktop.look_at_lock", caught)
+        return
     try:
         relay.actor_seen.emit(found)
     except RuntimeError:
@@ -267,7 +273,8 @@ def read_words(index: search.Index | None, sessions: list[Session], relay: Relay
     try:
         index = index if index is not None else search.Index.load()
         more = index.update(sessions)
-    except Exception:  # noqa: BLE001 - the words are still found in titles and prompts
+    except Exception as caught:  # noqa: BLE001 - the words are still found in titles and prompts
+        errorlog.log_error("desktop.read_words", caught)
         index, more = None, False
     try:
         relay.indexed.emit(index, more)
