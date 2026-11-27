@@ -1,7 +1,8 @@
 """The stats: an overview, where the tokens went, when you work, which tools and files, how the
 limits fill. Over a period or all of the time kept (history.py), for every project or one.
 
-Shared by the `u` screen in the dashboard and `tabmancer stats` / `tabmancer tokens`.
+Shared by the `u` screen in the dashboard and `tabmancer stats` / `tabmancer tokens`. The counting, the
+words and the notes are statsmodel.py's, one copy with the desktop window's stats dialog.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Label, Static, TabbedContent, TabPane
 
-from . import history, sixel, stats, summarize, usage
-from . import report as reports
+from . import sixel, stats, statsmodel, usage
+from .actions import Note
 from .dialogs import frame
 from .pixelcharts import draw_bars, draw_week
 from .safework import work
@@ -379,9 +380,7 @@ class StatsScreen(ModalScreen[None]):
                     with TabPane(label, id=key), VerticalScroll(id=f"{key}-scroll"):
                         if key not in CHARTED:  # those are filled with their parts (fill)
                             yield Static("", id=f"{key}-body")
-            yield Label(keys(("1-5", "period"), ("p P", "one project"), ("← →", "tabs"),
-                             ("x", "export"), ("r", "write a report"), ("c", "copy it"), ("Esc", "close")),
-                        classes="hint")
+            yield Label(keys(*statsmodel.KEY_PAIRS), classes="hint")
 
     def on_mount(self) -> None:
         self.counting = True
@@ -392,22 +391,13 @@ class StatsScreen(ModalScreen[None]):
         self.recount(self.period, first=True)  # what it was given at once, then with the kept days and ▲ ▼
 
     def project_name(self, project: str | None = None) -> str:
-        project = self.project if project is None else project
-        return dict(self.projects).get(project, stats.project_name(project)) if project else ""
+        return statsmodel.project_name(self.projects, self.project if project is None else project)
 
     def show_head(self) -> str:
         """The periods, the project and whether it is counting, above the tabs; the project's name."""
-        periods = Text("look back  ", style=MUTED)
-        for key, days in enumerate((*stats.PERIODS, stats.ALL_TIME), 1):
-            on = days == self.period
-            periods.append(f" {key} ", style=f"bold #000000 on {self.accent}" if on else MUTED)
-            periods.append(f"{stats.period_words(days)}  ", style=f"bold {TEXT}" if on else MUTED)
         name = self.project_name()
-        periods.append("   project ", style=MUTED)
-        periods.append(name or "all", style=f"bold {self.accent}" if name else MUTED)
-        if self.counting:
-            periods.append("   counting…", style=f"italic {MUTED}")
-        self.query_one("#stats-head", Label).update(periods)
+        self.query_one("#stats-head", Label).update(Text.assemble(*statsmodel.head_parts(
+            self.period, name, self.counting, self.accent)))
         return name
 
     def show(self, parts: dict[str, list]) -> None:
@@ -420,13 +410,10 @@ class StatsScreen(ModalScreen[None]):
 
     def tab_parts(self, shown: Report, before: stats.Before | None, name: str) -> dict[str, list]:
         """What each tab with charts shows. Made in a worker: over many days it takes a second."""
-        return {"overview": overview_parts(shown, self.sessions, self.accent, before, name),
-                "tokens": tokens_parts(shown, self.sessions, self.accent),
-                "work": work_parts(shown, self.sessions, self.accent),
-                "tools": tools_parts(shown, self.sessions, self.accent)}
+        return statsmodel.tab_parts(shown, self.sessions, before, name, self.accent)
 
     def project_list(self, report: Report) -> list[tuple[str, str]]:
-        return [(stats.folder_key(row["folder"]), row["project"]) for row in stats.per_project(report, self.sessions)]
+        return statsmodel.project_list(report, self.sessions)
 
     async def fill(self, key: str, parts: list) -> None:
         """A tab's parts on it (widgets_for), in place of what it showed. A tab's fills wait for each
@@ -440,9 +427,7 @@ class StatsScreen(ModalScreen[None]):
             await scroll.mount_all(widgets_for(parts, self.accent))
 
     def show_report(self) -> None:
-        entry = reports.latest(self.report.days)
-        current = entry is not None and entry.get("key") == reports.key_for(
-            list(self.sessions.values()), self.report, summarize.load_cache())
+        entry, current = statsmodel.latest(self.report, self.sessions)
         self.query_one("#report-body", Static).update(
             render_report(entry, current, self.report.days, self.writing, self.accent))
 
@@ -456,33 +441,23 @@ class StatsScreen(ModalScreen[None]):
 
     @work(thread=True, exclusive=True, group="report")
     def write_report(self) -> None:
-        from .sessions import find_sessions
+        self.app.call_from_thread(self.report_done, statsmodel.write_report(self.report, self.sessions))
 
-        try:
-            # The sessions of the report's whole period, as tabmancer report reads them: the dashboard
-            # lists only its --days (14), and a 90-day report's notes told of the last 14 alone.
-            period = {s.session_id: s for s in find_sessions(self.report.days, quick=True)}
-            entry = reports.write(period | self.sessions, self.report)
-            path, error = reports.save(entry), None
-        except (summarize.SummaryError, OSError) as failure:
-            path, error = None, str(failure)
-        self.app.call_from_thread(self.report_done, path, error)
-
-    def report_done(self, path, error: str | None) -> None:
+    def report_done(self, note: Note) -> None:
         self.writing = False
         self.show_report()
-        if error:
-            self.notify(f"The report could not be written: {error}", severity="error", timeout=10)
-        else:
-            self.notify(f"Report saved as {path}", timeout=8)
+        self.say(note)
+
+    def say(self, note: Note) -> None:
+        self.notify(note.words, severity=note.severity, timeout=note.seconds)
 
     def action_copy_report(self) -> None:
-        entry = reports.latest(self.report.days)
-        if entry is None:
-            self.notify("No report for this period yet: r writes one.", severity="warning")
+        text = statsmodel.report_text(self.report)
+        if text is None:
+            self.say(statsmodel.NO_REPORT)
             return
-        copy_text(self.app, entry["text"])
-        self.notify("Report copied: paste it where your team reads it.", timeout=4)
+        copy_text(self.app, text)
+        self.say(statsmodel.COPIED)
 
     def action_tab(self, step: int) -> None:
         tabs = self.query_one(TabbedContent)
@@ -504,13 +479,9 @@ class StatsScreen(ModalScreen[None]):
         if first:
             self.app.call_from_thread(self.shown_first, self.project_list(self.report),
                                       self.tab_parts(self.report, None, ""))
-        all_time = period == stats.ALL_TIME
-        report = history.collect(None if all_time else period)
-        longer = None if all_time else history.collect(period * 2)
-        projects = self.project_list(report)
-        shown, before = self.narrowed(report, longer, self.project)
-        parts = self.tab_parts(shown, before, dict(projects).get(self.project, ""))
-        self.app.call_from_thread(self.recounted, period, report, longer, shown, before, projects, parts)
+        counted = statsmodel.recount(period, self.project, self.sessions, self.accent)
+        self.app.call_from_thread(self.recounted, counted.period, counted.report, counted.longer, counted.shown,
+                                  counted.before, counted.projects, counted.parts)
 
     def shown_first(self, projects: list[tuple[str, str]], parts: dict[str, list]) -> None:
         self.projects = projects
@@ -518,11 +489,7 @@ class StatsScreen(ModalScreen[None]):
 
     def narrowed(self, report: Report, longer: Report | None, project: str) -> tuple[Report, stats.Before | None]:
         """The count of the one project (or all), and the period before it (in a worker: it takes a moment)."""
-        if not project:
-            return report, None if longer is None else stats.before(longer, report.days, self.sessions)
-        shown = stats.only(report, self.sessions, project)
-        return shown, None if longer is None else stats.before(stats.only(longer, self.sessions, project),
-                                                               report.days, self.sessions)
+        return statsmodel.narrowed(report, longer, project, self.sessions)
 
     def recounted(self, period: int, report: Report, longer: Report | None, shown: Report,
                   before: stats.Before | None, projects: list[tuple[str, str]], parts: dict[str, list]) -> None:
@@ -534,9 +501,7 @@ class StatsScreen(ModalScreen[None]):
         """p: the next project of the period's, by tokens, then all of them again; P the other way."""
         if self.counting:
             return
-        keys_ = [""] + [key for key, _ in self.projects]
-        at = keys_.index(self.project) if self.project in keys_ else 0
-        self.project = keys_[(at + step) % len(keys_)]
+        self.project = statsmodel.stepped(self.projects, self.project, step)
         self.counting = True
         self.show_head()
         self.refilter(self.project)
@@ -555,13 +520,7 @@ class StatsScreen(ModalScreen[None]):
 
     @work(thread=True, exclusive=True, group="export")
     def action_export(self) -> None:
-        try:
-            as_json, as_csv = stats.write_files(self.shown, self.sessions)
-        except OSError as error:
-            self.app.call_from_thread(self.notify, f"Export failed: {error}", severity="error")
-            return
-        self.app.call_from_thread(self.notify, f"Saved {as_json.name} and {as_csv.name} in {as_json.parent}",
-                                  timeout=8)
+        self.app.call_from_thread(self.say, statsmodel.export(self.shown, self.sessions))
 
     def action_close(self) -> None:
         self.dismiss(None)

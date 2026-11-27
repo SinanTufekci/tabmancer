@@ -4,7 +4,8 @@ you were, the tokens, the time, the sessions, the tools, then the card that sums
 the week, the month or all of the time kept, f turns it between the wide shape and the story one,
 p shares the slide shown (X, Bluesky, Threads, Instagram: share.py), s saves it as a PNG, g as a
 GIF with its numbers counting up, c copies it, n puts the top project's name on it (left off
-otherwise: wrapped.py draws them all)."""
+otherwise: wrapped.py draws them all). The words and the doings are wrappedwords.py's, one copy with the
+desktop window's Wrapped dialog."""
 
 from __future__ import annotations
 
@@ -19,14 +20,16 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList, Static
 from textual.widgets.option_list import Option
 
-from . import card, history, share, sixel, wrapped
+from . import card, share, sixel, wrapped, wrappedwords
+from .actions import Note
 from .dialogs import frame, pills, title
 from .safework import work
 from .theme import MUTED, TEXT, keys
 from .tokenchart import PixelPicture
+from .wrappedwords import WORDS
+from .wrappedwords import hex_colour as _hex
 
 _SHIFTED = bytes((n + 1) % 256 for n in range(256))  # the card's palette after a None for "nothing drawn"
-WORDS = "w"  # the share menu's key for copying the post's words alone
 
 
 def _rgb(colour: str) -> tuple[int, int, int]:
@@ -98,10 +101,6 @@ class CardPicture(PixelPicture, Static):
         return in_words(self.week, self.accent, cramped)
 
 
-def _hex(colour: tuple[int, int, int]) -> str:
-    return "#{:02x}{:02x}{:02x}".format(*colour)
-
-
 SIGNS = {"TOKENS": "◆", "AT WORK": "◷", "SESSIONS": "▣", "SIDE BY SIDE": "⧉", "CLAUDE WROTE": "≡",
          "FILES EDITED": "▤", "MODELS": "#", "BROUGHT BACK": "↺", "STREAK": "▲", "BUSIEST DAY": "▦",
          "LONGEST SESSION": "⧗", "TOP TOOL": "⚒"}  # the card's icons, in characters
@@ -157,7 +156,7 @@ class WrappedScreen(ModalScreen[None]):
         Binding("c", "copy", "Copy"),
         Binding("n", "names", "Project names"),
     ]
-    PERIODS: ClassVar[dict[int, str]] = {7: "week", 30: "month", 0: "all time"}
+    PERIODS: ClassVar[dict[int, str]] = wrappedwords.PERIODS
 
     def __init__(self, week: wrapped.Week, accent: str) -> None:
         super().__init__()
@@ -175,17 +174,13 @@ class WrappedScreen(ModalScreen[None]):
                 yield Static(self.shapes(), id="wrapped-shape")
             yield CardPicture(self.week, self.accent, self.shape, self.slide, self.names)
             yield Label(self.about(), id="wrapped-about")
-            yield Label(keys(("← →", "slides"), ("1 2 3", "week, month, all time"), ("p", "share"),
-                             ("f", "wide or story"), ("s", "save"), ("g", "save it moving"), ("c", "copy"),
-                             ("n", "names"), ("Esc", "close")), classes="hint")
+            yield Label(keys(*wrappedwords.KEY_PAIRS), classes="hint")
 
     def heading(self) -> Text:
-        muted = _hex(wrapped.MUTED)
-        out = Text.assemble(("Claude Code ", f"bold {TEXT}"), ("Wrapped", f"bold {self.accent}"),
-                            (f"   {wrapped.span(self.week)}   ", muted))
+        out = Text.assemble(*wrappedwords.title_parts(self.week, self.accent))
         out.append_text(pills(list(self.PERIODS.values()), self.PERIODS.get(self.period, "week")))
         if self.counting:
-            out.append("   counting…", style=f"italic {muted}")
+            out.append(*wrappedwords.COUNTING)
         return out
 
     def show(self) -> None:
@@ -196,8 +191,7 @@ class WrappedScreen(ModalScreen[None]):
         self.query_one("#wrapped-about", Label).update(self.about())
 
     def action_slide(self, step: int) -> None:
-        at = wrapped.SLIDES.index(self.slide)
-        self.slide = wrapped.SLIDES[(at + step) % len(wrapped.SLIDES)]
+        self.slide = wrappedwords.stepped(self.slide, step)
         self.show()
 
     def action_names(self) -> None:
@@ -214,9 +208,7 @@ class WrappedScreen(ModalScreen[None]):
     @work(thread=True, exclusive=True)
     def recount(self, days: int) -> None:
         """The period counted with the kept days (history.py), and the one before it as long."""
-        report = history.collect(None if days == 0 else max(14, days * 2))
-        week = wrapped.week(report, {}, days=None if days == 0 else days)
-        self.app.call_from_thread(self.recounted, days, week)
+        self.app.call_from_thread(self.recounted, days, wrappedwords.recount(days))
 
     def recounted(self, days: int, week: wrapped.Week) -> None:
         self.period, self.week, self.counting = days, week, False
@@ -224,42 +216,31 @@ class WrappedScreen(ModalScreen[None]):
 
     def shapes(self) -> Text:
         """The two cards, the one shown marked, and the key that turns it."""
-        return Text.assemble(pills(["wide", "story"], self.shape, labels={"wide": "wide, for posts",
-                                                                          "story": "story, for Instagram"}),
-                             ("   f", _hex(wrapped.MUTED)))
+        return Text.assemble(pills(list(wrappedwords.SHAPES), self.shape, labels=wrappedwords.SHAPES),
+                             ("   f", wrappedwords.MUTED))
 
     def about(self) -> Text:
-        muted = _hex(wrapped.MUTED)
-        out = Text(style=muted)
-        at = wrapped.SLIDES.index(self.slide)
-        out.append("".join("●" if k == at else "·" for k in range(len(wrapped.SLIDES))) + "  ", style=self.accent)
-        out.append(f"{wrapped.SLIDE_NAMES[self.slide]}   ", style=f"bold {TEXT}")
-        out.append("Counts only; " + ("the top project's name is on the tools slide (n leaves it off). "
-                                       if self.names else "no project names (n puts the top one on). ")
-                   + "Nothing is posted until you post it.")
+        out = Text(style=wrappedwords.MUTED)
+        for words, style in wrappedwords.about_parts(self.slide, self.names, self.accent):
+            out.append(words, style=style)
         return out
 
     def canvas(self) -> card.Canvas:
         return wrapped.draw(self.week, _rgb(self.accent), shape=self.shape, slide=self.slide, names=self.names)
 
     def action_turn(self) -> None:
-        self.shape = "story" if self.shape == "wide" else "wide"
+        self.shape = wrappedwords.turned(self.shape)
         self.show()
 
     @work(thread=True, exclusive=True, group="moving")
     def action_save_moving(self) -> None:
         """g: the slide as a GIF, its numbers counting up (a second or two to draw)."""
         week, shape, slide, names = self.week, self.shape, self.slide, self.names
-        self.app.call_from_thread(self.notify, "Drawing the moving card…", timeout=3)
-        try:
-            data = wrapped.moving(week, _rgb(self.accent), shape, slide, names)
-            path = card.save_data(data, wrapped.filename(week, shape, slide, "gif"))
-        except OSError as error:
-            self.app.call_from_thread(self.notify, f"The moving card was not saved: {error}", severity="error",
-                                      timeout=10)
-            return
-        self.app.call_from_thread(self.notify, f"Saved as {path}: a GIF, for a post that takes one (X does).",
-                                  timeout=10)
+        self.app.call_from_thread(self.say, wrappedwords.DRAWING)
+        self.app.call_from_thread(self.say, wrappedwords.saved_moving(week, _rgb(self.accent), shape, slide, names))
+
+    def say(self, note: Note, title: str = "") -> None:
+        self.notify(note.words, title=title, severity=note.severity, timeout=note.seconds)
 
     def action_share(self) -> None:
         def chosen(key: str | None) -> None:
@@ -267,34 +248,21 @@ class WrappedScreen(ModalScreen[None]):
                 from .statsview import copy_text
 
                 copy_text(self.app, wrapped.words(self.week))
-                self.notify("The post's words are on the clipboard.", timeout=6)
+                self.say(wrappedwords.WORDS_COPIED)
                 return
-            place = next((p for p in share.PLACES if p.key == key), None)
-            if place is None:
+            if key is None:
                 return
-            try:
-                done = share.share(place, self.week, _rgb(self.accent), slide=self.slide, names=self.names)
-            except OSError as error:
-                self.notify(f"The card was not saved: {error}", severity="error", timeout=10)
-                return
-            self.notify(done.note, title=f"Wrapped for {place.label}", timeout=14)
+            done = wrappedwords.shared(key, self.week, _rgb(self.accent), self.slide, self.names)
+            if done is not None:
+                self.say(done[1], title=done[0])
 
         self.app.push_screen(ShareMenu(self.week), chosen)
 
     def action_save(self) -> None:
-        try:
-            path = card.save(self.canvas(), wrapped.filename(self.week, self.shape, self.slide))
-        except OSError as error:
-            self.notify(f"The card was not saved: {error}", severity="error", timeout=10)
-            return
-        self.notify(f"Saved as {path}", timeout=10)
+        self.say(wrappedwords.saved(self.canvas(), self.week, self.shape, self.slide))
 
     def action_copy(self) -> None:
-        if card.copy_picture(self.canvas()):
-            self.notify("Copied: paste it where you share it.", timeout=6)
-        else:
-            self.notify("This system's clipboard took no picture: s saves it as a file.", severity="warning",
-                        timeout=8)
+        self.say(wrappedwords.COPIED if card.copy_picture(self.canvas()) else wrappedwords.NOT_COPIED)
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -319,16 +287,13 @@ class ShareMenu(ModalScreen[str | None]):
         self.week = week
 
     def compose(self) -> ComposeResult:
-        options = [Option(Text.assemble((f"{place.key}  ", f"bold {TEXT}"), (f"{place.label:<11}", f"bold {TEXT}"),
-                                        (place.how, MUTED)), id=place.key) for place in share.PLACES]
-        options.append(Option(Text.assemble((f"{WORDS}  ", f"bold {TEXT}"), (f"{'The words':<11}", f"bold {TEXT}"),
-                                            ("copy what the post says, for anywhere else", MUTED)), id=WORDS))
+        options = [Option(Text.assemble((f"{key}  ", f"bold {TEXT}"), (f"{label:<11}", f"bold {TEXT}"), (how, MUTED)),
+                          id=key) for key, label, how in wrappedwords.share_choices()]
         with Vertical():
-            yield Label(title("Share your week", "nothing is posted until you post it"))
+            yield Label(title(*wrappedwords.SHARE_TITLE))
             yield OptionList(*options)
             yield Label(Text.assemble(("The post says: ", MUTED), (wrapped.words(self.week), TEXT)), id="share-words")
-            yield Label(keys(("Enter", "take it there"), ("x b t i w", "the same, at once"), ("Esc", "cancel")),
-                        classes="hint")
+            yield Label(keys(*wrappedwords.SHARE_KEY_PAIRS), classes="hint")
 
     def on_mount(self) -> None:
         self.query_one(OptionList).focus()
