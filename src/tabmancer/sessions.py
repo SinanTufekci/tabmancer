@@ -302,6 +302,16 @@ def unreadable(error: Exception) -> None:
     UNREADABLE[f"{type(error).__name__}: {error}"[:160]] += 1
 
 
+def unreadable_words() -> str:
+    """What a dashboard says once its list is up while transcripts could not be read (UNREADABLE); "" for none."""
+    count = sum(UNREADABLE.values())
+    if not count:
+        return ""
+    if count == 1:
+        return "1 transcript could not be read and is left out of the list: tabmancer doctor says more."
+    return f"{count} transcripts could not be read and are left out of the list: tabmancer doctor says more."
+
+
 def _parse_lines(chunk: bytes, drop_first: bool, drop_last: bool) -> list[dict]:
     lines = chunk.split(b"\n")
     if drop_first:

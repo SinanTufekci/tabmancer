@@ -112,7 +112,7 @@ from ..bgjobs import Job
 from ..config import NOT_SAVED, UI_TRIES, Busy
 from ..keys import KEYS, MONITOR_KEYS
 from ..palette import mix
-from ..sessions import Exit, Session, Status, folder_key
+from ..sessions import Exit, Session, Status, folder_key, unreadable_words
 from ..store import DAYS, DashboardStore, DashSnapshot
 from ..teamforms import JoinTeam, TellTeam
 from . import (
@@ -776,6 +776,8 @@ class MainWindow(QMainWindow):
             self.say(VM.shutdown_hello(len(self.preselected)), 6)
         elif not self.said_timer.isActive():
             self.show_bit()
+        if starting and (unread := unreadable_words()):  # as the terminal says it once its list is up; after the hello
+            self.front.show_bit(alerts.Bit("say", unread, tone="amber", seconds=15))
         if starting and self.engine.state.acts:
             self.front.start_wrapped()  # after Bit's hello: Friday's word on the week
         came_up = self.opener.seen(snap.sessions)  # opened from here a while ago, and never showed open?
