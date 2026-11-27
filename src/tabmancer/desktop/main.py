@@ -1412,7 +1412,8 @@ class MainWindow(QMainWindow):
             self.table.tick(now)  # its stars turn, its light sweeps, its red breathes
 
     def show_keys(self) -> None:
-        KeysDialog(self, "Keys · tabmancer", WINDOW_KEYS, HERE, ELSEWHERE, own=TERMINALS).show()
+        KeysDialog(self, "Keys · tabmancer", WINDOW_KEYS, HERE, ELSEWHERE, own=TERMINALS,
+                   run=self.run_key).show()
 
     def open_commands(self) -> None:
         """Ctrl+K: the palette, over every key of the dashboard (the ones done in the terminal dashboard

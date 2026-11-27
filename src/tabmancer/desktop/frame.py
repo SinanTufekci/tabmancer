@@ -16,14 +16,15 @@ from collections.abc import Callable, Generator, Mapping
 from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QObject, Qt, QTimer
+from PySide6.QtCore import QByteArray, QEvent, QObject, Qt, QTimer
 from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QDockWidget,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
-    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +32,8 @@ from PySide6.QtWidgets import (
 from ..config import config_dir, merge_json, read_json
 from ..demo import ENVIRON as DEMO_ENV  # what demo.prepare points elsewhere, put back after (made_up_world)
 from . import look
+from .formparts import keys_html
+from .widgets import text_label
 
 KNOCK_MS = 500  # how long a second window waits for the first to answer
 LAYOUT_FILE = "desktop.json"
@@ -178,29 +181,111 @@ def place_new(window: QMainWindow, known: set[str] | None, dock: QDockWidget, be
     dock.show()
 
 
+KEY_ROLE = Qt.ItemDataRole.UserRole  # a line's key; none on a group's heading or a gap
+KEYS_NOTE = "Enter runs the picked key, as if it had been pressed in the window."
+KEYS_SELF = "? opens this list."
+
+
 class KeysDialog(QDialog):
     """?: every key, what it does, and where the ones this window does not do are done (elsewhere; own: a key's
-    own words for that)."""
+    own words for that). With run, as the terminal's ? menu: ↑↓ picks a line, Enter (or a double click) runs its
+    key as if pressed, this list gone first; a greyed one only says why, under the list. q, ? and Esc close it."""
 
     def __init__(self, parent: QWidget, title: str, groups: list, here: set[str], elsewhere: str,
-                 own: Mapping[str, str] | None = None) -> None:
+                 own: Mapping[str, str] | None = None, run: Callable[[str], None] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(760, 560)
+        self.run = run
+        self.where = {key: (own or {}).get(key, elsewhere) for _, keys in groups for key, _, _ in keys
+                      if key not in here}
         box = QVBoxLayout(self)
-        text = QTextBrowser()
-        text.setFont(look.font(9.5))
-        rows = []
-        for group, keys in groups:
-            rows.append(look.span(group.upper(), f"bold {look.MUTED}"))
+        top = text_label("", look.TEXT, 9.5)
+        top.setText(look.span("Every key", f"bold {look.TEXT}") + look.span(
+            "   the menus and the footer show the common ones" + ("; Enter runs any of these" if run else ""),
+            look.MUTED))
+        box.addWidget(top)
+        self.rows = QListWidget()
+        self.rows.setFont(look.font(9.5))
+        self.rows.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.rows.setWordWrap(True)
+        for n, (group, keys) in enumerate(groups):
+            if n:
+                self.add_line("")
+            self.add_line(group.upper(), look.MUTED, bold=True)
             for key, _action, words in keys:
-                where = "" if key in here else look.span(f"   ({(own or {}).get(key, elsewhere)})", look.DIM)
-                rows.append(look.span(f"{key:<6}", f"bold {look.TEXT if key in here else look.DIM}")
-                            + look.span(words, look.TEXT if key in here else look.MUTED) + where)
-            rows.append("")
-        text.setHtml(f'<pre style="font-family:{look.mono_family()}">' + "<br>".join(rows) + "</pre>")
-        box.addWidget(text)
-        self.setStyleSheet(f"QDialog {{ background:{look.SURFACE}; }}")
+                where = f"   ({self.where[key]})" if key in self.where else ""
+                self.add_line(f"{key:<6}{words}{where}", look.DIM if where else look.TEXT, key=key)
+        box.addWidget(self.rows, 1)
+        self.note = text_label("", look.MUTED, 9, wrap=True)
+        box.addWidget(self.note)
+        hint = text_label("", look.DIM, 8.5)
+        hint.setText(keys_html([("↑ ↓", "pick"), ("Enter", "run it"), ("Esc", "close")] if run else
+                               [("Esc", "close")]))
+        box.addWidget(hint)
+        self.setStyleSheet(f"QDialog {{ background:{look.SURFACE}; }}"
+                           f"QListWidget {{ background:{look.SURFACE}; border:none; outline:none; }}"
+                           f"QListWidget::item:selected {{ background:{look.FAINT}; }}")
+        self.rows.currentItemChanged.connect(lambda *_: self.show_note())
+        self.rows.itemActivated.connect(self.run_picked)
+        self.rows.installEventFilter(self)
+        lines = (self.rows.item(n) for n in range(self.rows.count()))
+        first = next((item for item in lines if item.data(KEY_ROLE)), None)
+        if first is not None:
+            self.rows.setCurrentItem(first)
+        self.rows.setFocus()
+
+    def add_line(self, words: str, colour: str = look.TEXT, *, bold: bool = False, key: str | None = None) -> None:
+        item = QListWidgetItem(words)
+        item.setForeground(look.qcolor(colour))
+        if bold:
+            item.setFont(look.font(9.5, True))
+        if key is None:
+            item.setFlags(Qt.ItemFlag.NoItemFlags)  # a heading or a gap: never picked
+        else:
+            item.setData(KEY_ROLE, key)
+            item.setToolTip(self.where.get(key, ""))
+        self.rows.addItem(item)
+
+    def picked(self) -> str | None:
+        item = self.rows.currentItem()
+        return item.data(KEY_ROLE) if item is not None else None
+
+    def show_note(self, loud: bool = False) -> None:
+        """Under the list: why the picked key is greyed (amber when Enter asked for it), else what Enter does."""
+        key = self.picked()
+        if key in self.where:
+            words, colour = self.where[key], look.AMBER if loud else look.MUTED
+        elif key is None or self.run is None:
+            words, colour = "", look.DIM
+        else:
+            words, colour = (KEYS_SELF if key == "?" else KEYS_NOTE), look.DIM
+        self.note.setText(words)
+        self.note.setStyleSheet(f"color:{colour}; background:transparent;")
+
+    def run_picked(self, *_) -> None:
+        """Enter or a double click: the picked key runs once this list has gone (the event loop's next turn, so
+        it acts on its window, not in here); a greyed one says why; ? is this list itself."""
+        key = self.picked()
+        if key is None or self.run is None:
+            return
+        if key in self.where:
+            self.show_note(loud=True)
+            return
+        self.close()
+        if key != "?":
+            QTimer.singleShot(0, partial(self.run, key))
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """q and ? close the list, as the terminal's (typed, never looked for among the lines)."""
+        if watched is self.rows and event.type() == QEvent.Type.KeyPress and event.text() in ("q", "?"):
+            self.close()
+            return True
+        return super().eventFilter(watched, event)
+
+    def plain(self) -> str:
+        """The list as plain text, a line each."""
+        return "\n".join(self.rows.item(n).text() for n in range(self.rows.count()))
 
 
 @contextlib.contextmanager

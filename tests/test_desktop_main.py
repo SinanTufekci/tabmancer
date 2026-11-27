@@ -24,7 +24,7 @@ import shiboken6
 from PySide6.QtCore import QObject, QPoint, Qt
 from PySide6.QtGui import QContextMenuEvent, QTextDocument
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QDockWidget, QMenu, QTextBrowser
+from PySide6.QtWidgets import QApplication, QDialog, QDockWidget, QMenu
 from qt_later import later  # noqa: F401  (a fixture)
 
 from tabmancer import (
@@ -1499,14 +1499,27 @@ def test_question_mark_lists_the_keys_and_q_closes(qapp, window):
     assert not shown.isVisible()
 
 
-def keys_list(qapp, shown) -> str:
-    """What ? lists, as plain text (the dialog closed again)."""
+def keys_dialog(qapp, shown) -> frame.KeysDialog:
+    """? pressed: the list it opens."""
     shown.actions_by_key["?"].trigger()
     qapp.processEvents()
     (dialog,) = [w for w in qapp.topLevelWidgets() if isinstance(w, frame.KeysDialog) and w.isVisible()]
-    text = dialog.findChild(QTextBrowser).toPlainText()
+    return dialog
+
+
+def keys_list(qapp, shown) -> str:
+    """What ? lists, as plain text (the dialog closed again)."""
+    dialog = keys_dialog(qapp, shown)
+    text = dialog.plain()
     dialog.close()
     return text
+
+
+def pick_line(dialog: frame.KeysDialog, key: str) -> None:
+    rows = dialog.rows
+    (item,) = [rows.item(n) for n in range(rows.count()) if rows.item(n).data(frame.KEY_ROLE) == key]
+    rows.setCurrentItem(item)
+    rows.scrollToItem(item)  # in sight, for a click on it
 
 
 def test_one_look_here_t_in_no_list_and_the_theme_picked_in_the_terminal_never_read(qapp, window):
@@ -1542,6 +1555,72 @@ def test_v_is_the_terminals_own_said_so_wherever_it_shows_and_j_has_its_place_on
     assert not by_key["V"].enabled and by_key["V"].why == own
     assert not by_key["b"].enabled and by_key["b"].why == main.ELSEWHERE
     shown.command_bar.hide()
+
+
+def test_enter_on_a_line_of_question_mark_runs_its_key_as_the_terminals_menu_does(qapp, window):
+    """Sinan's call (2026-11-27): ? runs the picked key, as the terminal's ? menu. ↑↓ steps over the groups'
+    headings and gaps; Enter on l's line: the list goes and the live view comes, l again (a double click) goes
+    back; Enter on ?'s own line only closes it."""
+    shown = window()
+    before = shown.view
+    assert before != "live"
+    dialog = keys_dialog(qapp, shown)
+    assert dialog.picked() is not None and dialog.rows.hasFocus()
+    for _ in range(dialog.rows.count()):
+        QTest.keyClick(dialog.rows, Qt.Key.Key_Down)
+        assert dialog.picked() is not None  # never a heading nor a gap
+    pick_line(dialog, "l")
+    assert dialog.note.text() == frame.KEYS_NOTE
+    QTest.keyClick(dialog.rows, Qt.Key.Key_Return)
+    qapp.processEvents()
+    assert not dialog.isVisible() and shown.view == "live"
+    dialog = keys_dialog(qapp, shown)
+    pick_line(dialog, "l")
+    rows = dialog.rows
+    at = rows.visualItemRect(rows.currentItem()).center()
+    QTest.mouseClick(rows.viewport(), Qt.MouseButton.LeftButton, pos=at)  # picked (it was): nothing runs yet
+    qapp.processEvents()
+    assert dialog.isVisible() and shown.view == "live"
+    QTest.mouseDClick(rows.viewport(), Qt.MouseButton.LeftButton, pos=at)
+    qapp.processEvents()
+    assert not dialog.isVisible() and shown.view == before
+    dialog = keys_dialog(qapp, shown)
+    pick_line(dialog, "?")
+    assert dialog.note.text() == frame.KEYS_SELF
+    QTest.keyClick(dialog.rows, Qt.Key.Key_Return)
+    qapp.processEvents()
+    assert not [w for w in qapp.topLevelWidgets() if isinstance(w, frame.KeysDialog) and w.isVisible()]
+
+
+def test_a_greyed_line_of_question_mark_says_why_and_runs_nothing(qapp, window, monkeypatch):
+    """b (Bit's look, to come with the pet) and V (the terminal's own): picked, the line under the list says where
+    it is done; Enter says it louder and runs nothing, the list staying."""
+    shown = window()
+    ran = []
+    monkeypatch.setattr(shown, "run_key", ran.append)
+    dialog = keys_dialog(qapp, shown)
+    pick_line(dialog, "b")
+    assert dialog.note.text() == main.ELSEWHERE and look.AMBER not in dialog.note.styleSheet()
+    QTest.keyClick(dialog.rows, Qt.Key.Key_Return)
+    qapp.processEvents()
+    assert dialog.isVisible() and ran == [] and look.AMBER in dialog.note.styleSheet()
+    pick_line(dialog, "V")
+    assert dialog.note.text() == main.TERMINALS["V"]
+    pick_line(dialog, "j")
+    QTest.keyClick(dialog.rows, Qt.Key.Key_Return)
+    qapp.processEvents()
+    assert ran == ["j"]  # what is done here goes to the window's own run_key
+
+
+def test_q_and_question_mark_close_the_keys_list_and_never_quit(qapp, window):
+    """In the list, q and ? close it, as the terminal's: typed there, never the window's own q (quit)."""
+    shown = window()
+    for key, held in ((Qt.Key.Key_Q, Qt.KeyboardModifier.NoModifier),
+                      (Qt.Key.Key_Question, Qt.KeyboardModifier.ShiftModifier)):
+        dialog = keys_dialog(qapp, shown)
+        QTest.keyClick(dialog.rows, key, held)
+        qapp.processEvents()
+        assert not dialog.isVisible() and shown.isVisible()
 
 
 def test_a_second_open_brings_the_first_forward(qapp, window, monkeypatch):
