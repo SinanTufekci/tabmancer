@@ -22,10 +22,14 @@ from ..sessions import Session
 Summarize = Callable[[Session], summarize.Summary]
 
 
-def stamp() -> int | None:
-    """summaries.json's last change (ns), or None when there is none to read."""
+def stamp() -> tuple[int, int, int] | None:
+    """summaries.json as it is now (its last change in ns, its size, its file id), or None when there is none
+    to read. Not the time alone: two writes inside one tick of the file system's clock (a busy machine) keep
+    it, and the second would be missed; each write replaces the file (config.write_json), so the id changes.
+    """
     try:
-        return (config_dir() / summarize.FILE).stat().st_mtime_ns
+        found = (config_dir() / summarize.FILE).stat()
+        return found.st_mtime_ns, found.st_size, found.st_ino
     except OSError:
         return None
 

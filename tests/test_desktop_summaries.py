@@ -19,7 +19,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from tabmancer import summarize
-from tabmancer.desktop.summaries import Summarizer
+from tabmancer.config import config_dir
+from tabmancer.desktop.summaries import Summarizer, stamp
 from tabmancer.sessions import Session
 
 
@@ -99,6 +100,23 @@ def test_a_summary_the_terminal_writes_shows_after_a_reread(qapp):
     assert summarizer.summaries == {} and not summarizer.reread()
     assert summarize._store("x", {"summary": "From the terminal."})
     assert summarizer.reread() and summarizer.summaries == {"x": {"summary": "From the terminal."}}
+
+
+def test_a_write_inside_one_tick_of_the_clock_is_read_all_the_same(qapp):
+    """Two writes the file system dates alike (a busy machine): the second is still seen, by its size or,
+    the same size too, by the file each write puts in place."""
+    path = config_dir() / summarize.FILE
+    assert summarize._store("t", {"summary": "AAA"})
+    summarizer = Summarizer(run=lambda session: summarize.Summary({}, True))
+    first = path.stat().st_mtime_ns
+    assert summarize._store("t", {"summary": "BBB"})  # the same size
+    os.utime(path, ns=(first, first))  # and dated as the first
+    assert summarizer.reread() and summarizer.summaries["t"] == {"summary": "BBB"}
+    assert summarize._store("t", {"summary": "CCCC"})
+    os.utime(path, ns=(first, first))
+    assert summarizer.reread() and summarizer.summaries["t"] == {"summary": "CCCC"}
+    assert not summarizer.reread()
+    assert stamp() == summarizer.seen and stamp()[0] == first  # type: ignore[index]
 
 
 def test_by_default_it_runs_summarize_as_the_terminal_does(qapp):
