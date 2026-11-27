@@ -449,11 +449,11 @@ def test_a_greyed_command_says_why_and_does_nothing(qapp, window):
     read(qapp, shown)
     shown.open_commands()
     bar = shown.command_bar
-    QTest.keyClicks(bar.line, "wrapped")
-    assert bar.picked().key == "W" and not bar.picked().enabled  # Claude Code Wrapped first, greyed here
+    QTest.keyClicks(bar.line, "bit in pixels")
+    assert bar.picked().key == "b" and not bar.picked().enabled  # Bit's look first, greyed here till the pet
     assert bar.note.text() == main.ELSEWHERE
     ran = []
-    shown.actions_by_key["W"].triggered.connect(lambda *_: ran.append(1))
+    shown.actions_by_key["b"].triggered.connect(lambda *_: ran.append(1))
     QTest.keyClick(bar.line, Qt.Key.Key_Return)
     assert bar.isVisible() and ran == []
     QTest.keyClicks(bar.line, "zzqqx")
@@ -1500,12 +1500,12 @@ def test_v_is_the_terminals_own_said_so_wherever_it_shows_and_j_has_its_place_on
     assert "V" not in dict(main.KEY_BAR) and dict(main.KEY_BAR)["j"] == "needs you" and "j" not in shown.keybar.dim
     lines = keys_list(qapp, shown).splitlines()
     (v_line,) = [line for line in lines if line.startswith("V ")]
-    (w_line,) = [line for line in lines if line.startswith("W ")]
-    assert v_line.endswith(f"({own})") and w_line.endswith(f"({main.ELSEWHERE})")
+    (b_line,) = [line for line in lines if line.startswith("b ")]  # Bit's look: to come with the pet
+    assert v_line.endswith(f"({own})") and b_line.endswith(f"({main.ELSEWHERE})")
     shown.open_commands()
     by_key = {entry.key: entry for entry in shown.command_bar.entries if entry.kind == "key"}
     assert not by_key["V"].enabled and by_key["V"].why == own
-    assert not by_key["W"].enabled and by_key["W"].why == main.ELSEWHERE
+    assert not by_key["b"].enabled and by_key["b"].why == main.ELSEWHERE
     shown.command_bar.hide()
 
 
