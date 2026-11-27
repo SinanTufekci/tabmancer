@@ -223,7 +223,7 @@ def test_the_dashboards_state_is_the_engines():
     assert engine.FORWARDED == ("acts", "sessions", "queued", "queued_elsewhere", "unasked", "notes", "told_crowded",
                                 "told_idle",
                                 "background_live", "openings", "full_poll_due", "full_polls", "armed", "armed_unsaved",
-                                "told_limit", "actor_misses", "told_alone", "told_update", "updating_claude",
+                                "told_limit", "actor_misses", "ended", "told_alone", "told_update", "updating_claude",
                                 "after_claude_update", "account", "signed_as", "told_agy_out",
                                 "handing_team", "kept_handovers", "team_seen", "team_presses")
     for name in engine.FORWARDED:
@@ -425,6 +425,22 @@ def test_only_a_dashboard_takes_the_lock_and_only_the_one_that_acts_lets_it_go(m
     dashboard.mount()
     dashboard.unmount()
     assert done == ["claim", "release"] and dashboard.state.acts
+    # One that watched lets it go too: a look under way may have taken it as it closed (release: only its own).
+    monkeypatch.setattr(actor, "claim", lambda: done.append("claim") or False)
+    watching = made(Front())
+    watching.mount()
+    watching.unmount()
+    assert done[2:] == ["claim", "release"] and not watching.state.acts
+
+
+def test_a_look_back_after_the_end_starts_nothing():
+    """A look under way as the dashboard closed, its finding back after (unmount): dropped, whatever it found."""
+    front = Front()
+    ended = made(front, ended=True)
+    for look in (engine.Look("took"), engine.Look("acting", held={"pid": 4242}), engine.Look("monitor", alone=True),
+                 engine.Look("watching", armed={"made-up": NOW})):
+        ended.seen(look)
+    assert not ended.state.acts and ended.state.armed == {} and front.calls == []
 
 
 async def test_the_dashboards_timers_are_the_schedule(fake_home, monkeypatch):

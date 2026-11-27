@@ -300,6 +300,7 @@ class EngineState:
     armed_unsaved: bool = False  # the sessions to continue could not be saved, and that was said
     told_limit: set[str] = field(default_factory=set)  # sessions Bit has said are stopped at a limit
     actor_misses: int = 0  # looks in a row that found no lock it could read (seen)
+    ended: bool = False  # unmounted: what a look still under way finds is dropped (seen)
     told_alone: bool = False  # a monitor said no dashboard is open
     told_update: str | None = None  # the newer tabmancer already told of
     updating_claude: bool = False  # claude update running: sessions asked for wait for it
@@ -761,6 +762,8 @@ class Engine:
         acted is gone, else shows the sessions to continue as that one saved them. A monitor: says once
         each time that no dashboard is open."""
         state = self.state
+        if state.ended:
+            return  # it has closed: a look that took the lock meanwhile gave it back (unmount), nothing starts
         if look.kind == "monitor":
             if look.alone and not state.told_alone:
                 self.front.say_note(ALONE)
@@ -805,8 +808,10 @@ class Engine:
             self.front.say_who_acts(held)
 
     def unmount(self) -> None:
-        """At its end: the lock goes, for another to take."""
-        if self.state.acts:
+        """At its end: the lock goes, for another to take. Whether or not it acted: a look under way may have
+        taken it this moment, its finding not yet back (actor.release lets go of this process's lock only)."""
+        self.state.ended = True
+        if not self.front.monitoring():  # a monitor never takes it
             actor.release()
 
     # --- claude update, a newer tabmancer, Wrapped -------------------------------------------------------
