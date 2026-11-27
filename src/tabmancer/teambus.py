@@ -998,10 +998,27 @@ def install(team: str, created: str = "", members: list[str] | None = None) -> s
     return command(team)
 
 
+def console_python(python: str = "") -> str:
+    """The Python for a child tabmancer starts that has a console or pipes of its own to read and write
+    (a member's tab, an MCP server, a hook, a helper): python (sys.executable by default), but never
+    pythonw.exe, which has no console: started windowless (the tabmancer-startup or tabmancer-desktop
+    launcher, the monitor's window), sys.executable is pythonw, and a tab running it would show
+    nothing. python.exe beside it instead; off Windows, or with none beside it, as given. The one copy:
+    here, as this file also runs on its own (teambus_cli.py)."""
+    python = python or sys.executable
+    folder, name = os.path.split(python)
+    if sys.platform == "win32" and name.lower() == "pythonw.exe":
+        found = os.path.join(folder, "python.exe")
+        if os.path.isfile(found):
+            return found
+    return python
+
+
 def command(team: str) -> str:
     """The command that runs the team's copy of this file (what install writes), for prompts:
     `<command> listen <team> <member>`. Writes nothing."""
-    python = getattr(sys, "_base_executable", "") or sys.executable  # not a venv's: its files may be hidden
+    # not a venv's: its files may be hidden
+    python = console_python(getattr(sys, "_base_executable", "") or sys.executable)
     return f"{_plain_path(python)} -I {_plain_path(str(team_dir(team) / CLI_FILE))}"
 
 

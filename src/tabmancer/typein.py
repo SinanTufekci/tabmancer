@@ -53,9 +53,12 @@ def type_into(session_id: str, text: str) -> bool:
 
 
 def write_keys(pid: int, text: str) -> bool:
-    """The helper, run for one process's console."""
+    """The helper, run for one process's console: on python.exe, never pythonw (teambus.console_python),
+    should the window type in."""
+    from .teambus import console_python
+
     try:
-        result = subprocess.run([sys.executable, "-m", "tabmancer.typein", str(pid)], input=text,
+        result = subprocess.run([console_python(), "-m", "tabmancer.typein", str(pid)], input=text,
                                 capture_output=True, text=True, encoding="utf-8", timeout=HELPER_SECONDS,
                                 check=False, creationflags=DETACHED_PROCESS)
     except (OSError, subprocess.SubprocessError):

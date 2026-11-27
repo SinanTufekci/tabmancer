@@ -229,10 +229,12 @@ def _cmd_word(path: str) -> str:
 
 def files() -> dict[str, str]:
     """The plugin folder's files: name -> text. The commands run tabmancer's own interpreter, which
-    can import it (agy starts both outside its terminal sandbox)."""
+    can import it (agy starts both outside its terminal sandbox): never pythonw, should the window
+    install it (teambus.console_python)."""
     from . import __version__
+    from .teambus import console_python
 
-    python = sys.executable
+    python = console_python()
     return {
         "plugin.json": json.dumps({
             "name": NAME, "version": __version__,

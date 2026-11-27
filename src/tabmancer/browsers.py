@@ -188,7 +188,9 @@ def login_environment(place: str) -> tuple[tuple[str, str], ...]:
         path = launcher()
     except OSError:
         return ()
-    return (("BROWSER", str(path)), (PLACE, place), (PYTHON, sys.executable))
+    from .teambus import console_python  # never pythonw, should the window open the sign-in tab
+
+    return (("BROWSER", str(path)), (PLACE, place), (PYTHON, console_python()))
 
 
 def _start(argv: list[str]) -> bool:

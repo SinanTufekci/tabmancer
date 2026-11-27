@@ -24,7 +24,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import time
 import unicodedata
 from collections.abc import Iterator
@@ -1098,8 +1097,9 @@ def role_file(team: Team, member: Member) -> Path | None:
 
 
 def _tabmancer_cmd() -> tuple[str, ...]:
-    """How a tab invokes tabmancer itself (e.g. `tabmancer team run`)."""
-    return ("tabmancer",) if shutil.which("tabmancer") else (sys.executable, "-m", "tabmancer")
+    """How a tab invokes tabmancer itself (e.g. `tabmancer team run`, a member's MCP server): never
+    pythonw, which a window started windowless runs on (teambus.console_python)."""
+    return ("tabmancer",) if shutil.which("tabmancer") else (teambus.console_python(), "-m", "tabmancer")
 
 
 def bus_env(team: Team, member: Member) -> tuple[tuple[str, str], ...]:
