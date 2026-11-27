@@ -114,6 +114,11 @@ def said(shown) -> str:
     return shown.bit_line.text()
 
 
+def heard(shown) -> list[str]:
+    """Bit's line and the words waiting their turn there (the stopped one's limit is said first)."""
+    return [said(shown), *(words for words, _seconds, _colour in shown.front.waiting)]
+
+
 def test_c_shows_the_stopped_with_only_now_and_the_handover_where_the_window_never_acts(qapp, window):
     shown = window()
     assert not shown.engine.state.acts and shown.actions_by_key["c"].isEnabled()
@@ -166,7 +171,7 @@ def test_an_open_ones_prompt_is_typed_into_its_tab_on_a_thread(qapp, window, wor
     asked.ticked = [still.session_id]
     choose(qapp, asked, "now")
     shown.front.settle()
-    until(qapp, lambda: bool(world.typed) and "back at work" in said(shown))
+    until(qapp, lambda: bool(world.typed) and any("back at work" in words for words in heard(shown)))
     assert world.typed == [(still.session_id, PROMPT)] and world.tabs == [] and world.went == []
     assert QApplication.clipboard().text() == "left alone"
 

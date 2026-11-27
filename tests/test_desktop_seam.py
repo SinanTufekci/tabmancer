@@ -194,7 +194,7 @@ async def test_pins_and_hides_cross_within_a_poll_and_the_lock_stays_with_the_te
         assert shown.selected == shown.preselected == app.selected == app.preselected != set()  # the same ticks
         assert shown.bit_line.text() == f"Hi! {len(app.preselected)} were open when you shut down."
         shown.show_bit()  # after its hello
-        assert shown.bit_line.text() == "The terminal dashboard acts: this window watches."
+        assert shown.bit_line.text() == main.ACTS_THERE
         app.selected = set()  # f and x take the ticked ones: unticked in both, they take the one picked
         shown.selected = set()
         shown.show_ticked()

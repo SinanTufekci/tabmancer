@@ -4,9 +4,9 @@ A front end polls one from a worker thread every couple of seconds and draws wha
 the desktop monitor a TeamStore, the desktop main window a DashboardStore. Neither imports a UI, and
 both read what the terminal dashboard reads, about as often: the pid files at every poll and `claude
 agents --json` at every eighth, the token counts and git every minute, the plan limits every five.
-They keep nothing a dashboard keeps. They never record the plan limits (the dashboard's reading is
-shown while it is fresh), never ask agy for its quota (the one the dashboard saved is shown), and
-never claim the actor lock: they watch.
+They keep nothing a dashboard keeps. They never claim the actor lock and never ask agy for its quota (the
+one the dashboard saved is shown). The plan limits they record only for a window that acts (DashboardStore.acts,
+which the window sets: engine.read_usage); else the acting dashboard's reading is shown while it is fresh.
 
 The reading itself is here once: the terminal dashboard (app.py) calls the same helpers.
 """
@@ -424,6 +424,7 @@ class DashSnapshot:
     queued: dict[str, str] = field(default_factory=dict)  # h on a busy one, in any window: session id -> how
     background: dict[str, dict] = field(default_factory=dict)  # background sessions' jobs: Enter attaches to one
     open_at_shutdown: set[str] = field(default_factory=set)  # looked open at the last shutdown, read with the list
+    limits_read: int = 0  # the plan readings so far: one more, a new reading (Engine.usage says each one)
 
     def with_marks(self, now: marks.Marks) -> DashSnapshot:
         """The same reading with these marks: a window that has just pinned or hidden one shows it
@@ -444,9 +445,9 @@ def marked(sessions: dict[str, Session], now: marks.Marks, **facts) -> tuple[VM.
 
 class DashboardStore(Polled):
     """The whole dashboard, read again at each poll(): what the terminal dashboard reads, as often as
-    it does (app.poll_tick and its timers), by the same helpers. It watches, as a second dashboard
-    does: it never claims the actor lock, records neither the plan limits nor an account, never runs
-    agy, and saves no marks (the token counts' cache, which every reader of them shares, aside). Not
+    it does (app.poll_tick and its timers), by the same helpers. It never claims the actor lock (its
+    window does), records the plan limits only while its window acts (acts) and never an account, never
+    runs agy, and saves no marks (the token counts' cache, which every reader of them shares, aside). Not
     for two threads at once."""
 
     def __init__(self, *, days: float = DAYS, include_all: bool = False, ask_limits: bool = True,
@@ -455,6 +456,11 @@ class DashboardStore(Polled):
         self.days = days
         self.include_all = include_all  # sessions started by tools too (claude -p), as `tabmancer --all`
         self.ask_limits = ask_limits  # no fresh reading of the dashboard's: ask `claude -p /usage`, as a second dashboard does
+        # Its window holds the actor lock: the plan limits it reads are recorded (read_limits). Set by the window
+        # before each poll, read on the poll's thread.
+        self.acts = False
+        self.limits_again = False  # signed in with another account: the plan limits read at the next poll
+        self.limits_read = 0  # the plan readings so far (DashSnapshot.limits_read)
         self.sessions: dict[str, Session] = {}
         self.background: dict[str, dict] = {}  # background sessions, from the last full poll
         self.team_states: dict[str, teams.TeamState] = {}
@@ -485,6 +491,11 @@ class DashboardStore(Polled):
         (reload_sessions), asks `claude agents --json` and counts the tokens again (the CLIs listed now
         count). The ticks of the start are not read again. From any thread: a flag the reading clears."""
         self.relisting = True
+
+    def read_limits_again(self) -> None:
+        """Signed in with another account (Engine.signed_in_elsewhere): the next reading reads the plan limits
+        again, whenever they were read last. From any thread: a flag the reading clears."""
+        self.limits_again = True
 
     # --- what it reads ------------------------------------------------------------------------
 
@@ -526,11 +537,19 @@ class DashboardStore(Polled):
             self.due["git"] = min(self.due.get("git", 0.0), self.clock() + GIT_RETRY_SECONDS)
 
     def read_limits(self) -> None:
-        """The plan limits (watched_limits) and agy's chain from its saved quota, read together, as
-        the dashboard reads them."""
-        limits = watched_limits(accounts.claude(), self.ask_limits)
+        """The plan limits and agy's chain from its saved quota, read together, as the dashboard reads
+        them: where its window acts, read and recorded (engine.read_usage; None, kept as they were, when
+        the account switched meanwhile); else the acting dashboard's while fresh, or Claude asked, never
+        recorded (watched_limits)."""
+        if self.acts:
+            from . import engine  # it reads this module: imported here, never as it loads
+
+            limits = engine.read_usage(True, accounts.claude())
+        else:
+            limits = watched_limits(accounts.claude(), self.ask_limits)
         if limits is not None:
             self.limits = limits
+            self.limits_read += 1
         self.agy_bar = agy.bar_view() if uses_agy(self.sessions.values(), self.team_states) else {}
 
     def read_accounts(self) -> None:
@@ -546,6 +565,9 @@ class DashboardStore(Polled):
     def poll(self) -> DashSnapshot:
         """Read what is due and the dashboard as it stands."""
         relisting, self.relisting = self.relisting, False
+        if self.limits_again:
+            self.limits_again = False
+            self.due.pop("limits", None)  # due now
         if self.polls == 0:
             self.read_listed()
             self.read_teams()  # who rests, before the first live read: the dashboard reads its teams with its list
@@ -584,4 +606,4 @@ class DashboardStore(Polled):
         return DashSnapshot(view.at, view, dict(self.sessions), dict(self.team_states), hidden, pinned, self.report,
                             list(self.accounts), set(self.shared_emails), dict(self.agy_bar), self.acting,
                             list(self.limits), dict(self.git), dict(self.tokens), dict(self.armed), queued,
-                            dict(self.background), set(self.open_at_shutdown))
+                            dict(self.background), set(self.open_at_shutdown), self.limits_read)

@@ -10,9 +10,12 @@ the top bar: the Board (board.py), as cards in lanes by what they want from you;
 Live view, the open sessions by what each does (l, as in the terminal, and l again goes back). The
 pick is one across them: the row or card picked stays picked when the view changes.
 
-It watches, as a second dashboard does: the dashboard's store (store.DashboardStore) is read on a
-thread of its own every two seconds, and nothing here claims the actor lock or records a plan limit or
-an account; what happens by itself (a limit lifting) is the acting dashboard's. What a key asks for, it
+It acts as the terminal dashboard does (Sinan's call, 2026-11-26): it takes the actor lock when it is free,
+at its start or once the dashboard that held it closes (tick_actor looks every ten seconds, on a thread of its
+own), and then continues sessions at their reset, sends the desktop notes, runs the updates and records the plan
+limits (its Engine decides, the terminal's one copy; WindowFront starts what acting runs on a timer). While
+another dashboard holds the lock it watches, as a second dashboard does, and Bit's line says who acts. The
+dashboard's store (store.DashboardStore) is read on a thread of its own every two seconds. What a key asks for, it
 does as the terminal's keys do. Enter opens the ticked sessions, or the picked one, in new tabs, and
 brings an open one's tab to the front (a team's card: its Team panel tab); j goes to the next open
 session waiting for you, and m changes how the picked one opens (opening.py, each on a thread of its
@@ -81,6 +84,7 @@ from .. import (
     __version__,
     accountwords,
     actions,
+    actor,
     alerts,
     backgroundwords,
     bitart,
@@ -127,6 +131,8 @@ from .widgets import KeyBar, bit_pixmap, text_label
 from .workspacelist import WorkspacesDialog
 
 POLL_MS = 2000  # as often as the terminal dashboard reads its pid files (LIVE_REFRESH_SECONDS)
+ACTOR_MS = engine.ACTOR_SECONDS * 1000  # the actor lock looked at (tick_actor), as often as the terminal looks
+LOOK_WAIT = 2.0  # seconds a look at the lock under way is waited for on closing: it could take the lock let go
 TICK_MS = 100  # the live dot breathes and the clock goes on
 INFO_LEAST = 20  # characters the info line keeps before the accounts give way
 LAYOUT_KEY = "main"  # desktop.json's
@@ -157,12 +163,22 @@ TELL_ELSEWHERE = ("{team} is on this goal already: nothing was made. The message
                   "paste into its tab (Ctrl+V, Enter).")
 JOIN_ELSEWHERE = ("{team} is at work on this goal: nothing was made. Adding members to a team at work is the terminal "
                   "dashboard's for now (T there, then Ctrl+R); the goal is on the clipboard.")
-# c in the window on sessions the dashboard that acts continues at their reset (config.json's, read with the
-# list): it changes nothing of that dashboard's. Gone on now, one is left alone there (actions.due takes only the
-# still stopped); handed over, the old one would go on there too, so that waits for c there.
+# c in a window that watches, on sessions the dashboard that acts continues at their reset (config.json's, read
+# with the list): it changes nothing of that dashboard's. Gone on now, one is left alone there (actions.due takes
+# only the still stopped); handed over, the old one would go on there too, so that waits for c there. A window
+# that acts saves them itself (Engine.choose), as the terminal's c.
 STAYS_ARMED = "{names}: still set to continue at the reset in the dashboard that acts, which leaves alone what has gone on."
 HANDOVER_ARMED = ("{names}: set to continue at the reset in the dashboard that acts, which would go on with the old "
                   "session too: c there takes that off, then hand it over here.")
+# Bit's line at rest: who acts (show_bit).
+ACTS_HERE = "This window acts: it continues sessions at their reset, sends the desktop notes and runs the updates."
+ACTS_THERE = "Another tabmancer dashboard acts: this window watches."
+NONE_ACTS = "No dashboard acts now: this window takes over in a few seconds."
+NAMELESS_REST = "This window only watches: it could not read its own start time (another tabmancer dashboard can act)."
+# The terminal dashboard's NAMELESS (app.py), the window's words: one that cannot read its own start time never
+# takes the lock (actor.claim), since the others could not tell it still runs.
+NAMELESS = ("This window could not read its own start time, so it only shows sessions: it does not continue them at "
+            "their reset, send desktop notes or run updates. Another tabmancer dashboard can.")
 NEW_TEAM_SECONDS = 60  # a team just made: its Team panel tab picked once a reading shows it, for this long
 SAID_MS = 7000  # how long Bit says what a key did before it says who acts again
 AFTER_OPEN_MS = 5000  # the sessions read again this soon after tabs opened: they show open by then
@@ -227,6 +243,17 @@ def read_store(store: DashboardStore, relay: Relay) -> None:
         pass  # the window has gone meanwhile
 
 
+def look_at_lock(acts: bool, relay: Relay) -> None:
+    """The actor lock looked at on a thread of its own (engine.look: reading another process can take a moment,
+    `ps` on macOS, and actor.json held open is waited for), what it found sent back by the relay; as read_store,
+    it holds the relay, never the window."""
+    found = engine.look(False, acts)
+    try:
+        relay.actor_seen.emit(found)
+    except RuntimeError:
+        pass  # the window has gone meanwhile
+
+
 def read_words(index: search.Index | None, sessions: list[Session], relay: Relay) -> None:
     """What was said in each session, read on a thread of its own (as read_store: never the window)."""
     try:
@@ -245,6 +272,7 @@ class Relay(QObject):
 
     polled = Signal(object, object, bool, str)  # the store asked, its DashSnapshot, agy first in the bar, an error
     indexed = Signal(object, bool)  # the conversations' search.Index (None: it failed), whether it read more
+    actor_seen = Signal(object)  # what a look at the actor lock found (engine.Look)
 
 
 class Told(QObject):
@@ -292,8 +320,13 @@ class MainWindow(QMainWindow):
         self.opener.prompted.connect(self.prompt_sent)
         self.writing_to: Session | None = None  # p: the session its dialog writes to
         self.front = WindowFront(self, update=not demo)  # what each reading turns up, and h: the terminal's one copy decides
-        # Never acts (state.acts stays False). What opened from here is one copy: Enter's and the engine's (h's fresh one).
+        # It acts once it holds the actor lock (Engine.mount, took_over). What opened from here is one copy: Enter's
+        # and the engine's (h's fresh one).
         self.engine = engine.Engine(self.front, datetime.now, engine.EngineState(openings=self.opener.openings))
+        self.relay.actor_seen.connect(self.engine.seen)
+        self.acting: dict[str, QTimer] = {}  # what acting runs on a timer, by engine.SCHEDULE's name: stopped if lost
+        self.looker: threading.Thread | None = None  # the actor lock being looked at (tick_actor)
+        self.limits_read = 0  # the store's plan readings the Engine has heard of (Engine.usage)
         self.asker = newsession.Asker(self)  # n and T: the router's pick, a rewrite, a line-up, agy's quota
         self.summarizer = Summarizer(self)  # s on a session: its summary written on a thread, shown in the drawer
         self.summarizer.said.connect(self.tell_note)
@@ -337,6 +370,8 @@ class MainWindow(QMainWindow):
         self.after_open = QTimer(self)
         self.after_open.setSingleShot(True)
         self.after_open.timeout.connect(self.poll)
+        self.actor_timer = QTimer(self)
+        self.actor_timer.timeout.connect(self.tick_actor)
         self.opener.closed.connect(self.closed_tabs)
         self.renamer = Renamer(self)  # r on a closed session: /rename run in it on a thread
         self.renamer.done.connect(self.renamed)
@@ -357,9 +392,56 @@ class MainWindow(QMainWindow):
         self.tick()
         self.board.setFocus()  # the arrows pick a card from the start
         if start:
+            self.mount()
             self.ticker.start(TICK_MS)
             self.timer.start(poll_ms)
             self.poll()
+
+    def mount(self) -> None:
+        """At its start, as the terminal dashboard's: the actor lock taken when it is free (Engine.mount), and then
+        what acting runs starts; else the sessions to continue as saved, and Bit says who acts (or that this one
+        could not read its own start time: it never acts then). The lock looked at every ACTOR_MS from now."""
+        self.engine.mount()
+        if self.engine.state.acts:
+            self.front.start_acting()
+        else:
+            self.engine.load_armed()
+            if actor.nameless():
+                self.say(NAMELESS, 12, look.AMBER)
+            else:
+                self.front.say_who_acts()
+        self.actor_timer.start(ACTOR_MS)
+
+    def tick_actor(self) -> None:
+        """Every ACTOR_MS, as the terminal dashboard's tick_actor: the lock looked at on a thread of its own, one
+        look at a time; what it found to the Engine (Engine.seen: the one that acts steps back when another holds
+        it, one that watches takes over when the one that acted is gone, or shows the sessions it continues)."""
+        if self.looker is not None and self.looker.is_alive():
+            return
+        self.looker = threading.Thread(target=look_at_lock, args=(self.engine.state.acts, self.relay), daemon=True,
+                                       name="tabmancer-actor")
+        self.looker.start()
+
+    def every(self, name: str, then: Callable[[], None]) -> None:
+        """One of what acting runs on a timer (engine.SCHEDULE's acting entries, by name): then every its seconds,
+        the first time after its first when it has one. Stopped when the lock is lost or the window closes."""
+        entry = next(each for each in engine.SCHEDULE if each.acting and each.name == name)
+        self.stop_every(name)
+        timer = QTimer(self)
+        timer.timeout.connect(then)
+        every_ms = int(entry.seconds * 1000)
+        if entry.first is not None:  # once the first is over, every its seconds
+            timer.timeout.connect(partial(timer.setInterval, every_ms))
+        timer.start(every_ms if entry.first is None else int(entry.first * 1000))
+        self.acting[name] = timer
+
+    def stop_every(self, *names: str) -> None:
+        """What acting runs on a timer stopped: these, or all of it."""
+        for name in names or list(self.acting):
+            timer = self.acting.pop(name, None)
+            if timer is not None:
+                timer.stop()
+                timer.deleteLater()
 
     # --- building ---------------------------------------------------------------------------------
 
@@ -586,13 +668,14 @@ class MainWindow(QMainWindow):
         if self.waiting:
             return
         self.waiting = True
+        self.store.acts = self.engine.state.acts  # acting, it records the plan limits it reads (read_limits)
         self.reader = threading.Thread(target=read_store, args=(self.store, self.relay), daemon=True,
                                        name="tabmancer-main")
         self.reader.start()
 
     def settle(self, seconds: float = 10) -> None:
         """Wait for a read under way (on closing, and in tests before what it reads goes)."""
-        for thread in (self.reader, self.indexer):
+        for thread in (self.reader, self.indexer, self.looker):
             if thread is not None:
                 thread.join(seconds)
         self.opener.settle(seconds)
@@ -623,11 +706,16 @@ class MainWindow(QMainWindow):
         listed = snap.sessions.keys()
         self.selected, self.preselected = self.selected & listed, self.preselected & listed
         self.front.live(snap)  # what changed is said and lit, one open after all unticked (Engine.live)
+        if snap.limits_read != self.limits_read:  # a new plan reading: Bit on a limit at 85%, every agy model out
+            self.limits_read = snap.limits_read
+            self.engine.usage(snap.limits, snap.agy_bar)
         self.show_top()
         if starting and self.preselected:
             self.say(VM.shutdown_hello(len(self.preselected)), 6)
         elif not self.said_timer.isActive():
             self.show_bit()
+        if starting and self.engine.state.acts:
+            self.front.start_wrapped()  # after Bit's hello: Friday's word on the week
         came_up = self.opener.seen(snap.sessions)  # opened from here a while ago, and never showed open?
         if came_up is not None:
             self.say_note(came_up.words, came_up.seconds or 4, came_up.severity)
@@ -915,12 +1003,19 @@ class MainWindow(QMainWindow):
             self.account.setText(shown)
 
     def show_bit(self) -> None:
-        if self.snap is None:
+        """Bit's line at rest: who acts. This window once it holds the lock; else another dashboard when the last
+        reading found the lock held (this window's own, read just before it lost it, means another took it);
+        else none, and this one takes over at its next look, unless it cannot read its own start time (it
+        never takes the lock then)."""
+        snap = self.snap
+        if snap is None:
             words = "Reading your sessions…"
-        elif self.snap.acting is not None:
-            words = "The terminal dashboard acts: this window watches."
+        elif self.engine.state.acts:
+            words = ACTS_HERE
+        elif snap.acting is not None:
+            words = ACTS_THERE
         else:
-            words = "This window only watches; no dashboard acts now (tabmancer in a terminal does)."
+            words = NAMELESS_REST if actor.nameless() else NONE_ACTS
         self.bit_line.setText(words)
         self.bit_line.setStyleSheet(f"color:{look.MUTED}; background:transparent;")
 
@@ -1717,7 +1812,7 @@ class MainWindow(QMainWindow):
         """c: the sessions stopped at a usage limit, and what becomes of the ticked ones (limit.LimitDialog, in
         the terminal's words: limitwords). Now and the handover go on from here (Engine.choose: a closed one
         opens with the continue prompt, an open one's is handed to you, WindowFront.types_in); continuing when
-        the limit lifts is the dashboard's that acts, so not offered here (the dialog says why)."""
+        the limit lifts is the dashboard's that acts: offered where this window acts, else the dialog says why."""
         snap = self.snap
         if snap is None:
             return
@@ -1733,10 +1828,12 @@ class MainWindow(QMainWindow):
 
     def continue_chosen(self, asked: limitwords.Ask, way: str, ids: list[str]) -> None:
         """The c dialog's answer for the ticked: carried out as the terminal's (Engine.choose); the rows read
-        again when it changed them. The ones the dashboard that acts continues at their reset stay so (this
-        window saves no armed list): gone on now, Bit says so; handed over, not here (STAYS_ARMED, HANDOVER_ARMED)."""
+        again when it changed them. Where this window acts it saves the sessions to continue itself; where it
+        watches, the ones the dashboard that acts continues at their reset stay so (it saves no armed list then):
+        gone on now, Bit says so; handed over, not here (STAYS_ARMED, HANDOVER_ARMED)."""
         snap = self.snap
-        armed = [s for s in asked.stopped if s.session_id in ids and snap is not None and s.session_id in snap.armed]
+        armed = [s for s in asked.stopped if s.session_id in ids and snap is not None and s.session_id in snap.armed
+                 and not self.engine.state.acts]
         names = ", ".join(dict.fromkeys(self.front.who(s) for s in armed))
         if way == "handover" and armed:
             ids = [sid for sid in ids if sid not in {s.session_id for s in armed}]
@@ -1824,12 +1921,17 @@ class MainWindow(QMainWindow):
         self.door.close()
         self.timer.stop()
         self.ticker.stop()
+        self.actor_timer.stop()
+        self.stop_every()
         if self.popup is not None:
             self.popup.close()
         for shown in self.monitors.values():  # the monitors M opened go with the window
             shown.close()
             shown.deleteLater()
         frame.save_layout(self, LAYOUT_KEY)
+        if self.looker is not None:
+            self.looker.join(LOOK_WAIT)  # a look under way could take the lock just as it goes
+        self.engine.unmount()  # a real quit (no tray yet): the actor lock goes, for another dashboard to take
         super().closeEvent(event)
         self.collected()
 

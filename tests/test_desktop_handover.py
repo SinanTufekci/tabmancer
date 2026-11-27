@@ -351,34 +351,38 @@ def test_h_from_the_window_says_what_of_a_session_from_another_organisation_goes
     shown.front.settle()
 
 
-@pytest.mark.parametrize("acting", [True, False], ids=["a dashboard acts", "the window alone"])
-def test_the_windows_claude_update_is_left_to_a_dashboard_that_acts(qapp, window, world, monkeypatch, acting):
-    """Two claude updates at once would race: while another live process holds the actor lock, neither h's
-    fresh session (Engine.open) nor Enter's tabs nor p (the opener) run it; a window open alone does. h's asks
-    the last reading (DashSnapshot.acting), never the process itself on the window's thread."""
+@pytest.mark.parametrize("claims", [False, True], ids=["another dashboard acts", "the window acts"])
+def test_the_windows_claude_update_is_the_acting_dashboards(qapp, window, world, monkeypatch, claims):
+    """Two claude updates at once would race: a window that watches (Engine.mount found the lock held, so
+    claudeupdate.leave_to_dashboard) runs none, at h's fresh session (Engine.open), Enter or p (the opener);
+    the window that acts runs it, as any dashboard that acts. One copy: claudeupdate.due, which the lock's
+    steps set, and no process looked at on the window's thread."""
     shown = window()
     read(qapp, shown)
     fresh = handover.fresh(closed_one(shown), "THE HANDOVER")
     ran: list[str] = []
-    held = {"pid": 4242, "started": "made-up"}
-    shown.take(shown.store, replace(shown.snap, acting=held if acting else None), False, "")
-    monkeypatch.setattr(actor, "holder", lambda: held)
-    monkeypatch.setattr(actor, "running", lambda record: pytest.fail("the process looked at on the window's thread"))
-    monkeypatch.setattr(alerts, "update_due", lambda updating, clis: not updating)
+    monkeypatch.setattr(actor, "claim", lambda: claims)
+    monkeypatch.setattr(actor, "running", lambda record: pytest.fail("a process looked at for claude update"))
+    monkeypatch.setattr(claudeupdate, "due", lambda today=None: not claudeupdate._elsewhere)  # on, not run today
     monkeypatch.setattr(alerts, "run_claude_update", lambda: ran.append("engine") or (claudeupdate.Outcome(True, "", ""),
                                                                                        None))
-    monkeypatch.setattr(claudeupdate, "before_opening", lambda say=None: ran.append("opener"))
+    monkeypatch.setattr(claudeupdate, "run", lambda claude=None, timeout=0: ran.append("opener")
+                        or claudeupdate.Outcome(True, "", ""))
+    shown.engine.mount()
+    assert shown.engine.state.acts is claims
     shown.engine.open([fresh])
     until(qapp, lambda: world.opened)
     shown.front.settle()
     assert world.opened == [fresh] and not shown.engine.state.updating_claude
     world.opened.clear()
-    monkeypatch.setattr(actor, "running", lambda record: acting and record == held)  # the opener's, on its threads
     shown.opener.open_now([fresh], {})  # Enter's, as on its thread
-    session = closed_one(shown)
     monkeypatch.setattr(opening.prompting, "send", lambda *args: None)
-    shown.opener.write_now(session, "tab", "go on", {})  # p's, as on its thread
-    assert ran == ([] if acting else ["engine", "opener", "opener"])
+    shown.opener.write_now(closed_one(shown), "tab", "go on", {})  # p's, as on its thread
+    assert ran == (["engine", "opener", "opener"] if claims else [])
+    if not claims:  # it takes the lock over later (the dashboard that acted closed): it runs it from then on
+        shown.engine.started()
+        shown.opener.open_now([fresh], {})
+        assert ran == ["opener"]
 
 
 def test_the_opened_sessions_and_the_leftovers_are_the_windows_way(qapp, window, world, monkeypatch):

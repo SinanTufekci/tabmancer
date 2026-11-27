@@ -45,7 +45,7 @@ from tabmancer.sessions import Exit
 
 # What a window that does not act may have its front do for a reading: say, light, untick, name.
 ALLOWED = {"who", "cap_of", "monitoring", "tell", "say_note", "show_bit", "flash_changed", "untick_open",
-           "rows_changed"}
+           "rows_changed", "limits_at", "other_accounts_note"}  # Engine.limits at each change, as the terminal's
 NEVER = [(toast, "show"), (typein, "write_keys"), (launch, "open_tabs"), (launch, "run_in_background"),
          (actions, "save_queued"), (actions, "write_handover"), (actor, "first_to"), (actor, "first"), (handover, "write_itself"),
          (summarize, "ask"), (claudeupdate, "run"), (claudeupdate, "before_opening"), (bgjobs, "_run")]
@@ -204,7 +204,8 @@ def test_events_say_their_note_else_bits_words_in_bits_tone(qapp, window):
     shown.front.waiting.clear()
     shown.front.show_bit(alerts.Bit("say", "plain words", tone="plain"))  # nothing said: at once
     assert look.TEXT in shown.bit_line.styleSheet()
-    assert shown.front.monitoring() is False and shown.front.tell_desktop([]) is None
+    read(qapp, shown)  # a window that watches: no desktop note goes from it
+    assert shown.front.monitoring() is False and shown.front.tell_desktop([busy_one(shown)]) is None
 
 
 def test_the_window_answers_all_the_engine_may_ask_of_its_front_in_its_words():
@@ -227,7 +228,8 @@ def test_the_window_answers_all_the_engine_may_ask_of_its_front_in_its_words():
     assert isinstance(front.WindowFront.default_cap, property)
 
 
-def test_what_only_the_dashboard_that_acts_does_changes_nothing_here(qapp, window, monkeypatch):
+def test_a_window_that_watches_sends_no_desktop_note_and_bit_says_who_acts(qapp, window, monkeypatch):
+    """What acting runs is test_desktop_acting's; here the rest of the Front a watching window answers."""
     shown = window()
     read(qapp, shown)
     sent, drawn, opened, claimed = [], [], [], []
@@ -235,15 +237,12 @@ def test_what_only_the_dashboard_that_acts_does_changes_nothing_here(qapp, windo
     monkeypatch.setattr(actor, "claim", lambda *args, **kwargs: claimed.append(args) or True)
     monkeypatch.setattr(shown.front, "update_row", drawn.append)
     monkeypatch.setattr(shown.engine, "open", lambda launches, *rest: opened.append((launches, rest)))
-    said = shown.bit_line.text()
-    for asked in (shown.front.start_acting, shown.front.stop_acting, shown.front.start_wrapped,
-                  shown.front.refresh_usage, shown.front.armed_changed):
-        asked()
+    shown.front.send_toast("made-up", "words")  # only the window that acts sends one
+    shown.front.limits_at({"made-up"})  # nothing to draw: the cards say it
+    shown.front.armed_changed()  # nor here: each reading brings them
+    assert not shown.engine.state.acts and sent == [] and claimed == [] and drawn == []
     shown.front.say_who_acts({"pid": 1})
-    shown.front.send_toast("made-up", "words")
-    shown.front.show_newer("9.9.9")
-    shown.front.limits_at({"made-up"})
-    assert not shown.engine.state.acts and sent == [] and claimed == [] and shown.bit_line.text() == said
+    assert shown.bit_line.text() == front.who_acts({"pid": 1})
     account = next(a for a in shown.snap.accounts if a.cli == "claude")  # the top bar's
     assert shown.front.other_accounts_note(None) == accountwords.other_accounts_note(account, account.key, None)
     busy = busy_one(shown)

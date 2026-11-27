@@ -150,7 +150,9 @@ def test_it_opens_on_the_demo(qapp, window):
     assert shown.windowTitle() == "tabmancer"
     assert [w for w in qapp.topLevelWidgets() if w.isVisible()] == [shown]  # no panel a window of its own
     assert qapp.activeWindow() is shown  # so nothing took its keys
-    assert "watches" in shown.bit_line.text()
+    assert shown.engine.state.told_limit and " limit until " in shown.bit_line.text()  # the demo's stopped,
+    shown.said_timer.timeout.emit()  # as the terminal says them; then who acts: none in its made-up world
+    assert shown.bit_line.text() == main.NONE_ACTS
     shown.tick()
     assert re.fullmatch(r"\d\d:\d\d:\d\d", shown.clock.text()) and plain(shown.live.text()) == "● live"
 
@@ -921,7 +923,7 @@ def test_space_ticks_f_pins_and_x_hides_as_marks_json_keeps_them(qapp, window):
     press(shown, "x")
     assert saved_marks()["hidden"] == [] and shown.bit_line.text() == "Back in sight: “Fix the login redirect loop”."
     shown.said_timer.timeout.emit()
-    assert "watches" in shown.bit_line.text()  # then who acts again
+    assert shown.bit_line.text() == main.NONE_ACTS  # then who acts again
     open_one = next(s for s in shown.snap.sessions.values()  # its own card, not a team's
                     if s.exit is sessions.Exit.RUNNING and board.card_of(s.session_id) == s.session_id)
     assert board.reveal(open_one.session_id) and board.pick == open_one.session_id

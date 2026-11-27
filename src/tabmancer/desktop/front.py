@@ -10,12 +10,13 @@ and the new generation opens as the terminal's opens (teamkeys.TeamKeys.open_tea
 thread, then the tabs). A handover being written is never cut short: the window closing waits for it
 (handing_now), and so does settle, however long it takes.
 
-The window never acts: its Engine's state.acts stays False and nothing here claims the actor lock, so
-what happens by itself (a desktop note for the sessions that turned, continuing at a limit's reset,
-keep-warm) stays the acting dashboard's. Engine.live, not acting, says things and changes the window's
-look; the only thing it starts is a handover this window queued itself (h on a busy one), once that one
-finishes: one queued in another window is that window's (state.queued is each window's own, and
-actor.first_to lets one of two that queued the same one hand it over).
+The window acts once it holds the actor lock (MainWindow.mount, then Engine.seen at each look), as the terminal
+dashboard does: start_acting starts what acting runs on a timer (engine.SCHEDULE's acting ones: a newer
+tabmancer, the sessions to continue at their reset, Friday's Wrapped), the desktop notes go out while you are not
+looking at the window, and the plan limits it reads are recorded (DashboardStore.acts). Lost to another
+dashboard, those stop and Bit says who acts. A handover queued here (h on a busy one) starts once that one
+finishes: one queued in another window is that window's (state.queued is each window's own, and actor.first_to
+lets one of two that queued the same one hand it over).
 
 At a key it types into a session's tab as the terminal dashboard does (c's continue prompt in an open one, a
 member's message from Tell or Join once it waits for you), Sinan's call (TYPES_INTO_TABS): WindowFront.types_in
@@ -51,6 +52,7 @@ from .. import (
     rowwords,
     teamkeys,
     teams,
+    toast,
 )
 from .. import viewmodel as VM
 from ..launch import Launch
@@ -71,6 +73,7 @@ HANDOVER_THREAD = "tabmancer-handover"  # a handover's thread: never cut short o
 # Sinan's call (2026-11-26): the window types into a session's tab itself at a key (c's continue prompt, a
 # member's message), as the terminal dashboard does. False hands the words to you instead (WindowFront.types_in).
 TYPES_INTO_TABS = True
+DASHBOARD_TAB = "tabmancer"  # the terminal dashboard's tab (app.TITLE): in front, you look at a dashboard: no note
 
 
 class AskHow:
@@ -88,6 +91,18 @@ class Asked:
     session: Session
     done: threading.Event = field(default_factory=threading.Event)
     found: tuple[Session, list[Session]] | None = None
+
+
+def who_acts(held: dict) -> str:
+    """Which dashboard acts (held: its lock), and that this window watches: the terminal's words (say_who_acts)."""
+    pid = f" (pid {held['pid']})" if isinstance(held.get("pid"), int) else ""
+    return (f"Another tabmancer dashboard{pid} continues sessions at their reset, sends the desktop notes and runs "
+            "the updates; this window shows the same, and takes over when that one closes.")
+
+
+def show_toast(title: str, body: str) -> None:
+    """A desktop note (toast.show: a PowerShell run on Windows) on a thread of its own, holding the words alone."""
+    toast.show(title, body, dashboard=DASHBOARD_TAB)
 
 
 def continue_handed(names: list[str]) -> actions.Note:
@@ -114,6 +129,7 @@ class WindowFront(QObject):
     ended = Signal()  # a handover's thread is over, whatever came of it
     continued = Signal(object)  # c's continue prompt typed into the open ones' tabs: an actions.Continued
     told = Signal(object)  # a member's message typed into its tab, or not: an actions.Told
+    newer = Signal(str, str)  # a newer tabmancer: its version, the command that upgrades to it
 
     def __init__(self, window: MainWindow, update: bool = True) -> None:
         super().__init__(window)
@@ -132,6 +148,7 @@ class WindowFront(QObject):
         self.ended.connect(self.handover_ended)
         self.continued.connect(self.prompt_typed)
         self.told.connect(self.note_typed)
+        self.newer.connect(self.found_newer)
 
     def window(self) -> MainWindow:
         return self.parent()  # type: ignore[return-value]
@@ -199,7 +216,19 @@ class WindowFront(QObject):
             self.window().say(*self.waiting.pop(0))
 
     def tell_desktop(self, turned: list[Session]) -> None:
-        """Never: only the dashboard that acts sends the desktop note (Engine.live asks only then)."""
+        """The desktop note for the sessions that turned (Engine.live asks only the one that acts), unless they
+        are off; send_toast keeps it back while you look at the window, as the terminal's while its tab is in
+        front."""
+        if not toast.enabled():
+            return
+        self.send_toast(*alerts.toast_words(turned, lambda opens: self.other_accounts_note(opens)[0]))
+
+    def looked_at(self) -> bool:
+        """Whether you are looking at the window: it, or a dialog of its, is the active window and it is not
+        minimised (toast.show looks at Windows Terminal's tabs alone)."""
+        window = self.window()
+        active = QApplication.activeWindow()
+        return not window.isMinimized() and active is not None and (active is window or active.parent() is window)
 
     # --- what it draws ----------------------------------------------------------------------------
 
@@ -215,7 +244,10 @@ class WindowFront(QObject):
         window.selected, window.preselected = VM.untick_open(window.selected, window.preselected, updates.values())
 
     def rows_changed(self, ids: set[str]) -> None:
-        """Nothing more: the window draws the reading whole once the engine has taken it (MainWindow.take)."""
+        """The sessions changed: the limits as they stand now (Engine.limits: Bit on those a usage limit stopped;
+        where this one acts, on which account each stopped is kept and the sessions to continue pruned), as the
+        terminal's check_limits. The window draws the reading whole once the engine has taken it (MainWindow.take)."""
+        self.window().engine.limits()
 
     def update_row(self, session: Session) -> None:
         """Queued to hand over, or not after all: read again, and the store's reading (actions.read_queued)
@@ -383,30 +415,66 @@ class WindowFront(QObject):
         self.window().engine.deliver()
 
     # --- what only the dashboard that acts does: never here ------------------------------------------
-    # The window never acts (Engine.state.acts stays False, nothing claims the actor lock), so the engine asks
-    # none of these of it; were it to, nothing happens and nothing breaks.
+    # --- acting: this window holds the actor lock (MainWindow.mount, Engine.took_over) ------------------
 
     def start_acting(self) -> None:
-        """Never: the window takes no lock, so it never starts acting."""
-
-    def stop_acting(self) -> None:
-        """Never: it never acted."""
+        """It holds the actor lock now, at its start or taken over, as the terminal dashboard's start_acting: a
+        newer tabmancer looked for now and every UPDATES_SECONDS, today's claude update before any session opens,
+        and the sessions to continue at their reset every DUE_SECONDS (Engine.due)."""
+        window = self.window()
+        window.engine.started()
+        self.check_updates()
+        window.every("check_updates", self.check_updates)
+        window.engine.update_due()
+        window.every("continue_due", window.engine.due)
 
     def start_wrapped(self) -> None:
-        """Never: Wrapped's timers are the acting dashboard's."""
+        """Friday's word on the week (Engine.wrapped): after Bit's hello, then looked for again."""
+        window = self.window()
+        window.every("tell_wrapped", window.engine.wrapped)
+
+    def stop_acting(self) -> None:
+        """The lock is lost: what acting runs on a timer stops, and it no longer acts (Engine.stopped)."""
+        window = self.window()
+        window.stop_every()
+        window.engine.stopped()
 
     def say_who_acts(self, held: dict | None = None) -> None:
-        """Never asked: the window says who acts on Bit's line by itself (MainWindow.show_bit)."""
+        """Which dashboard acts (held: its lock; else as it is written now), on Bit's line: this one watches."""
+        held = held if held is not None else (actor.holder() or {})
+        self.window().say(who_acts(held), 10)
 
     def send_toast(self, title: str, body: str) -> None:
-        """Never: desktop notes come from the dashboard that acts."""
+        """A desktop note: only from the dashboard that acts, or each one open would send it, and not while you
+        look at the window; on a thread of its own that holds the words alone (show_toast)."""
+        if not self.window().engine.state.acts or self.looked_at():
+            return
+        threading.Thread(target=show_toast, args=(title, body), daemon=True, name="tabmancer-toast").start()
+
+    def check_updates(self) -> None:
+        """A newer tabmancer on PyPI (updates.news: asked once a day at most), looked for on a thread of its own;
+        told once (Engine.newer)."""
+        self.start(self.look_for_newer, self.window().engine.state.told_update)
+
+    def look_for_newer(self, told: str | None) -> None:
+        found = alerts.newer_tabmancer(told)
+        if found:
+            self.emit("newer", *found)
+
+    def found_newer(self, version: str, command: str) -> None:
+        self.window().engine.newer(version, command)
 
     def show_newer(self, version: str) -> None:
-        """Never: the dashboard that acts looks for a newer tabmancer."""
+        """Beside the name in the top bar while the window is open, as the terminal's top bar has it."""
+        window = self.window()
+        window.brand.setText(look.span(window.brand_words, window.accent) + look.span(f"  ↑ {version}", look.GREEN))
 
     def refresh_usage(self) -> None:
-        """Never asked (only on a sign-in this one records, which it does not): the store reads the plan
-        limits on its own."""
+        """The plan limits read again (signed in with another account: Engine.signed_in_elsewhere), at the next
+        reading, on the store's thread (DashboardStore.read_limits_again)."""
+        window = self.window()
+        window.store.read_limits_again()
+        window.poll()
 
     def limits_at(self, at: set[str]) -> None:
         """Nothing to change: c is always in the window's menus, and a card's Continue shows while its session
@@ -535,11 +603,10 @@ class WindowFront(QObject):
 
     def update_claude(self) -> None:
         """Today's claude update, before Claude Code sessions open (Engine.update_due), on a thread of its
-        own; its outcome back to Engine.claude_updated. Over the demo's made-up sessions none runs, nor while
-        a dashboard acts: it runs it. Who acts as the last reading had it (DashSnapshot.acting, read on the
-        store's thread): the process check (actor.running; two `ps` on macOS) stays off the UI thread."""
-        snap = self.window().snap
-        if not self.update or (snap is not None and snap.acting is not None):
+        own; its outcome back to Engine.claude_updated. Over the demo's made-up sessions none runs. Only the
+        dashboard that acts asks for it: one that watches never does (claudeupdate.due, which the lock's steps
+        set: Engine.mount, started, stopped)."""
+        if not self.update:
             self.window().engine.claude_updated(claudeupdate.Outcome(True, "", ""), None)
             return
         self.start(self.run_update)
