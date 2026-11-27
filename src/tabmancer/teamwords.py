@@ -11,7 +11,8 @@ from typing import NamedTuple
 
 from . import agy, teams
 from . import viewmodel as VM
-from .palette import AMBER, CYAN, GREEN, MUTED, ORANGE, RED, TEXT
+from .palette import AMBER, BLUE, CYAN, GREEN, MUTED, ORANGE, RED, TEXT
+from .sessions import Exit, Session
 from .tokens import human
 
 Part = tuple[str, str]  # (words, style)
@@ -133,6 +134,44 @@ def message_parts(message: teams.Message, member: str, colours: dict[str, str]) 
     other = message.receiver if out else message.sender
     return [("→ " if out else "← ", MUTED), (other, f"bold {colours.get(other, TEXT)}"), (": ", MUTED),
             (gist(message, other), TEXT)]
+
+
+def warm_words(warm_until: datetime | None) -> str:
+    """' · warm to 14:32' for a member done for now with a keep-warm sleep running (an answer before then finds
+    its cache warm), else ''."""
+    return f" · warm to {warm_until:%H:%M}" if warm_until is not None else ""
+
+
+def member_status(session: Session | None) -> tuple[str, str, bool]:
+    """(label, style, spinning) for a member's card, in the dashboard's colours: blue works, red
+    waits for you, amber is stopped at a usage limit (as in the list); a member done for now is
+    idle, quiet, warm till its keep-warm sleep ends; cyan waits for a command it left running in the
+    background."""
+    if session is None:
+        return "not started", MUTED, False
+    if VM.at_limit(session):
+        return "at the limit", AMBER, False
+    if session.exit is not Exit.RUNNING:
+        return "closed", MUTED, False
+    state = session.live_state.lower()
+    if state in ("busy", "working"):
+        return "working", BLUE, True
+    if state == "aside":
+        return "background command", CYAN, False
+    if state == "permission":
+        return "needs your OK", f"bold {RED}", False
+    if state in ("blocked", "waiting"):
+        return "needs you", f"bold {RED}", False
+    warm = warm_words(session.warm_until if session.turn_over else None)
+    if state == "resting":
+        return f"idle{warm}", MUTED, False
+    return f"waiting{warm}", RED, False
+
+
+def member_status_words(member: VM.MemberView) -> str:
+    """A member's state as the window's team views say it: the view's label, and until when its cache stays
+    warm (VM.MemberView.warm_until: set only while its turn is over)."""
+    return member.label + warm_words(member.warm_until)
 
 
 def model_of(member: VM.MemberView) -> str:

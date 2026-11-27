@@ -6,9 +6,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from tabmancer import teams, teamwords
+from tabmancer import sessions, teams, teamwords
 from tabmancer import viewmodel as VM
-from tabmancer.palette import AMBER, CYAN, MUTED, RED, TEXT
+from tabmancer.palette import AMBER, BLUE, CYAN, MUTED, RED, TEXT
 
 NOW = datetime(2026, 11, 25, 14, 0)
 
@@ -60,3 +60,21 @@ def test_a_members_facts_model_first():
     assert ("context 90%", f"bold {RED}") in facts and ("2 unread", AMBER) in facts
     assert ("feat +3", MUTED) in facts and ("out of quota till 14:00", RED) in facts
     assert teamwords.facts(member("x", model="claude-opus-5-5", effort="high")) == [("claude · opus 5.5 · high", MUTED)]
+
+
+def test_a_member_done_for_now_says_until_when_its_cache_is_warm():
+    """One copy for the terminal's team view (teamview.status_of) and the window's (member_status_words)."""
+    warm = datetime(2026, 11, 27, 14, 32)
+    resting = sessions.Session(session_id="api", path=None, exit=sessions.Exit.RUNNING, live_state="resting",
+                               warm_until=warm, turn_over=True)
+    assert teamwords.member_status(resting) == ("idle · warm to 14:32", MUTED, False)
+    resting.live_state = "idle"
+    assert teamwords.member_status(resting) == ("waiting · warm to 14:32", RED, False)
+    resting.turn_over = False  # at work again: a sleep left running says nothing of its cache
+    assert teamwords.member_status(resting) == ("waiting", RED, False)
+    resting.live_state = "busy"
+    assert teamwords.member_status(resting) == ("working", BLUE, True)
+    assert teamwords.member_status(None) == ("not started", MUTED, False)
+    assert teamwords.member_status_words(member("api", label="idle", warm_until=warm)) == "idle · warm to 14:32"
+    assert teamwords.member_status_words(member("api", label="idle")) == "idle"
+    assert teamwords.warm_words(None) == ""

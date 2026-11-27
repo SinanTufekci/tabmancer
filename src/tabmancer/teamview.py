@@ -58,7 +58,8 @@ from .teamforms import (  # noqa: F401  (re-exported)
     TellTeam,
 )
 from .teamwords import PALETTE, colours  # noqa: F401  (PALETTE re-exported)
-from .theme import AMBER, BLUE, CYAN, DEFAULT_THEME, GREEN, MUTED, RED, TEXT, THEMES, keys, mix
+from .teamwords import member_status as status_of  # one copy with the window's
+from .theme import AMBER, CYAN, DEFAULT_THEME, GREEN, MUTED, RED, TEXT, THEMES, keys, mix
 from .tokens import human
 from .viewmodel import FLIGHT_SECONDS
 
@@ -82,32 +83,6 @@ def card_model(session: Session | None, pick, cli: str = "claude") -> tuple[str,
     fell = bool(session.fell_back) and session.exit is Exit.RUNNING
     text = context.short_model(session.model) + ("↓" if fell else "") + (f"/{pick.effort}" if pick.effort else "")
     return (f"{prefix}{text}".strip() if prefix else text), fell
-
-
-def status_of(session: Session | None) -> tuple[str, str, bool]:
-    """(label, style, spinning) for a member's card, in the dashboard's colours: blue works, red
-    waits for you, amber is stopped at a usage limit (as in the list); a member done for now is
-    idle, quiet; cyan waits for a command it left running in the background."""
-    if session is None:
-        return "not started", MUTED, False
-    if viewmodel.at_limit(session):
-        return "at the limit", AMBER, False
-    if session.exit is not Exit.RUNNING:
-        return "closed", MUTED, False
-    state = session.live_state.lower()
-    if state in ("busy", "working"):
-        return "working", BLUE, True
-    if state == "aside":
-        return "background command", CYAN, False
-    if state == "permission":
-        return "needs your OK", f"bold {RED}", False
-    if state in ("blocked", "waiting"):
-        return "needs you", f"bold {RED}", False
-    # A member waiting with a keep-warm sleep running: until when an answer finds its cache warm.
-    warm = f" · warm to {session.warm_until:%H:%M}" if session.warm_until is not None and session.turn_over else ""
-    if state == "resting":
-        return f"idle{warm}", MUTED, False
-    return f"waiting{warm}", RED, False
 
 
 class Canvas:
