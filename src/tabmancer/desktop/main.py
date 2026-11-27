@@ -538,8 +538,8 @@ class MainWindow(QMainWindow):
         return holder
 
     def build_toolbar(self) -> QWidget:
-        """Under the top bar: the switch of what the Sessions panel shows (the board; the table and the
-        live view are the terminal dashboard's for now)."""
+        """Under the top bar: the switch of what the Sessions panel shows: the board, the table or the live
+        view (l)."""
         bar = QWidget()
         bar.setObjectName("toolbar")
         bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)

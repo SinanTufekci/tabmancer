@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import cleanupwords, diskclean
+from .. import cleanupwords, diskclean, errorlog
 from ..actions import Note
 from ..diskclean import Item
 from . import look
@@ -39,20 +39,25 @@ class Disk(QObject):
 
     read = Signal(object)
     moved = Signal(object, object)
+    failed = Signal(str)  # measuring or moving went wrong: what to say (logged in errors.log)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.workers: list[threading.Thread] = []
 
     def collect(self) -> None:
-        self.start(lambda: self.send("read", diskclean.collect()))  # looked up when called: tests stand in for it
+        self.start("collect", lambda: self.send("read", diskclean.collect()))  # looked up when called: tests stand in
 
     def trash(self, items: list[Item]) -> None:
-        self.start(lambda: self.send("moved", *diskclean.trash(items)))
+        self.start("trash", lambda: self.send("moved", *diskclean.trash(items)))
 
-    def start(self, work: Callable[[], None]) -> None:
+    def start(self, name: str, work: Callable[[], None]) -> None:
+        """work on a thread of its own; what it raises is logged and said (failed), never left measuring."""
         self.workers = [thread for thread in self.workers if thread.is_alive()]
-        thread = threading.Thread(target=work, daemon=True, name="tabmancer-cleanup")
+        thread = threading.Thread(target=errorlog.guarded, args=(f"desktop.cleanup.{name}", work), daemon=True,
+                                  kwargs={"failed": lambda error, path: self.send(
+                                      "failed", errorlog.failed_words(name, error, path))},
+                                  name="tabmancer-cleanup")
         self.workers.append(thread)
         thread.start()
 
@@ -120,6 +125,7 @@ class CleanupDialog(QDialog):
                            " padding:2px 8px; }")
         self.disk.read.connect(self.show_items)
         self.disk.moved.connect(self.came)
+        self.disk.failed.connect(self.went_wrong)
         self.finished.connect(self.deleteLater)
         self.disk.collect()
 
@@ -168,6 +174,11 @@ class CleanupDialog(QDialog):
     def moved_to(self, *_cells: int) -> None:
         if self.items:
             self.draw()
+
+    def went_wrong(self, words: str) -> None:
+        """Measuring or moving failed: said, and the keys work again on the list as it stands."""
+        self.busy = False
+        self.say([Note(words, "error")])
 
     def say(self, notes: list[Note]) -> None:
         self.note.setText("<br>".join(look.span(note.words, NOTE_COLOURS.get(note.severity, look.TEXT))

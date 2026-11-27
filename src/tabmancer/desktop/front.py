@@ -646,8 +646,7 @@ class WindowFront(QObject):
         except Exception as error:  # noqa: BLE001 - the boundary: whatever went wrong, the window stays up
             name = getattr(work, "__name__", "work")
             path = errorlog.log_error(f"desktop.{getattr(work, '__qualname__', name)}", error)
-            self.emit("noted", actions.Note(f"Something went wrong in the background ({name}): {error}. "
-                                            f"The details are in {path}; please report it.", "error", 15))
+            self.emit("noted", actions.Note(errorlog.failed_words(name, error, path), "error", 15))
         finally:
             if handing:
                 self.handing.pop(threading.current_thread(), None)

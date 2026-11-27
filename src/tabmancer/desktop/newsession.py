@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import agy, clis, improve, newforms, picks, router
+from .. import agy, clis, errorlog, improve, newforms, picks, router
 from ..newforms import Project
 from . import look
 from .formparts import Card, Choice, keys_html
@@ -90,8 +90,9 @@ class Asker(QObject):
 
     def ask(self, owner: object, what: str, work: Callable[..., object], *args: object) -> None:
         self.workers = [thread for thread in self.workers if thread.is_alive()]
-        thread = threading.Thread(target=self.run, args=(owner, what, work, args), daemon=True,
-                                  name=f"tabmancer-{what}")
+        # Each work answers whatever goes wrong (route_now, improve_now...): what still raises is only logged.
+        thread = threading.Thread(target=errorlog.guarded, args=(f"desktop.asker.{what}", self.run, owner, what, work,
+                                                                 args), daemon=True, name=f"tabmancer-{what}")
         self.workers.append(thread)
         thread.start()
 

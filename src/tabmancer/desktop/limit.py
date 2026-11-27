@@ -4,10 +4,10 @@ session biggest context first, what going on costs on another account, where it 
 on another organisation, the ways on, and the keys). Its words and rules are limitwords.py's, one copy with
 the terminal's (limitwords.ask, ways, first_way, pick_refusal).
 
-The window does not act yet (it never holds the actor lock), so it offers no "when the limit lifts" and no
-"do not continue them by themselves": only the dashboard that acts carries those out, and the dialog says
-where (limitwords.NOT_HERE). Given acts, it offers every way, as the terminal's does. What the answer does is
-the engine's (Engine.choose), as in the terminal."""
+acts: whether this window holds the actor lock. The one that acts offers every way, as the terminal's does; a
+window that only watches (another dashboard acts) offers no "when the limit lifts" and no "do not continue
+them by themselves": only the dashboard that acts carries those out, and the dialog says where
+(limitwords.NOT_HERE). What the answer does is the engine's (Engine.choose), as in the terminal."""
 
 from __future__ import annotations
 

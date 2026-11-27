@@ -19,6 +19,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
@@ -111,6 +112,7 @@ def read_team(store: TeamStore, relay: Relay) -> None:
         snap, error = store.poll(), ""
         bar = agy_bar() if snap is not None and snap.agy_quota else {}
     except Exception as caught:  # noqa: BLE001 - said in the window, tried again at the next poll
+        errorlog.log_error("desktop.monitor.read_team", caught)
         snap, bar, error = None, {}, f"{type(caught).__name__}: {caught}"
     try:
         relay.polled.emit(store, snap, bar, error)
@@ -129,6 +131,15 @@ def look_alone(relay: Relay) -> None:
         return
     try:
         relay.alone.emit(alone)
+    except RuntimeError:
+        pass  # the window has gone meanwhile
+
+
+def switch_failed(relay: Relay, error: BaseException, path) -> None:
+    """Enter's tab switch raised: said on Bit's line (the details in errors.log); it holds the relay, never the
+    window."""
+    try:
+        relay.said.emit(errorlog.failed_words("switch", error, path), look.RED)
     except RuntimeError:
         pass  # the window has gone meanwhile
 
@@ -683,7 +694,8 @@ class MonitorWindow(QMainWindow):
                                  f"Could not find {name}'s tab. It may be open outside Windows Terminal, or renamed.",
                                  look.TEXT if found else look.AMBER)
 
-        threading.Thread(target=switch, daemon=True, name="tabmancer-focus").start()
+        threading.Thread(target=errorlog.guarded, args=("desktop.monitor.switch", switch), daemon=True,
+                         kwargs={"failed": partial(switch_failed, self.relay)}, name="tabmancer-focus").start()
 
     def choose_team(self) -> None:
         names = sorted(teams.load())

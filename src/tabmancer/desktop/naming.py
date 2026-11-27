@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut, QShowEvent
 from PySide6.QtWidgets import QDialog, QLineEdit, QVBoxLayout, QWidget
 
-from .. import prompting, rename
+from .. import errorlog, prompting, rename
 from ..sessions import Session, read_session
 from . import look
 from .formparts import keys_html
@@ -108,7 +108,10 @@ class Renamer(QObject):
 
     def rename(self, session: Session, name: str) -> None:
         self.workers = [thread for thread in self.workers if thread.is_alive()]
-        thread = threading.Thread(target=self.run, args=(session, name), daemon=True, name="tabmancer-rename")
+        thread = threading.Thread(target=errorlog.guarded, args=("desktop.naming.rename", self.run, session, name),
+                                  kwargs={"failed": lambda error, path: self.send("failed", rename.failed_note(
+                                      session, errorlog.failed_words("rename", error, path)))},
+                                  daemon=True, name="tabmancer-rename")
         self.workers.append(thread)
         thread.start()
 

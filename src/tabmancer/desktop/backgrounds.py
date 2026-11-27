@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QKeySequence, QPalette, QShortcut, QShowEvent
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import backgroundwords, bgjobs
+from .. import backgroundwords, bgjobs, errorlog
 from ..bgjobs import Job
 from . import look
 from .formparts import keys_html
@@ -48,20 +49,24 @@ class Jobs(QObject):
         self.workers: list[threading.Thread] = []
 
     def fetch(self, why: str) -> None:
-        self.start(self.fetch_now, why)
+        self.start(self.fetch_now, why, failed=lambda error, path: self.send("read", why, None))  # as no answer
 
     def fetch_now(self, why: str) -> None:
         self.send("read", why, bgjobs.jobs())  # looked up when called: the demo and the tests stand in for it
 
     def run(self, commands: list[tuple[str, Job]]) -> None:
-        self.start(self.run_now, commands)
+        self.start(self.run_now, commands, failed=lambda error, path: self.send(
+            "ran", backgroundwords.Ran(commands, 0, [errorlog.failed_words("run", error, path)], None)))
 
     def run_now(self, commands: list[tuple[str, Job]]) -> None:
         self.send("ran", backgroundwords.run(commands))
 
-    def start(self, work: Callable[..., None], *args: object) -> None:
+    def start(self, work: Callable[..., None], *args: object,
+              failed: Callable[[BaseException, Path], object] | None = None) -> None:
+        """work(*args) on a thread of its own; what it raises is logged and failed answers in its place."""
         self.workers = [thread for thread in self.workers if thread.is_alive()]
-        thread = threading.Thread(target=work, args=args, daemon=True, name="tabmancer-background")
+        thread = threading.Thread(target=errorlog.guarded, args=(f"desktop.backgrounds.{work.__name__}", work, *args),
+                                  kwargs={"failed": failed}, daemon=True, name="tabmancer-background")
         self.workers.append(thread)
         thread.start()
 

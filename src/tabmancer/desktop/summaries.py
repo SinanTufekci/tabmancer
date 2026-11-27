@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, Signal
 
-from .. import actions, sessionwords, summarize
+from .. import actions, errorlog, sessionwords, summarize
 from ..config import config_dir
 from ..sessions import Session
 
@@ -61,7 +61,10 @@ class Summarizer(QObject):
             return False
         self.summarizing.add(sid)
         self.workers = [thread for thread in self.workers if thread.is_alive()]
-        thread = threading.Thread(target=self.write, args=(session,), daemon=True, name="tabmancer-summary")
+        thread = threading.Thread(target=errorlog.guarded, args=("desktop.summaries.write", self.write, session),
+                                  kwargs={"failed": lambda error, path: self.write_failed(
+                                      sid, errorlog.failed_words("summary", error, path))},
+                                  daemon=True, name="tabmancer-summary")
         self.workers.append(thread)
         thread.start()
         return True
@@ -73,6 +76,13 @@ class Summarizer(QObject):
             summary, error = None, str(failure)
         try:
             self.came.emit(session.session_id, summary, error)
+        except RuntimeError:
+            pass  # the window has gone meanwhile
+
+    def write_failed(self, sid: str, words: str) -> None:
+        """A write that raised what it does not answer itself: said as its error, so s can ask again."""
+        try:
+            self.came.emit(sid, None, words)
         except RuntimeError:
             pass  # the window has gone meanwhile
 

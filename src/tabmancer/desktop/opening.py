@@ -23,7 +23,7 @@ from functools import partial
 
 from PySide6.QtCore import QObject, Signal
 
-from .. import actions, claudeupdate, launch, openings, prompting, workspaces, workspacewords
+from .. import actions, claudeupdate, errorlog, launch, openings, prompting, workspaces, workspacewords
 from ..launch import Launch, Mode, default_mode
 from ..sessions import Session, Status
 from ..store import DashSnapshot, live_entries
@@ -203,7 +203,11 @@ class Opener(QObject):
 
     def start(self, work: Callable[..., None], *args: object) -> None:
         self.workers = [thread for thread in self.workers if thread.is_alive()]
-        thread = threading.Thread(target=work, args=args, daemon=True, name="tabmancer-open")
+        name = getattr(work, "__name__", "open")
+        thread = threading.Thread(target=errorlog.guarded, args=(f"desktop.opening.{name}", work, *args),
+                                  kwargs={"failed": lambda error, path: self.say(actions.Note(
+                                      errorlog.failed_words(name, error, path), "error", 15))},
+                                  daemon=True, name="tabmancer-open")
         self.workers.append(thread)
         thread.start()
 

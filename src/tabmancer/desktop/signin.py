@@ -20,7 +20,7 @@ from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import QDialog, QFrame, QLabel, QVBoxLayout, QWidget
 
-from .. import accounts, accountwords, actions, browsers, claudeupdate, launch, usage
+from .. import accounts, accountwords, actions, browsers, claudeupdate, errorlog, launch, usage
 from ..accounts import Account
 from ..accountwords import ANOTHER
 from ..browsers import DEFAULT, Place
@@ -99,7 +99,11 @@ class Accounts(QObject):
 
     def start(self, work: Callable[..., None], *args: object) -> None:
         self.workers = [thread for thread in self.workers if thread.is_alive()]
-        thread = threading.Thread(target=work, args=args, daemon=True, name="tabmancer-accounts")
+        name = getattr(work, "__name__", "accounts")
+        thread = threading.Thread(target=errorlog.guarded, args=(f"desktop.signin.{name}", work, *args),
+                                  kwargs={"failed": lambda error, path: self.say(actions.Note(
+                                      errorlog.failed_words(name, error, path), "error", 15))},
+                                  daemon=True, name="tabmancer-accounts")
         self.workers.append(thread)
         thread.start()
 
