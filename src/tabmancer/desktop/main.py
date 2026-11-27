@@ -101,6 +101,7 @@ from .. import (
     search,
     sessionwords,
     teams,
+    toast,
     workspaces,
     workspacewords,
 )
@@ -112,7 +113,7 @@ from ..palette import mix
 from ..sessions import Exit, Session, Status, folder_key
 from ..store import DAYS, DashboardStore, DashSnapshot
 from ..teamforms import JoinTeam, TellTeam
-from . import commandbar, frame, limit, look, monitor, newsession, newteam, teamgraph, teamkeysdialogs
+from . import commandbar, frame, limit, look, monitor, newsession, newteam, teamgraph, teamkeysdialogs, tray
 from .backgrounds import OPEN, BackgroundDialog, Jobs
 from .board import Board
 from .cleanup import CleanupDialog
@@ -137,6 +138,7 @@ ACTOR_MS = engine.ACTOR_SECONDS * 1000  # the actor lock looked at (tick_actor),
 LOOK_WAIT = 2.0  # seconds a look at the lock under way is waited for on closing: it could take the lock let go
 TICK_MS = 100  # the live dot breathes and the clock goes on
 INFO_LEAST = 20  # characters the info line keeps before the accounts give way
+IN_TRAY = "tabmancer_in_tray"  # a window of the window's that went to the tray with it
 LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
 # The terminal dashboard's keys for good, in their own words: V lays out its list and preview, where the window's
@@ -305,8 +307,11 @@ class FilterBox(QLineEdit):
 
 
 class MainWindow(QMainWindow):
+    quit_now = Signal()  # tabmancer quit (the window closed for good, not to the tray): run ends the app
+
     def __init__(self, *, store: Callable[[], DashboardStore] = watching_store, poll_ms: int = POLL_MS,
-                 start: bool = True, brand: str = "◆ tabmancer", demo: bool = False) -> None:
+                 start: bool = True, brand: str = "◆ tabmancer", demo: bool = False,
+                 in_tray: bool = False) -> None:
         super().__init__()
         self.collected = frame.collector().hold(self)  # Python's cycle collector on this thread while it is up
         self.store = store()
@@ -395,6 +400,13 @@ class MainWindow(QMainWindow):
         self.popup: QMenu | None = None  # a card's or a row's menu, while it is shown
         self.leaving = False  # closing anyway: the handovers queued here dropped (CloseDialog), or the app quit
         self.close_after = False  # closed while a handover was written: closes once it is (finish_closing)
+        self.quitting = False  # q, or Quit in the tray's menu: a close quits, never to the tray
+        self.closed = False  # closed for good: the lock let go, the door shut
+        self.tray: tray.Tray | None = None  # where X puts the window (run's window only, where there is a tray)
+        if in_tray and tray.available():
+            self.tray = tray.Tray(self)
+            self.tray.opened.connect(self.come_forward)
+            self.tray.quit.connect(self.quit_key)
         self.tick()
         self.board.setFocus()  # the arrows pick a card from the start
         if start:
@@ -611,7 +623,7 @@ class MainWindow(QMainWindow):
         bar = self.menus
         bar.setFont(look.font(9.5))
         self.actions_by_key: dict[str, QAction] = {}
-        doing = {"?": self.show_keys, "q": self.close, "T": self.teams_key, "/": self.find_words,
+        doing = {"?": self.show_keys, "q": self.quit_key, "T": self.teams_key, "/": self.find_words,
                  "1": self.only_open, "2": self.only_waiting, "3": self.only_continue, "l": self.toggle_live,
                  "Space": self.toggle, "a": self.toggle_all, "e": self.expand, "E": self.fold_teams, "x": self.hide,
                  "X": self.toggle_hidden, "f": self.pin, "Tab": self.switch_focus, "Esc": self.back,
@@ -1906,9 +1918,15 @@ class MainWindow(QMainWindow):
         self.come_forward()
 
     def come_forward(self) -> None:
+        """`tabmancer desktop` again, the tray's Open or a click on its icon: the window in front, from the tray
+        too, with what went there with it (to_tray)."""
         if self.isMinimized():
             self.showNormal()
         self.show()
+        for aside in self.findChildren(QWidget):
+            if aside.property(IN_TRAY):
+                aside.setProperty(IN_TRAY, False)
+                aside.show()
         self.raise_()
         self.activateWindow()
 
@@ -1925,9 +1943,16 @@ class MainWindow(QMainWindow):
             dock.show()
 
     def closeEvent(self, event) -> None:
-        """Handovers queued here go with the window, so it asks first (CloseDialog). One being written is never
-        cut short (a session closed to write its own would lose it): the window says so and stays till it is
-        written and its fresh session opened (finish_closing)."""
+        """With a tray, X (or Alt+F4: the window system's own close, spontaneous) puts the window there and
+        tabmancer goes on (to_tray). Any other close quits: q or the tray's Quit (quit_key), Esc, and the app
+        told to quit (a logoff, say: Qt closes its windows first, and an ignored close would call the quit off).
+        Quitting, handovers queued here go with the window, so it asks first (CloseDialog). One being written is
+        never cut short (a session closed to write its own would lose it): the window says so and stays till it
+        is written and its fresh session opened (finish_closing)."""
+        if self.tray is not None and event.spontaneous() and not (self.quitting or self.leaving):
+            event.ignore()
+            self.to_tray()
+            return
         if self.engine.state.queued and not self.leaving:
             event.ignore()
             self.ask_to_close()
@@ -1952,9 +1977,43 @@ class MainWindow(QMainWindow):
         frame.save_layout(self, LAYOUT_KEY)
         if self.looker is not None:
             self.looker.join(LOOK_WAIT)  # a look under way could take the lock just as it goes
-        self.engine.unmount()  # a real quit (no tray yet): the actor lock goes, for another dashboard to take
+        self.engine.unmount()  # a real quit, never the tray: the actor lock goes, for another dashboard to take
+        if self.tray is not None:
+            self.tray.remove()
+        self.closed = True
         super().closeEvent(event)
         self.collected()
+        self.quit_now.emit()
+
+    def to_tray(self) -> None:
+        """X with a tray: the window hides, its layout kept, and the rest goes on: the reading, the actor lock and
+        what acting runs, the desktop notes (it is not looked at now), the monitors M opened, the door. The first
+        time in a run, the tray says where it went and how to quit, unless the desktop notes are off."""
+        frame.save_layout(self, LAYOUT_KEY)
+        for aside in self.findChildren(QWidget):  # its windows: Qt hides none of them with it
+            if not (aside.isWindow() and aside.isVisible()):
+                continue
+            if aside.windowType() == Qt.WindowType.Popup:  # a menu, the palette: gone, as a click elsewhere
+                aside.close()
+            else:  # a floating panel, the keys: with the window, and back with it (come_forward)
+                aside.setProperty(IN_TRAY, True)
+                aside.hide()
+        self.setVisible(False)  # QWidget's hide (hide() is the x key here)
+        if self.tray is not None and toast.enabled():
+            self.tray.tell_kept()
+
+    def quit_key(self) -> None:
+        """q, or Quit in the tray's menu: tabmancer quits, as the window's close did before the tray (closeEvent).
+        From the tray, the window comes forward first when it has something to ask or say (handovers queued
+        here, one being written); asked and kept open, the next X goes to the tray again (stay)."""
+        self.quitting = True
+        if self.engine.state.queued or self.front.handing_now():
+            self.come_forward()
+        self.close()
+
+    def stay(self) -> None:
+        """The close asked about was not wanted: X goes to the tray again."""
+        self.quitting = False
 
     def ask_to_close(self) -> None:
         """The handovers queued here, by name: closed anyway (accepted), they are dropped; else nothing changes."""
@@ -1964,6 +2023,7 @@ class MainWindow(QMainWindow):
         names = [self.front.who(sessions[sid]) if sid in sessions else sid[:8] for sid in self.engine.state.queued]
         asked = CloseDialog(self, names, self.accent)
         asked.accepted.connect(self.close_anyway)
+        asked.rejected.connect(self.stay)
         asked.open()
 
     def close_anyway(self) -> None:
@@ -2006,11 +2066,13 @@ def knock() -> bool:
 
 
 def run(demo: bool = False, days: float = DAYS, include_all: bool = False) -> int:
-    """The window, till it is closed. With demo, over the made-up sessions of `tabmancer --demo`:
-    nothing real is read (frame.made_up_world). days and include_all: the sessions it lists, as
-    `tabmancer --days N --all` (the last days; sessions started by tools too)."""
+    """The window, till tabmancer quits: closed where there is no tray; else q, or Quit in the tray's menu (X
+    puts the window in the tray, so the app outlives its last window: quit_now ends it). With demo, over the
+    made-up sessions of `tabmancer --demo`: nothing real is read (frame.made_up_world). days and include_all:
+    the sessions it lists, as `tabmancer --days N --all` (the last days; sessions started by tools too)."""
     look.fonts_for_offscreen()
     app = QApplication.instance() or QApplication(["tabmancer"])
+    last_closed_quits = app.quitOnLastWindowClosed()
     told = Told(app)  # the demo's stand-ins say what would have happened, from any thread
     with made_up_world(demo, told.said.emit):
         window = None
@@ -2018,15 +2080,19 @@ def run(demo: bool = False, days: float = DAYS, include_all: bool = False) -> in
             if knock():  # open already (the command twice): that window comes forward
                 return 0
             window = MainWindow(store=partial(watching_store, days, include_all),
-                                brand="◆ tabmancer demo" if demo else "◆ tabmancer", demo=demo)
+                                brand="◆ tabmancer demo" if demo else "◆ tabmancer", demo=demo, in_tray=True)
             told.said.connect(window.demo_told)
+            if window.tray is not None:  # a monitor or a dialog closed while the window is in the tray: no quit
+                app.setQuitOnLastWindowClosed(False)
+                window.quit_now.connect(app.quit)
             window.show()
             code = app.exec()
-            if window.isVisible():  # the app was told to quit, the window not closed: its layout is kept too
-                window.leaving = True  # nothing can be asked now; a handover being written: settle waits for it
-                window.close()
+            if not window.closed:  # the app was told to quit (a logoff, say), the window not closed: closed
+                window.leaving = True  # now, never to the tray, its lock let go and its layout kept; nothing
+                window.close()  # can be asked now; a handover being written: settle waits for it
             return code
         finally:
+            app.setQuitOnLastWindowClosed(last_closed_quits)
             if window is not None:
                 window.timer.stop()
                 window.ticker.stop()

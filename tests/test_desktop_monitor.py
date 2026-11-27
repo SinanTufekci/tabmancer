@@ -19,10 +19,11 @@ else:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
 import shiboken6
-from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QContextMenuEvent, QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
+from qt_later import later  # noqa: F401  (a fixture)
 
 from tabmancer import actor, agy, cli, demo, teambus, teams
 from tabmancer import viewmodel as VM
@@ -501,7 +502,7 @@ def test_short_and_sequences():
     assert [s.toString() for s in monitor.sequences("Enter")] == ["Return", "Enter"]
 
 
-def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch):
+def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch, later):  # noqa: F811
     """The seam: `tabmancer desktop --monitor shop` to a window that reads the team, then closes."""
     seen = []
 
@@ -511,10 +512,10 @@ def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch):
             seen.append(list(windows[0].cards))
             qapp.quit()
         else:
-            QTimer.singleShot(100, look_then_quit)
+            later(100, look_then_quit)
 
-    QTimer.singleShot(100, look_then_quit)
-    QTimer.singleShot(30_000, qapp.quit)  # never hangs the suite
+    later(100, look_then_quit)
+    later(30_000, qapp.quit)  # never hangs the suite
     with pytest.raises(SystemExit) as out:
         cli.main(["desktop", "--monitor", "shop"])
     assert out.value.code == 0
@@ -522,7 +523,7 @@ def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch):
     assert "monitor" in read_json(monitor.LAYOUT_FILE)  # closed as a window closes
 
 
-def test_the_demo_puts_the_world_back(qapp, monkeypatch, tmp_path):
+def test_the_demo_puts_the_world_back(qapp, monkeypatch, tmp_path, later):  # noqa: F811
     """`tabmancer desktop --monitor --demo`: the made-up team, and afterwards nothing of it left."""
     before = {name: os.environ.get(name) for name in monitor.DEMO_ENV}
     agents = sys.modules["tabmancer.sessions"]._agents_json
@@ -535,10 +536,10 @@ def test_the_demo_puts_the_world_back(qapp, monkeypatch, tmp_path):
             kept.append(windows[0])
             qapp.quit()
         else:
-            QTimer.singleShot(100, look_then_quit)
+            later(100, look_then_quit)
 
-    QTimer.singleShot(100, look_then_quit)
-    QTimer.singleShot(30_000, qapp.quit)
+    later(100, look_then_quit)
+    later(30_000, qapp.quit)
     assert monitor.run("", demo=True) == 0
     assert seen == [("shop", ["lead", "api", "ui", "tests"], False)]  # the cycle collector on its thread only
     assert {name: os.environ.get(name) for name in monitor.DEMO_ENV} == before

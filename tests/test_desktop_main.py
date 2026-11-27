@@ -21,10 +21,11 @@ else:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
 import shiboken6
-from PySide6.QtCore import QObject, QPoint, Qt, QTimer
+from PySide6.QtCore import QObject, QPoint, Qt
 from PySide6.QtGui import QContextMenuEvent, QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDockWidget, QMenu, QTextBrowser
+from qt_later import later  # noqa: F401  (a fixture)
 
 from tabmancer import (
     accounts,
@@ -1522,7 +1523,7 @@ def test_a_second_open_brings_the_first_forward(qapp, window, monkeypatch):
     assert main.knock() is False  # closed: its door with it
 
 
-def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch):
+def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch, later):  # noqa: F811
     """The seam: `tabmancer desktop` to a window that reads the sessions, then closes, and is deleted on the
     GUI thread (never left for the cycle collector to free on another one)."""
     seen, shown = [], []
@@ -1534,10 +1535,10 @@ def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch):
             shown.append(windows[0])
             qapp.quit()
         else:
-            QTimer.singleShot(100, look_then_quit)
+            later(100, look_then_quit)
 
-    QTimer.singleShot(100, look_then_quit)
-    QTimer.singleShot(30_000, qapp.quit)  # never hangs the suite
+    later(100, look_then_quit)
+    later(30_000, qapp.quit)  # never hangs the suite
     with pytest.raises(SystemExit) as out:
         cli.main(["desktop"])
     assert out.value.code == 0
@@ -1546,7 +1547,7 @@ def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch):
     assert not shiboken6.isValid(shown[0]) and gc.isenabled()
 
 
-def test_the_demo_puts_the_world_back(qapp, monkeypatch):
+def test_the_demo_puts_the_world_back(qapp, monkeypatch, later):  # noqa: F811
     """`tabmancer desktop --demo`: the made-up sessions, and afterwards nothing of them left; the days
     and --all given reach the window's store and its info line."""
     before = {name: os.environ.get(name) for name in frame.DEMO_ENV}
@@ -1562,10 +1563,10 @@ def test_the_demo_puts_the_world_back(qapp, monkeypatch):
             kept.append(shown)
             qapp.quit()
         else:
-            QTimer.singleShot(100, look_then_quit)
+            later(100, look_then_quit)
 
-    QTimer.singleShot(100, look_then_quit)
-    QTimer.singleShot(30_000, qapp.quit)
+    later(100, look_then_quit)
+    later(30_000, qapp.quit)
     assert main.run(demo=True, days=30, include_all=True) == 0
     assert len(seen) == 1 and seen[0][0] == "◆ tabmancer demo" and seen[0][1] >= len(demo.SESSIONS)
     assert seen[0][2:4] == (30, True) and "last 30 days" in seen[0][4]

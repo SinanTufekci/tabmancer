@@ -225,10 +225,11 @@ class WindowFront(QObject):
 
     def looked_at(self) -> bool:
         """Whether you are looking at the window: it, or a dialog of its, is the active window and it is not
-        minimised (toast.show looks at Windows Terminal's tabs alone)."""
+        minimised or in the tray (toast.show looks at Windows Terminal's tabs alone)."""
         window = self.window()
         active = QApplication.activeWindow()
-        return not window.isMinimized() and active is not None and (active is window or active.parent() is window)
+        return (window.isVisible() and not window.isMinimized() and active is not None
+                and (active is window or active.parent() is window))
 
     # --- what it draws ----------------------------------------------------------------------------
 

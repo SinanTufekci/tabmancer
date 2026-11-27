@@ -1,4 +1,5 @@
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -98,6 +99,10 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(focus, "foreground", lambda: 0)  # nor take the keys back to a window
     monkeypatch.setattr(focus, "give_back", lambda hwnd, wait=3.0, timeout=20: False)
     monkeypatch.setattr(focus, "tab_open", lambda start, timeout=5: False)  # nor look through the real tabs
+    if "PySide6" in sys.modules:  # never an icon in the real system tray (the window's: its tests stand in)
+        from tabmancer.desktop import tray
+
+        monkeypatch.setattr(tray, "available", lambda: False)
     monkeypatch.setattr(typein, "write_keys", lambda pid, text: False)  # nor type into a real console
     # Never real tabs or windows, whatever a test presses: a test that wants to see what would
     # open puts its own recorder in their place.
