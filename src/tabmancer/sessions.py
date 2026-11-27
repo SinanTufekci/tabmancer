@@ -1135,7 +1135,9 @@ def find_sessions(days: float = 14, include_all: bool = False, quick: bool = Fal
         sessions = [s for s in sessions if s.entrypoint in ("", "cli")]
     for session in sessions:
         mark_live(session, live.get(session.session_id))
-    sessions.sort(key=lambda s: s.last_active, reverse=True)
+    # Newest first; at the same moment by id, not in the order the disk listed them (NTFS sorts names, ext4 not).
+    sessions.sort(key=lambda s: s.session_id)
+    sessions.sort(key=lambda s: s.last_active, reverse=True)  # stable, reversed too
     return sessions
 
 

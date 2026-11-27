@@ -351,7 +351,9 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         share,
         shutdowns,
         stats,
+        store,
         summarize,
+        teams,
         toast,
         typein,
         updates,
@@ -404,6 +406,12 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
         changed, ahead = GIT.get(Path(folder).name, (0, 0))
         return gitstate.GitState(branch="main", changed=changed, ahead=ahead, upstream=True)
 
+    def pid_files() -> list[dict]:
+        """Claude Code's pid files, as the quick polls read them: the open sessions `claude agents` lists, but
+        the background ones (they have none). Without it a quick poll found every made-up session closed and a
+        full one found it open, so what a reader said hung on which it saw first (the team reader on CI)."""
+        return [entry for entry in live if entry.get("kind") != "background"]
+
     # Made-up browser profiles for A: never the viewer's own (their names and Google accounts).
     places = [browsers.Place(browsers.DEFAULT, "default browser"),
               browsers.Place("chrome:Default", "Chrome · Personal", ("chrome",), "you@example.com"),
@@ -415,6 +423,7 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
     save_report, save_stats = report.save, stats.write_files
     dashboard = [] if app_module is None else [
         (app_module, "recent_shutdowns", lambda: [SHUTDOWN]),
+        (app_module, "_registry_sessions", pid_files),
         (app_module, "open_tabs", opened),
         (app_module, "run_in_background", refused("starts in the background")),
         (app_module, "close_tabs", would_close),  # the dashboard's x twice and the team's handover
@@ -422,6 +431,13 @@ def stand_ins(home: Path, live: list[dict], tell: Callable[[str], None]) -> list
     ]
     return [
         (sessions, "_agents_json", lambda include_finished=False: live),
+        # The pid files, wherever they are read by name (handover's and typein's are left: nothing is handed over
+        # or typed in the demo, and an open session's handover waits for its pid file to go).
+        (sessions, "_registry_sessions", pid_files),
+        (store, "_registry_sessions", pid_files),
+        (teams, "_registry_sessions", pid_files),
+        # The demo has agy members and agy's quota on any machine, agy on its PATH or not.
+        (agy, "installed", lambda: True),
         *dashboard,
         (launch, "open_tabs", opened),  # the desktop window's, which looks them up when it opens
         (launch, "run_in_background", refused("starts in the background")),

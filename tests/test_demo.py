@@ -204,3 +204,41 @@ def test_the_demo_never_reads_the_real_team_buses(tmp_path):
     assert not any("outside the demo" in message["text"] for message in teambus.messages("shop"))
     changed = {name for name in {*before, *os.environ} if before.get(name) != os.environ.get(name)}
     assert changed <= set(demo.ENVIRON)  # all it points elsewhere is put back by name
+
+
+def test_the_demo_reads_the_same_on_any_machine(tmp_path, monkeypatch):
+    """What tells one machine from another reaches no reader: agy is there whether or not it is on the PATH
+    (CI has none, so the window's agy quota came out empty), the quick polls' pid files list the open
+    sessions `claude agents` lists (they found none, so a quick read and a full one disagreed on who was open,
+    and the team reader said whichever it saw first), and sessions of the same moment come in one order
+    whatever order the disk lists their files in (ext4's is not NTFS's)."""
+    from tabmancer import agy, sessions, store, teams
+
+    monkeypatch.setenv("CODEX_HOME", "restored after the test")  # prepare() sets it too
+    live = demo.prepare(tmp_path)
+    for module, name, value in demo.stand_ins(tmp_path, live, print):
+        monkeypatch.setattr(module, name, value)
+    monkeypatch.setattr(agy.shutil, "which", lambda name: None)  # no agy here
+    assert agy.installed() and agy.quota_view()["chain"]
+    pid_files = sessions._registry_sessions()
+    assert store._registry_sessions is teams._registry_sessions is app._registry_sessions is sessions._registry_sessions
+    assert {e["sessionId"] for e in pid_files} == {e["sessionId"] for e in live if e.get("kind") != "background"}
+    quick, full = sessions.find_sessions(quick=True), sessions.find_sessions()
+    background = {e["sessionId"] for e in live if e.get("kind") == "background"}  # no pid file: full polls only
+    assert background and [s.session_id for s in quick] == [s.session_id for s in full]
+    assert [s.exit for s in quick if s.session_id not in background] == [
+        s.exit for s in full if s.session_id not in background]
+    assert {s.session_id for s in quick if s.title.startswith("shop-")} <= {e["sessionId"] for e in pid_files}
+    read, glob = sessions._read_cached, sessions._glob
+    moment = full[0].last_active
+
+    def at_one_moment(paths):  # as the goldens' frozen clock dates the team's four
+        made = read(paths)
+        for session in made:
+            session.last_active = moment
+        return made
+
+    monkeypatch.setattr(sessions, "_read_cached", at_one_moment)
+    ids = [s.session_id for s in sessions.find_sessions(quick=True) if s.cli == "claude"]
+    monkeypatch.setattr(sessions, "_glob", lambda folder, pattern: list(reversed(glob(folder, pattern))))
+    assert [s.session_id for s in sessions.find_sessions(quick=True) if s.cli == "claude"] == ids == sorted(ids)

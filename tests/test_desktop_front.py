@@ -6,6 +6,7 @@ and a window, never acting, does nothing by itself. Offscreen over the made-up s
 import importlib
 import inspect
 import os
+import sys
 import threading
 import time
 from dataclasses import replace
@@ -33,9 +34,12 @@ from tabmancer import (
     engine,
     handover,
     launch,
+    sessions,
     shutdowns,
+    store,
     summarize,
     teamkeys,
+    teams,
     toast,
     typein,
 )
@@ -99,7 +103,19 @@ def read(qapp, shown):
 
 
 def taking(shown, *changed):
-    """A reading like the last one with these sessions as they are now."""
+    """A reading like the last one with these sessions as they are now. One closed here took its pid file with it
+    (as /exit does), so the demo's stand-in for them, where it stands, no longer lists it: the quick polls and
+    the team reader see it closed too, as they would."""
+    gone = {s.session_id for s in changed if s.exit is not Exit.RUNNING}
+    listed = sessions._registry_sessions
+    if gone and listed.__qualname__.startswith(("stand_ins.", "taking.")):  # the world's monkeypatch puts it back
+
+        def pid_files() -> list[dict]:
+            return [entry for entry in listed() if entry.get("sessionId") not in gone]
+
+        for module in (sessions, store, teams, sys.modules.get("tabmancer.app")):  # app: where the TUI is loaded
+            if module is not None:
+                module._registry_sessions = pid_files
     snap = shown.snap
     shown.take(shown.store, replace(snap, sessions={**snap.sessions, **{s.session_id: s for s in changed}}), False, "")
 

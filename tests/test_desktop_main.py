@@ -765,10 +765,11 @@ async def test_the_drawer_says_what_the_terminals_preview_says(qapp, world, monk
         assert "attaches to it" in side.plain()
         shown.show_pick(VM.TEAM_CARD + name)
         said = side.plain().replace(NBSP, " ")
-        # How many are open, as both lists have them: the demo's team reader has its members' copies
-        # closed while the list has them open, and the preview, the rail and the board go by the list.
+        # How many are open, as both lists have them: the list and the team reader both see the demo's four
+        # open (its pid files and `claude agents` list the same, on any machine), and the preview, the rail
+        # and the board go by the list.
         view = next(team for team in shown.snap.view.teams if team.name == name)
-        assert view.open == len(view.members) > state.open_count() and not team_words.closed
+        assert view.open == len(view.members) == state.open_count() and not team_words.closed
         assert f"  ·  {view.open} of {len(view.members)} open  ·  " in team_head
         assert team_head in said and team_goal in said and "Closed. Enter starts it" not in said
     finally:
