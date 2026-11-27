@@ -9,7 +9,7 @@ import re
 import threading
 import time
 import weakref
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import partial
 
 import pytest
@@ -24,7 +24,7 @@ import shiboken6
 from PySide6.QtCore import QObject, QPoint, Qt
 from PySide6.QtGui import QContextMenuEvent, QTextDocument
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDockWidget, QMenu, QTextBrowser
+from PySide6.QtWidgets import QApplication, QDialog, QDockWidget, QMenu, QTextBrowser
 from qt_later import later  # noqa: F401  (a fixture)
 
 from tabmancer import (
@@ -37,6 +37,7 @@ from tabmancer import (
     demo,
     diskclean,
     focus,
+    history,
     launch,
     marks,
     palette,
@@ -64,13 +65,15 @@ from tabmancer.desktop import (
     teampanel,
 )
 from tabmancer.desktop.cleanup import CleanupDialog
+from tabmancer.desktop.stats import StatsDialog
 from tabmancer.desktop.table import COLUMN, PARTS
 from tabmancer.desktop.teamkeysdialogs import AddMembersDialog
+from tabmancer.desktop.wrapped import WrappedDialog
 from tabmancer.keys import KEYS
 from tabmancer.launch import Mode
 from tabmancer.search import matches
 from tabmancer.teamwords import colours, team_detail
-from tabmancer.tokens import human
+from tabmancer.tokens import Report, human
 from tabmancer.widgets import bar_text
 
 look.fonts_for_offscreen()
@@ -461,6 +464,38 @@ def test_a_greyed_command_says_why_and_does_nothing(qapp, window):
     QTest.keyClick(bar.line, Qt.Key.Key_Return)  # nothing picked: nothing happens
     QTest.keyClick(bar.line, Qt.Key.Key_Escape)
     assert not bar.isVisible()
+
+
+def test_u_and_w_open_the_stats_and_wrapped_over_the_counted_tokens(qapp, window, monkeypatch):
+    asked = []
+
+    def collect(days=None):  # the stats' period counted again: slow enough to be under way
+        asked.append(days)
+        time.sleep(0.5)
+        return Report(date.today() - timedelta(days=(days or 60) - 1), days or 60)
+
+    monkeypatch.setattr(history, "collect", collect)
+    shown = window()
+    read(qapp, shown)
+    report = shown.snap.report
+    assert report is not None and shown.actions_by_key["u"].isEnabled() and shown.actions_by_key["W"].isEnabled()
+    shown.actions_by_key["u"].trigger()
+    stats = [dialog for dialog in shown.findChildren(StatsDialog) if dialog.isVisible()]
+    assert len(stats) == 1 and stats[0].report is report and stats[0].sessions == shown.snap.sessions
+    assert stats[0].windowModality() == Qt.WindowModality.WindowModal
+    wait(qapp, lambda: asked)  # what it was given shown, the period is counted again off the window's thread
+    shown.settle()  # that count waited for too, as the window's own reads
+    assert asked[0] == report.days and not any(thread.is_alive() for thread in stats[0].worker.workers)
+    stats[0].reject()
+    shown.actions_by_key["W"].trigger()
+    cards = [dialog for dialog in shown.findChildren(WrappedDialog) if dialog.isVisible()]
+    assert len(cards) == 1 and cards[0].week.last == report.last  # the last seven days of the store's count
+    cards[0].reject()
+    shown.snap = dataclasses.replace(shown.snap, report=None)  # before the store's first count
+    for key in ("u", "W"):
+        shown.actions_by_key[key].trigger()
+        assert shown.bit_line.text() == main.NOT_COUNTED.format(key=key)
+    assert not [dialog for dialog in shown.findChildren(QDialog) if dialog.isVisible()]
 
 
 def test_a_session_or_a_team_by_name_picks_its_card(qapp, window):

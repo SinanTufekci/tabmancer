@@ -128,11 +128,13 @@ from .naming import NameDialog, PromptDialog, Renamer
 from .opening import Opener
 from .rail import Rail
 from .signin import Accounts, AccountsDialog, AccountsLabel, Seen
+from .stats import StatsDialog
 from .summaries import Summarizer
 from .table import Table, drawer_key
 from .teampanel import TeamPanel
 from .widgets import KeyBar, bit_pixmap, text_label
 from .workspacelist import WorkspacesDialog
+from .wrapped import WrappedDialog
 
 POLL_MS = 2000  # as often as the terminal dashboard reads its pid files (LIVE_REFRESH_SECONDS)
 ACTOR_MS = engine.ACTOR_SECONDS * 1000  # the actor lock looked at (tick_actor), as often as the terminal looks
@@ -149,7 +151,7 @@ TERMINALS = {"V": "The terminal dashboard's own: here the panels drag, split and
 LEFT_OUT = {"t"}
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H", "c"}
+        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H", "c", "u", "W"}
 TEAM_GROUP = "The team"
 # The terminal team view's own keys (keys.MONITOR_KEYS' "The team": its a, s, h and x are the dashboard's
 # too, on a team's card): g the team's goal; on a member, picked in the Team panel or its row in the Table, d
@@ -162,6 +164,8 @@ PICK_MEMBER = "d and H act on a team's member: click one in the Team panel (T), 
 GOAL_PICK = "g changes a team's goal: pick its card, or bring its tab in the Team panel (T)."
 TEAMS_SAID = "The Team panel: T again starts a new team."
 START_ELSEWHERE = "s starts a team, or summarizes a session: pick one."
+# u and W before the store's first count of the tokens (snap.report None till then).
+NOT_COUNTED = "{key} waits for the first count of the tokens: a moment."
 # A goal the new-team dialog found a team at work has already, or adds to, with typing into tabs off
 # (front.TYPES_INTO_TABS): its words on the clipboard instead.
 TELL_ELSEWHERE = ("{team} is on this goal already: nothing was made. The message for {to} is on the clipboard, to "
@@ -639,7 +643,8 @@ class MainWindow(QMainWindow):
                  "B": self.background_key, ",": self.settings_key,
                  "A": self.accounts_key, "w": self.save_workspace_key, "o": self.open_workspace_key,
                  "n": self.new_sessions_key, "s": self.start_key, "g": self.goal_key, "d": self.remove_key,
-                 "H": self.member_handover_key, "c": self.continue_key}
+                 "H": self.member_handover_key, "c": self.continue_key, "u": self.stats_key,
+                 "W": self.wrapped_key}
         self.menus_by_group = {}
         for group, keys in WINDOW_KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -717,6 +722,8 @@ class MainWindow(QMainWindow):
         self.signin.settle(seconds)
         self.asker.settle(seconds)
         self.front.settle(seconds)
+        for shown in [*self.findChildren(StatsDialog), *self.findChildren(WrappedDialog)]:
+            shown.worker.settle(seconds)  # u's and W's counting, on threads of their own
         deadline = time.monotonic() + seconds  # s's summaries, written into the config folder: all in seconds
         for thread in list(self.summarizer.workers):
             thread.join(max(0.0, deadline - time.monotonic()))
@@ -1661,6 +1668,24 @@ class MainWindow(QMainWindow):
             self.say("h hands a session over to a fresh one: pick one.")
             return
         self.engine.handover(session)
+
+    def stats_key(self) -> None:
+        """u: the stats (StatsDialog: statsmodel.py's counting and words, one copy with the terminal's u
+        screen), over the report the store counted; said while it has not counted yet."""
+        snap = self.snap
+        if snap is None or snap.report is None:
+            self.say(NOT_COUNTED.format(key="u"))
+            return
+        StatsDialog(self, snap.report, snap.sessions, self.accent).open()
+
+    def wrapped_key(self) -> None:
+        """W: Claude Code Wrapped (WrappedDialog: wrappedwords.py's words, wrapped.py's card), over the
+        report the store counted; said while it has not counted yet."""
+        snap = self.snap
+        if snap is None or snap.report is None:
+            self.say(NOT_COUNTED.format(key="W"))
+            return
+        WrappedDialog(self, snap.report, snap.sessions, self.accent).open()
 
     def rename_key(self) -> None:
         """r: the picked session renamed, as the terminal dashboard's r does it and in its words (rename.py):
