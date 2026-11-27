@@ -272,7 +272,7 @@ class LimitRing(QWidget):
 
 class KeyBar(QWidget):
     """The keys, always shown under the window: 'Enter its tab  j needs you ...'. The dim ones are
-    done elsewhere for now (the terminal dashboard), and drawn greyed."""
+    not done in the window (yet), and drawn greyed."""
 
     def __init__(self, pairs: list[tuple[str, str]], note: str = "", dim: set[str] | frozenset = frozenset()) -> None:
         super().__init__()

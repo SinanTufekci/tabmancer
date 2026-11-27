@@ -3,13 +3,14 @@
 Qt comes from PySide6-Essentials (LGPL, used as installed). Only this package imports it: without
 the extra, tabmancer and its tests run as ever, and `tabmancer desktop` says how to add it.
 
-Its first part is the team monitor, `tabmancer desktop --monitor [team]`. It only watches: it reads
-the team through the one-team store (store.TeamStore) on a thread of its own, never claims the
-actor lock (the dashboard that acts goes on acting), and starts, sends and closes nothing. The
-terminal monitor (`tabmancer team watch`, M in the dashboard) stays as it is.
+The dashboard's window, `tabmancer desktop` (desktop.main; bare `tabmancer` opens it too), reads the
+sessions through store.DashboardStore on a thread of its own and acts as the terminal dashboard does
+while it holds the actor lock; another dashboard holding it, it watches and takes over when that one
+is gone. Its keys, menus, key bar and palette are the dashboard's keys.
 
-The dashboard's window, `tabmancer desktop` (desktop.main), is under way: its top bar, menus and
-key bar, and panels to fill. It watches the way the monitor does, through store.DashboardStore.
+The team monitor, `tabmancer desktop --monitor [team]` (M in the window, and `tabmancer team watch`),
+reads one team through store.TeamStore; what changes the team acts through a dashboard window, its
+hands (monitor.py).
 """
 
 from __future__ import annotations

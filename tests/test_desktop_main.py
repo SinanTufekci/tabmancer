@@ -1540,7 +1540,7 @@ def test_one_look_here_t_in_no_list_and_the_theme_picked_in_the_terminal_never_r
 
 def test_v_is_the_terminals_own_said_so_wherever_it_shows_and_j_has_its_place_on_the_key_bar(qapp, window):
     """V lays the terminal's list and preview out; here the panels drag, split and float (Sinan's call,
-    2026-11-26). Greyed with those words in its menu, in ? and in the palette (never "for now"), and off the key
+    2026-11-26). Greyed with those words in its menu, in ? and in the palette (never "yet"), and off the key
     bar, whose place is j's. b, the last key still to come, is the window's own since the pet (2026-11-27)."""
     shown = window()
     own = main.TERMINALS["V"]

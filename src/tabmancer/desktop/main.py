@@ -29,8 +29,8 @@ and a tick (a click on a row's [ ] too), f pins, x hides (with the keys on the r
 team with members open, x twice closes their tabs, as on /exit), X shows the hidden ones, e and E unfold teams in the Table, Tab moves between the rail and
 the sessions, Esc clears what the list is narrowed to. Pins and hides go to marks.json as every
 dashboard changes it (marks.change): what another one changed meanwhile stays, and each shows them at
-its next read; Bit says what a key did. The panels fill in slice by slice; till then a key not done here is greyed in its
-menu and in the key bar, and done in the terminal dashboard (tabmancer --terminal). The Team panel (teampanel), a tab beside the list, shows each team's
+its next read; Bit says what a key did. A key not done here is greyed in its menu, the palette and the key bar,
+saying why (done_where). The Team panel (teampanel), a tab beside the list, shows each team's
 picture over its conversation; T brings it to the front. On a team (its card, or its tab with the panel in
 front) s starts it, a adds members and g changes its goal; on the member clicked there (or its row in the
 Table) d twice takes it off and H hands it alone over: the terminal team view's keys (teamkeys, one copy), g, d
@@ -156,13 +156,13 @@ TICK_MS = 100  # the live dot breathes and the clock goes on
 INFO_LEAST = 20  # characters the info line keeps before the accounts give way
 IN_TRAY = "tabmancer_in_tray"  # a window of the window's that went to the tray with it
 LAYOUT_KEY = "main"  # desktop.json's
-ELSEWHERE = "In the terminal dashboard for now: tabmancer --terminal"
-# The terminal dashboard's keys for good, in their own words: V lays out its list and preview, where the window's
+ELSEWHERE = "Not in the window yet."
+# Keys the window does without, in their own words: V lays out the terminal's list and preview, where the window's
 # panels drag, split and float.
-TERMINALS = {"V": "The terminal dashboard's own: here the panels drag, split and float (Panels)"}
+TERMINALS = {"V": "Not needed in the window: its panels drag, split and float (Panels)."}
 # The keys the window leaves out altogether: t, the next colour theme (one look here: look.accent).
 LEFT_OUT = {"t"}
-# The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
+# The dashboard's keys that work here (KEYS names them all); the rest are greyed, saying why (done_where).
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
         "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H", "c", "u", "W", "b", "Del"}
 # The window's own words for a key it does its own way: b, Bit here has no pixels or blocks to pick between.
@@ -188,8 +188,8 @@ NOT_COUNTED = "{key} waits for the first count of the tokens: a moment."
 # (front.TYPES_INTO_TABS): its words on the clipboard instead.
 TELL_ELSEWHERE = ("{team} is on this goal already: nothing was made. The message for {to} is on the clipboard, to "
                   "paste into its tab (Ctrl+V, Enter).")
-JOIN_ELSEWHERE = ("{team} is at work on this goal: nothing was made. Adding members to a team at work is the terminal "
-                  "dashboard's for now (T there, then Ctrl+R); the goal is on the clipboard.")
+JOIN_ELSEWHERE = ("{team} is at work on this goal: nothing was made. Adding members to a team at work tells its "
+                  "lead in its tab, and this window types into none; the goal is on the clipboard.")
 # c in a window that watches, on sessions the dashboard that acts continues at their reset (config.json's, read
 # with the list): it changes nothing of that dashboard's. Gone on now, one is left alone there (actions.due takes
 # only the still stopped); handed over, the old one would go on there too, so that waits for c there. A window
@@ -239,7 +239,7 @@ TEAM_GONE = "There is no team {team} any more."  # a team key on a team gone mea
 
 
 def done_where(key: str) -> str:
-    """Where a key the window does not do is done: the terminal dashboard's for now, or its own (TERMINALS)."""
+    """Why the window does not do a key: not yet (ELSEWHERE), or its own words (TERMINALS)."""
     return TERMINALS.get(key, ELSEWHERE)
 
 
@@ -531,7 +531,7 @@ class MainWindow(QMainWindow):
                          Qt.Orientation.Horizontal)
         self.resizeDocks([docks["Sessions"], docks["Bit"]], [700, 100], Qt.Orientation.Vertical)
         self.build_menus()
-        self.keybar = KeyBar(KEY_BAR, "greyed: in the terminal dashboard for now (tabmancer --terminal)",
+        self.keybar = KeyBar(KEY_BAR, "greyed: not in the window yet",
                              dim={key for key, _ in KEY_BAR if key not in HERE and key != commandbar.KEY})
         self.statusBar().addWidget(self.keybar, 1)
 
@@ -651,7 +651,7 @@ class MainWindow(QMainWindow):
 
     def build_menus(self) -> None:
         """A menu a group of the dashboard's keys, every key in it: the ones done here, and the ones
-        the terminal dashboard does (greyed, saying so). Panels brings closed panels back."""
+        it does not (greyed, saying why). Panels brings closed panels back."""
         bar = self.menus
         bar.setFont(look.font(9.5))
         self.actions_by_key: dict[str, QAction] = {}
@@ -1121,7 +1121,7 @@ class MainWindow(QMainWindow):
     def monitor_key(self) -> None:
         """M: the picked team's monitor (a member's: its team's) in a window of its own, on another screen
         when there is one, as the terminal dashboard's M opens it; open already (from here, or from a
-        terminal), it comes to the front. It only watches, as this window does."""
+        terminal), it comes to the front. What changes the team acts through this window, its hands."""
         team = self.team_of_pick()
         if team is None:
             self.say("M opens a team's monitor: pick a team, or one of its members.")
@@ -1450,8 +1450,8 @@ class MainWindow(QMainWindow):
                    run=self.run_key).show()
 
     def open_commands(self) -> None:
-        """Ctrl+K: the palette, over every key of the dashboard (the ones done in the terminal dashboard
-        greyed, saying so), the teams, the projects and the sessions in sight."""
+        """Ctrl+K: the palette, over every key of the dashboard (the ones not done here greyed, saying
+        why), the teams, the projects and the sessions in sight."""
         entries = [replace(entry, why=done_where(entry.key)) if not entry.enabled and entry.key in TERMINALS else entry
                    for entry in commands.commands(WINDOW_KEYS, HERE, ELSEWHERE)]
         sessions = {}
