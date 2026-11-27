@@ -1,11 +1,13 @@
 import json
 import os
+import re
+import sys
 import time
 
 import pytest
 from conftest import wait_until
 
-from tabmancer import cleanup, diskclean, sessions, summarize
+from tabmancer import cleanup, cli, desktop, diskclean, sessions, summarize
 from tabmancer.theme import DEFAULT_THEME
 
 
@@ -253,3 +255,56 @@ def test_cleanup_with_no_flag_opens_the_screen(home, moves, monkeypatch, capsys)
     monkeypatch.setattr(cleanup.CleanupApp, "run", lambda self: ran.append(self))
     code, out, _ = cleanup_cli(capsys)
     assert code == 0 and len(ran) == 1 and not out and not moves
+
+
+def test_cleanup_older_heads_with_what_it_picks_as_the_screen_does(home, moves, capsys):
+    """--older's line on top is the screen's (cleanupwords.status): how many are picked, and how big."""
+    _, add = home
+    add("old", prompt="the old cart", days_old=20, history_bytes=5000)
+    add("new", prompt="this week")
+    code, out, _ = cleanup_cli(capsys, "--older", "7")
+    head = out.splitlines()[0]
+    assert code == 0 and not moves
+    assert re.fullmatch(r"2 sessions use .+ · 1 selected \(\d.* KB\) · Claude Code deletes sessions older than "
+                        r"30 days on its own", head), head
+    assert "by hand" not in out  # a flag given: the plain text was asked for
+
+
+@pytest.fixture
+def no_screen(monkeypatch):
+    """A core install: no Textual, so the clean-up screen (tabmancer.cleanup) does not import. Each of Textual's
+    modules refused, not the package alone: one already imported would be found by its own name. And were the
+    screen started after all, it fails here rather than wait for keys."""
+    for name in [name for name in sys.modules if name.split(".")[0] == "textual"]:
+        monkeypatch.setitem(sys.modules, name, None)
+    monkeypatch.setitem(sys.modules, "textual", None)
+    monkeypatch.delitem(sys.modules, "tabmancer.cleanup", raising=False)
+    monkeypatch.setattr(cleanup.CleanupApp, "run", lambda self: pytest.fail("the screen ran without Textual"))
+
+
+@pytest.mark.parametrize("qt", [False, True])
+def test_cleanup_with_no_screen_lists_and_says_where_to_pick_by_hand(home, moves, no_screen, monkeypatch, capsys,
+                                                                     qt):
+    """No screen to pick in: the list, moving nothing, and the desktop window's way (installed or not)."""
+    _, add = home
+    add("old", prompt="the old cart", days_old=20)
+    monkeypatch.setattr(desktop, "available", lambda: qt)
+    code, out, _ = cleanup_cli(capsys)
+    lines = out.splitlines()
+    assert code == 0 and not moves
+    assert lines[0].startswith("1 sessions use ") and "the old cart" in lines[1]
+    assert lines[-1] == cli.CLEAN_UP_BY_HAND.format(how=f"{cli.PROG} desktop" if qt else cli.CORE_INSTALL)
+    assert "Settings ▸ Free disk space…" in lines[-1]
+
+
+def test_cleanup_with_no_screen_moves_only_the_closed_ones_older_picks(home, moves, no_screen, monkeypatch, capsys):
+    _, add = home
+    add("old", days_old=20)
+    add("old-open", days_old=20)
+    add("new")
+    monkeypatch.setattr(sessions, "_agents_json", lambda include_finished=False: [
+        {"sessionId": "old-open", "kind": "interactive"}])
+    code, out, _ = cleanup_cli(capsys, "--older", "7", "--yes")
+    assert code == 0 and moves == ["old.jsonl"] and out.startswith("Moved 1 sessions (")
+    code, out, err = cleanup_cli(capsys, "--yes")  # never everything: --yes moves what --older picks alone
+    assert code == 2 and moves == ["old.jsonl"] and "--older" in err

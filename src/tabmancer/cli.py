@@ -556,6 +556,8 @@ def m_opens(choice: str) -> int:
 
 
 CORE_INSTALL = 'uv tool install "tabmancer[desktop]"'
+# `tabmancer cleanup` with no screen to pick in (a core install): where to pick them by hand
+CLEAN_UP_BY_HAND = "To pick them by hand: {how}, then Settings ▸ Free disk space… in the window."
 
 
 def has_textual() -> bool:
@@ -971,19 +973,22 @@ def print_stats(days: float | None, as_json: bool, as_csv: bool) -> None:
 def clean_up(listing: bool, older: float | None, yes: bool, as_json: bool) -> int:
     """`tabmancer cleanup`: the screen, where Textual is installed and no flag is given; else plain
     text. --list lists, --older DAYS says what it would move, and only --yes with --older moves:
-    never everything by accident. Which are open is asked again as they move (diskclean.trash)."""
-    from . import diskclean
+    never everything by accident. Which are open is asked again as they move (diskclean.trash). With
+    --older, the line on top is the screen's (cleanupwords.status: what is picked, and its size). A core
+    install (no screen) lists, and says where to pick them by hand: the desktop window."""
+    from . import cleanupwords, diskclean
 
     if yes and older is None:
         print("--yes moves what --older DAYS picks: give --older too (nothing was moved).", file=sys.stderr)
         return 2
+    no_screen = False
     if not (listing or older is not None or as_json):
         try:
             from .cleanup import CleanupApp
         except ImportError as error:
             if not (error.name or "").startswith("textual"):
                 raise
-            listing = True  # a core install: no screen, so the list
+            listing = no_screen = True  # a core install: no screen, so the list
         else:
             CleanupApp().run()
             return 0
@@ -1008,9 +1013,12 @@ def clean_up(listing: bool, older: float | None, yes: bool, as_json: bool) -> in
         print()
         return 0
     shown = picked if older is not None else items
-    total = sum(item.size for item in items)
-    print(f"{len(items)} sessions use {diskclean.human(total)} · Claude Code deletes sessions older than "
-          f"{diskclean.claude_cleanup_days()} days on its own")
+    if older is not None:
+        print(cleanupwords.status(items, {item.session.session_id for item in picked}))
+    else:
+        total = sum(item.size for item in items)
+        print(f"{len(items)} sessions use {diskclean.human(total)} · Claude Code deletes sessions older than "
+              f"{diskclean.claude_cleanup_days()} days on its own")
     for item in shown:
         s = item.session
         print(f"{diskclean.human(item.size):>9}  {s.last_active:%Y-%m-%d}  {s.project[:22]:<22}  {s.title[:52]}"
@@ -1022,6 +1030,10 @@ def clean_up(listing: bool, older: float | None, yes: bool, as_json: bool) -> in
               f"{diskclean.BIN}; add --yes to move them.")
     else:
         print(f"Pick with --older DAYS (what would move), then add --yes to move them to the {diskclean.BIN}.")
+    if no_screen:
+        from . import desktop
+
+        print(CLEAN_UP_BY_HAND.format(how=f"{PROG} desktop" if desktop.available() else CORE_INSTALL))
     return 0
 
 
