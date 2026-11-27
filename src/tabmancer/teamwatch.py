@@ -17,7 +17,7 @@ import shlex
 import subprocess
 import sys
 
-from . import focus
+from . import desktop, focus
 from .config import config_dir, read_json
 from .launch import _wt_escape, terminal_kind
 
@@ -171,13 +171,22 @@ def open_terminal(team: str, folder: str = "", tabs_window: str = "") -> str:
 
 
 def open_dashboard(dashboard: str, folder: str = "") -> str:
-    """A monitor's D: the dashboard's tab (titled dashboard) to the front; with none open, the
-    terminal dashboard in a new tab (--terminal, as the monitor is the terminal one). Returns a word
-    for a note, or "" when there is nothing to say."""
+    """A monitor's D: the dashboard's tab (titled dashboard) to the front; with none open, the dashboard's
+    window where Qt is there (the window is the dashboard: open, it comes to the front, as `tabmancer` again
+    brings it; else it opens), never a second dashboard in the terminal beside it; without Qt the terminal
+    dashboard in a new tab (--terminal, as the monitor is the terminal one). Returns a word for a note, or ""
+    when there is nothing to say."""
     if focus.focus_tab(dashboard):
         return ""
-    from .shortcuts import TERMINAL
+    from .shortcuts import TERMINAL, window_argv
     from .teams import _tabmancer_cmd
+
+    if desktop.available():
+        # As the shortcut starts it: not this tab's WT_SESSION, so a window it opens puts its tabs in its one
+        # named window (launch.gui_tabs), not in whichever Windows Terminal window was used last.
+        quiet = {key: value for key, value in os.environ.items() if key != "WT_SESSION"}
+        subprocess.Popen(window_argv(), env=quiet, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return "The dashboard's window comes to the front (or opens)."
 
     kind = terminal_kind()
     if kind == "windows-terminal":

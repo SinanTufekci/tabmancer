@@ -116,8 +116,9 @@ def door(kind: str, name: str = "") -> str:
     return f"tabmancer-{kind}-{hashlib.sha256(key).hexdigest()[:20]}"
 
 
-def knock(name: str) -> bool:
-    """Whether a window listens on this door; if one does, it comes to the front."""
+def knock(name: str, said: str = "") -> bool:
+    """Whether a window listens on this door; if one does, it comes to the front, told said (a word it knows,
+    as the dashboard's view for `tabmancer live`) when there is one."""
     if sys.platform == "win32":  # this process may take the front (started from what you typed in): let that window
         import ctypes
 
@@ -126,7 +127,12 @@ def knock(name: str) -> bool:
     caller.connectToServer(name)
     if not caller.waitForConnected(KNOCK_MS):
         return False
-    caller.disconnectFromServer()
+    if said:
+        caller.write(said.encode("utf-8") + b"\n")
+        caller.waitForBytesWritten(KNOCK_MS)
+    caller.disconnectFromServer()  # what was written goes first, then it hangs up
+    if said and caller.state() != QLocalSocket.LocalSocketState.UnconnectedState:
+        caller.waitForDisconnected(KNOCK_MS)  # else the word goes with the socket as this returns, unsent
     return True
 
 

@@ -162,10 +162,10 @@ def main(argv: list[str] | None = None) -> None:
     wrapping.add_argument("--gif", action="store_true", help="a GIF, its numbers counting up, not a still PNG")
     wrapping.add_argument("--names", action="store_true", help="the top project's name on the tools slide")
     windowing = sub.add_parser("desktop", parents=[filters], help="tabmancer in a desktop window (the desktop extra: "
-                                               'pip install "tabmancer[desktop]"): the dashboard, which '
-                                               "only watches for now, or a team's monitor")
+                                               'pip install "tabmancer[desktop]"): the dashboard (what '
+                                               "tabmancer opens), or a team's monitor")
     windowing.add_argument("--monitor", action="store_true",
-                           help="a team's monitor, read-only: what tabmancer team watch shows, with room")
+                           help="a team's monitor: what tabmancer team watch opens, its keys acting on the team")
     windowing.add_argument("team", nargs="?", default="", help="the team (default: the one team with members open)")
     windowing.add_argument("--demo", dest="made_up", action="store_true",
                            help="over the made-up sessions and team of tabmancer --demo: nothing of yours is read")
@@ -646,7 +646,7 @@ def desktop_window(monitor: bool, name: str, demo: bool = False, days: float = 1
         from . import launch
         from .desktop.main import run as run_dashboard
 
-        with launch.gui_tabs(tabs_window or shortcuts.DASHBOARD_WINDOW):
+        with launch.gui_tabs(tabs_window or shortcuts.DASHBOARD_WINDOW, chosen=bool(tabs_window)):
             return run_dashboard(demo=demo, days=days, include_all=include_all, **({"view": view} if view else {}))
     if not monitor:  # a team named, not --monitor
         print(f"A team's monitor: {PROG} desktop --monitor {name}", file=sys.stderr)
@@ -659,7 +659,7 @@ def desktop_window(monitor: bool, name: str, demo: bool = False, days: float = 1
             return 1
     from .desktop.monitor import run
 
-    return run(team, demo=demo)  # "": it asks which, with the list of teams
+    return run(team, demo=demo, tabs_window=tabs_window)  # "": it asks which, with the list of teams
 
 
 def team_send(name: str, rest: list[str]) -> int:

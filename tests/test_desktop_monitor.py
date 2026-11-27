@@ -196,7 +196,12 @@ def test_a_team_watched_already_comes_forward(qapp, window, monkeypatch):
     wait(qapp, lambda: came, seconds=5)
     assert monitor.knock("blog") is False and monitor.knock("") is False
     monkeypatch.setattr(monitor, "MonitorWindow", lambda *a, **kw: pytest.fail("a second window"))
-    assert monitor.run("shop") == 0
+    used = []
+    real = monitor.launch.gui_tabs
+    monkeypatch.setattr(monitor.launch, "gui_tabs", lambda window, chosen=False: used.append((window, chosen))
+                        or real(window, chosen))
+    assert monitor.run("shop") == 0 and monitor.run("shop", tabs_window="mine") == 0
+    assert used == [("tabmancer", False), ("mine", True)]  # one named (--tabs-window) holds in Windows Terminal too
     shown.close()
     qapp.processEvents()
     assert monitor.knock("shop") is False  # closed: its door with it

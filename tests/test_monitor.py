@@ -386,6 +386,7 @@ def test_the_monitors_window_runs_tabmancer_itself(monkeypatch, tmp_path):
 
 def test_d_with_no_dashboard_opens_it_in_a_window_of_its_own(monkeypatch):
     started = []
+    monkeypatch.setattr(teamwatch.desktop, "available", lambda: False)  # no Qt: the terminal dashboard
     monkeypatch.setattr(teamwatch, "terminal_kind", lambda: "windows-terminal")
     monkeypatch.setattr(teamwatch.subprocess, "Popen", lambda args, **kw: started.append(args))
     monkeypatch.setattr(teams, "_tabmancer_cmd", lambda: ("tabmancer",))
@@ -393,6 +394,26 @@ def test_d_with_no_dashboard_opens_it_in_a_window_of_its_own(monkeypatch):
     assert started[0][:3] == ["wt.exe", "-w", "tabmancer"]  # named ("0" would be the monitor's own window)
     assert started[0][-4:] == ["tabmancer", "--terminal", "--tabs-window", "tabmancer"]  # told the name, and
     # the terminal dashboard, as the monitor is the terminal one
+    monkeypatch.setattr(teamwatch.focus, "focus_tab", lambda title: True)
+    assert teamwatch.open_dashboard("tabmancer") == "" and len(started) == 1
+
+
+def test_d_with_qt_brings_the_window_never_a_second_terminal_dashboard(monkeypatch):
+    """The window is the dashboard: D runs the window's own command, which brings an open window to the front
+    (its knock) or opens it. A terminal dashboard's tab open (tabmancer --terminal) is still brought first."""
+    from tabmancer import shortcuts
+
+    started = []
+    monkeypatch.setattr(teamwatch.desktop, "available", lambda: True)
+    monkeypatch.setattr(teamwatch, "terminal_kind", lambda: "windows-terminal")
+    monkeypatch.setattr(teamwatch.subprocess, "Popen", lambda args, **kw: started.append((args, kw["env"])))
+    monkeypatch.setattr(teamwatch.focus, "focus_tab", lambda title: False)
+    monkeypatch.setattr(shortcuts, "window_argv", lambda: ["C:/bin/tabmancer-desktop.exe"])
+    monkeypatch.setenv("WT_SESSION", "the-monitors-tab")
+    assert teamwatch.open_dashboard("tabmancer").startswith("The dashboard's window")
+    (args, env), = started
+    assert args == ["C:/bin/tabmancer-desktop.exe"]  # no wt.exe, no --terminal
+    assert "WT_SESSION" not in env and env.get("PATH")  # as the shortcut starts it: tabs to its named window
     monkeypatch.setattr(teamwatch.focus, "focus_tab", lambda title: True)
     assert teamwatch.open_dashboard("tabmancer") == "" and len(started) == 1
 

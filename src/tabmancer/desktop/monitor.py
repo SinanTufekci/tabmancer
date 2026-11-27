@@ -1096,7 +1096,7 @@ def run(team: str, demo: bool = False, tabs_window: str = "") -> int:
             made.append(MainWindow(monitor=True, demo=demo))
         return made[0]
 
-    with made_up_world(demo), launch.gui_tabs(tabs_window or shortcuts.DASHBOARD_WINDOW):
+    with made_up_world(demo), launch.gui_tabs(tabs_window or shortcuts.DASHBOARD_WINDOW, chosen=bool(tabs_window)):
         team = team or ("shop" if demo else "")  # the demo's team
         window = None
         try:

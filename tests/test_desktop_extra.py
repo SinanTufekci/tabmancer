@@ -234,13 +234,13 @@ def test_desktop_monitor_hands_the_team_to_the_window(monkeypatch):
     teams.save({"shop": teams.new_team("shop", "C:/work/shop", "Add a checkout", teams.parse_members("api: endpoints"))})
     opened = []
     window = types.ModuleType("tabmancer.desktop.monitor")
-    window.run = lambda team, demo=False: opened.append((team, demo)) or 0
+    window.run = lambda team, demo=False, tabs_window="": opened.append((team, demo, tabs_window)) or 0
     monkeypatch.setitem(sys.modules, "tabmancer.desktop.monitor", window)
     for argv, team in ((["desktop", "--monitor", "SHOP"], "shop"), (["desktop", "--monitor", "--demo"], "")):
         with pytest.raises(SystemExit) as out:
             cli.main(argv)
         assert out.value.code == 0
-        assert opened.pop() == (team, argv[-1] == "--demo")  # the demo's team is made up when it starts
+        assert opened.pop() == (team, argv[-1] == "--demo", "")  # the demo's team is made up when it starts
 
 
 def m_pressed(monkeypatch, choice, qt):

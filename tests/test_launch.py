@@ -174,6 +174,24 @@ def test_the_desktop_windows_tabs_go_into_its_named_window_not_a_new_one_each(mo
     assert started[-1][1:3] == ["-w", "new"]  # put back once the window is gone
 
 
+def test_started_inside_windows_terminal_the_windows_tabs_go_to_the_current_window(monkeypatch):
+    """`tabmancer` typed in a Windows Terminal tab: the window's tabs join the window used last ("0"), as the
+    command's own would; --tabs-window still names one there. Outside it (WT_SESSION unset), the named one."""
+    started = windows_terminal_started(monkeypatch)
+    monkeypatch.setenv("WT_SESSION", "a-tab")
+    with L.gui_tabs("tabmancer"):
+        L.open_tabs([launch()])
+        assert started[-1][1:3] == ["-w", "0"]
+    with L.gui_tabs("mine", chosen=True):
+        L.open_tabs([launch()])
+        assert started[-1][1:3] == ["-w", "mine"]
+    monkeypatch.delenv("WT_SESSION")
+    with L.gui_tabs("tabmancer"):
+        L.open_tabs([launch()])
+        assert started[-1][1:3] == ["-w", "tabmancer"]
+    assert (L._gui, L._gui_window) == (False, None)
+
+
 def test_off_windows_the_desktop_window_finds_a_terminal_where_a_shell_had_its_variables(monkeypatch, real_launch):
     """A GUI app has none of the terminals' variables: macOS's Terminal opens its tabs, on Linux GNOME Terminal
     with a display; else none (the commands given back). A terminal the window was started in still wins."""
@@ -206,6 +224,7 @@ def test_tabmancer_desktop_runs_the_window_with_its_tabs_window(monkeypatch):
     from tabmancer import cli, desktop
 
     monkeypatch.setattr(desktop, "available", lambda: True)
+    monkeypatch.delenv("WT_SESSION", raising=False)  # started from a shortcut, the tray or at login
     named = []
     window = types.ModuleType("tabmancer.desktop.main")
     window.run = lambda demo=False, days=14, include_all=False: named.append((L._gui, L._gui_window)) or 0
@@ -219,3 +238,17 @@ def test_tabmancer_desktop_runs_the_window_with_its_tabs_window(monkeypatch):
     with pytest.raises(SystemExit) as out:  # bare tabmancer is the window, by the same path
         cli.main(["--tabs-window", "mine"])
     assert out.value.code == 0 and named[-1] == (True, "mine")
+    monkeypatch.setenv("WT_SESSION", "a-tab")  # typed in a Windows Terminal tab: its window, unless one is named
+    for argv in (["desktop"], ["--tabs-window", "mine", "desktop"]):
+        with pytest.raises(SystemExit) as out:
+            cli.main(argv)
+        assert out.value.code == 0
+    assert named[-2:] == [(True, None), (True, "mine")]
+    watching = types.ModuleType("tabmancer.desktop.monitor")  # --monitor: the team's window, with the same window
+    watching.run = lambda team, demo=False, tabs_window="": named.append((team, demo, tabs_window)) or 0
+    monkeypatch.setitem(sys.modules, "tabmancer.desktop.monitor", watching)
+    for argv in (["desktop", "--monitor", "--demo"], ["--tabs-window", "mine", "desktop", "--monitor", "--demo"]):
+        with pytest.raises(SystemExit) as out:
+            cli.main(argv)
+        assert out.value.code == 0
+    assert named[-2:] == [("", True, ""), ("", True, "mine")]

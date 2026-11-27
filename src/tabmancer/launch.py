@@ -370,15 +370,17 @@ _gui = False
 
 
 @contextmanager
-def gui_tabs(window: str) -> Iterator[None]:
+def gui_tabs(window: str, chosen: bool = False) -> Iterator[None]:
     """While the desktop window runs. Started from a shortcut, the tray or at login it has no WT_SESSION, so its
     tabs would each open a new Windows Terminal window: they go into the one named window instead (window, as
-    the terminal dashboard's do with --tabs-window), made by the first and found by the rest. Off Windows a
-    GUI app has none of the terminals' variables (TMUX, KITTY_WINDOW_ID…): a terminal found on the machine
-    opens them (gui_terminal), not shell lines to run by hand. Put back after."""
+    the terminal dashboard's do with --tabs-window), made by the first and found by the rest. Started from a
+    Windows Terminal tab (WT_SESSION), its tabs go to the window used last ("0"), as a command typed there
+    does; chosen (--tabs-window named it) goes to window there too. Off Windows a GUI app has none of the
+    terminals' variables (TMUX, KITTY_WINDOW_ID…): a terminal found on the machine opens them (gui_terminal),
+    not shell lines to run by hand. Put back after."""
     global _gui, _gui_window
     kept = _gui, _gui_window
-    _gui, _gui_window = True, window or None
+    _gui, _gui_window = True, (window or None) if chosen or not os.environ.get("WT_SESSION") else None
     try:
         yield
     finally:

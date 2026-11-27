@@ -1991,10 +1991,22 @@ class MainWindow(QMainWindow):
     # --- one window -------------------------------------------------------------------------------
 
     def answer_door(self) -> None:
+        """A knock: the window in front, and on the view the knock names (`tabmancer live` with the window open)
+        as its words come; a knock with none leaves the view. The caller hangs up once it has said them."""
         while (caller := self.door.nextPendingConnection()) is not None:
-            caller.disconnectFromServer()
-            caller.deleteLater()
+            caller.readyRead.connect(partial(self.heard_at_door, caller))
+            caller.disconnected.connect(partial(self.door_hung_up, caller))
+            self.heard_at_door(caller)  # what came with the knock already
         self.come_forward()
+
+    def heard_at_door(self, caller) -> None:
+        for word in bytes(caller.readAll().data()).decode("utf-8", "replace").split():
+            if word in dict(VIEWS):  # nothing else is taken from a knock
+                self.set_view(word)
+
+    def door_hung_up(self, caller) -> None:
+        self.heard_at_door(caller)  # the last words, should they come with the hang-up
+        caller.deleteLater()
 
     def come_forward(self) -> None:
         """`tabmancer desktop` again, the tray's Open or a click on its icon: the window in front, from the tray
@@ -2140,9 +2152,10 @@ def door() -> str:
     return frame.door("main")
 
 
-def knock() -> bool:
-    """Whether the dashboard window is open already; if it is, it comes to the front."""
-    return frame.knock(door())
+def knock(view: str = "") -> bool:
+    """Whether the dashboard window is open already; if it is, it comes to the front, on view when one is
+    named (VIEWS: `tabmancer live` with the window open)."""
+    return frame.knock(door(), view)
 
 
 def run(demo: bool = False, days: float = DAYS, include_all: bool = False, view: str = "") -> int:
@@ -2159,7 +2172,7 @@ def run(demo: bool = False, days: float = DAYS, include_all: bool = False, view:
     with made_up_world(demo, told.said.emit):
         window = None
         try:
-            if knock():  # open already (the command twice): that window comes forward
+            if knock(view):  # open already (the command twice): that window comes forward, on the view asked
                 return 0
             window = MainWindow(store=partial(watching_store, days, include_all),
                                 brand="◆ tabmancer demo" if demo else "◆ tabmancer", demo=demo, in_tray=True)

@@ -6,6 +6,8 @@ import gc
 import importlib
 import os
 import re
+import subprocess
+import sys
 import threading
 import time
 import weakref
@@ -1665,6 +1667,46 @@ def test_a_second_open_brings_the_first_forward(qapp, window, monkeypatch):
     shown.close()
     qapp.processEvents()
     assert main.knock() is False  # closed: its door with it
+
+
+KNOCK = "import sys; from tabmancer.desktop import frame, main; sys.exit(not frame.knock(main.door(), *sys.argv[1:]))"
+
+
+def knocking(*said: str) -> subprocess.Popen:
+    """A knock from another process, as `tabmancer live` knocks (same tabmancer folder, so the same door): the
+    window's events go on meanwhile. From this process it would wait on the window it knocks at, and a thread
+    of it has no Qt events to send its word with."""
+    return subprocess.Popen([sys.executable, "-c", KNOCK, *said], env=dict(os.environ))
+
+
+def test_live_with_the_window_open_switches_it_to_live(qapp, window, monkeypatch):
+    """`tabmancer live` while the window is open: the knock names the view, and the open window shows it; a
+    plain knock (`tabmancer` again) and a word it does not know leave the view as it is."""
+    shown = window()
+    came = []
+    monkeypatch.setattr(shown, "come_forward", lambda: came.append(True))
+    assert shown.view != "live"
+    knocked = knocking("live")
+    wait(qapp, lambda: knocked.poll() == 0 and shown.view == "live" and came, seconds=20)
+    shown.set_view("table")
+    for said in ((), ("nonsense board-ish",)):
+        knocked = knocking(*said)
+        wait(qapp, lambda knocked=knocked: knocked.poll() == 0, seconds=20)
+    wait(qapp, lambda: len(came) == 3, seconds=5)
+    for _ in range(20):
+        qapp.processEvents()
+    assert shown.view == "table"  # nothing named that it knows
+    knocked = knocking("board")
+    wait(qapp, lambda: knocked.poll() == 0 and shown.view == "board", seconds=20)
+
+
+def test_run_with_a_view_and_the_window_open_names_it_at_the_door(monkeypatch):
+    """run(view=) knocks with the view: an open window takes it, and no second one opens."""
+    asked = []
+    monkeypatch.setattr(main, "knock", lambda view="": asked.append(view) or True)
+    monkeypatch.setattr(main, "MainWindow", lambda *a, **kw: pytest.fail("a second window"))
+    assert main.run(view="live") == 0 and main.run() == 0
+    assert asked == ["live", ""]
 
 
 def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch, later):  # noqa: F811
