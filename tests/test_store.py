@@ -531,10 +531,34 @@ def test_the_dashboard_store_asks_git_again_soon_once_when_it_begins_failing(fak
     assert asked == [1000, 1010, 1070]  # once more after 10 s, then each minute: never a chain
 
 
+def test_the_dashboard_store_keeps_45_days_in_the_history_once_after_its_first_count(fake_home, tmp_path,
+                                                                                     monkeypatch, quiet):
+    shop(fake_home, tmp_path, monkeypatch)
+    counted: list[float] = []
+
+    def collect(days=14):
+        counted.append(days)
+        return tokens.Report(first=datetime.now().date(), days=int(days))
+
+    monkeypatch.setattr(tokens, "collect", collect)
+    clock = Clock()
+    dash = DashboardStore(clock=clock)
+    dash.poll()
+    assert counted == [store.CHART_DAYS]  # the first snapshot is not held up by the long count
+    clock.now += 2
+    dash.poll()
+    assert counted == [store.CHART_DAYS, tokens.KEEP_BACK_DAYS] and dash.kept_back
+    for _ in range(40):  # minutes on: the chart's days each minute, the long count never again
+        clock.now += 2
+        dash.poll()
+    assert counted.count(tokens.KEEP_BACK_DAYS) == 1 and counted.count(store.CHART_DAYS) == 2
+
+
 def test_the_dashboard_store_keeps_the_dashboards_timings():
     from tabmancer import app as app_module
 
     assert store.CHART_DAYS == app_module.CHART_DAYS
+    assert app_module.KEEP_BACK_DAYS == tokens.KEEP_BACK_DAYS  # one copy (app imports it)
     assert (store.FULL_EVERY, store.USAGE_SECONDS, store.TOKENS_SECONDS, store.GIT_SECONDS, store.ACCOUNTS_SECONDS,
             store.ACTOR_SECONDS) == (app_module.FULL_POLL_EVERY, app_module.USAGE_SECONDS, app_module.TOKENS_SECONDS,
                                      app_module.GIT_SECONDS, app_module.ACCOUNTS_SECONDS, app_module.ACTOR_SECONDS)

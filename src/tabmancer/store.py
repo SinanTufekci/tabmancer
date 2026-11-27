@@ -468,6 +468,7 @@ class DashboardStore(Polled):
         self.armed: dict[str, datetime] = {}
         self.report: tokens.Report | None = None
         self.tokens: dict[str, tokens.Tokens] = {}
+        self.kept_back = False  # the days a 45-day count keeps in the history: counted once (keep_back)
         self.git: dict[str, gitstate.GitState] = {}  # folder key -> its git
         self.git_failed: set[str] = set()
         self.limits: list[usage.Limit] = []
@@ -529,6 +530,14 @@ class DashboardStore(Polled):
         self.report = tokens.collect(max(self.days, CHART_DAYS))
         self.tokens = self.report.per_session(whole_life=True)
 
+    def keep_back(self) -> None:
+        """Once a run, at the poll after the first token count (that poll's snapshot is not held up by it): the
+        last KEEP_BACK_DAYS counted, so the days whose files Claude Code deletes next go into the history, as
+        the terminal dashboard counts them once at its start. Its report is not shown: the chart's days are
+        the ones read_tokens counts."""
+        self.kept_back = True
+        tokens.collect(tokens.KEEP_BACK_DAYS)
+
     def read_git(self) -> None:
         states, failed = gitstate.read_all(git_folders(self.sessions.values()))
         self.git = kept_git(self.git, states, failed)
@@ -588,6 +597,8 @@ class DashboardStore(Polled):
         self.read_teams()
         if self.is_due("tokens", TOKENS_SECONDS):
             self.read_tokens()
+        elif not self.kept_back and self.report is not None:
+            self.keep_back()
         if self.is_due("git", GIT_SECONDS):
             self.read_git()
         if self.is_due("limits", USAGE_SECONDS):

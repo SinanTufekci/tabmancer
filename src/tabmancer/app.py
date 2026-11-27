@@ -146,7 +146,7 @@ from .theme import (
     use_saved_theme,
 )
 from .tokenchart import TokenChart
-from .tokens import human
+from .tokens import KEEP_BACK_DAYS, human
 from .widgets import (
     ALL_PROJECTS,
     INTERRUPTED,
@@ -192,7 +192,6 @@ NAMELESS = ("This dashboard could not read its own start time, so it only shows 
 CHART_DAYS = 14
 GROW_SECONDS = 0.8  # the token chart rises on load
 FOCUS_CLICK = 0.5  # seconds after the window takes the focus in which a click only brought it to the front
-KEEP_BACK_DAYS = 45  # counted once at the start, so the history has the days the 30-day cleanup takes next
 SETTLE_AFTER = (5, 45)  # seconds after the list is shown: memory set aside from the collector (settle_memory)
 STAR = rowwords.STAR  # Claude Code's turning star
 EXPAND_WIDTH, TITLE_MIN = rowwords.TITLE_WIDEST, rowwords.TITLE_MIN  # the Title column's room (rowwords.title_room)

@@ -38,6 +38,7 @@ IDLE_SECONDS = 5 * 60  # a longer gap between two replies is a break, not work
 ALONE_SECONDS = 60     # what a reply after a break counts for
 PATCHED = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$", re.MULTILINE)
 _lock = threading.Lock()  # one scan at a time: they share the cache file
+KEEP_BACK_DAYS = 45  # counted once per run, so the history has the days the 30-day cleanup takes next
 SAVE_EVERY = 300  # seconds: the cache is kept in memory between counts and written this seldom
 # The cache as the last count left it, with the file's size and time when it was read or written: a
 # count reads tokens.json again only when something else wrote it. Reading and writing its many
