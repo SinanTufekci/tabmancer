@@ -1,0 +1,885 @@
+{
+ "at": "2026-11-18T12:00:00",
+ "sessions": [
+  {
+   "id": "shop-api-id",
+   "project": "shop",
+   "folder": "<root>/shop",
+   "title": "shop-api",
+   "cli": "claude",
+   "open": true,
+   "kind": "terminal",
+   "state": "working",
+   "label": "working",
+   "tone": "working",
+   "rank": 2,
+   "resets_at": null,
+   "context": 0.5133333333333333,
+   "crowded": false,
+   "last_active": "2026-11-18T12:00:00",
+   "started": "2026-11-18T11:40:00",
+   "hidden": false,
+   "pinned": false,
+   "team": "shop",
+   "member": "api",
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 154300,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "shop-lead-id",
+   "project": "shop",
+   "folder": "<root>/shop",
+   "title": "shop-lead",
+   "cli": "claude",
+   "open": true,
+   "kind": "terminal",
+   "state": "working",
+   "label": "working",
+   "tone": "working",
+   "rank": 2,
+   "resets_at": null,
+   "context": 0.6066666666666667,
+   "crowded": false,
+   "last_active": "2026-11-18T12:00:00",
+   "started": "2026-11-18T11:40:00",
+   "hidden": false,
+   "pinned": false,
+   "team": "shop",
+   "member": "lead",
+   "lead": true,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 182300,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "shop-tests-id",
+   "project": "shop",
+   "folder": "<root>/shop",
+   "title": "shop-tests",
+   "cli": "claude",
+   "open": true,
+   "kind": "terminal",
+   "state": "needs-you",
+   "label": "needs you",
+   "tone": "your-turn!",
+   "rank": 0,
+   "resets_at": null,
+   "context": 0.7933333333333333,
+   "crowded": true,
+   "last_active": "2026-11-18T12:00:00",
+   "started": "2026-11-18T11:40:00",
+   "hidden": false,
+   "pinned": false,
+   "team": "shop",
+   "member": "tests",
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 238300,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "shop-ui-id",
+   "project": "shop",
+   "folder": "<root>/shop",
+   "title": "shop-ui",
+   "cli": "claude",
+   "open": true,
+   "kind": "terminal",
+   "state": "idle",
+   "label": "idle",
+   "tone": "done",
+   "rank": 3,
+   "resets_at": null,
+   "context": 0.32,
+   "crowded": false,
+   "last_active": "2026-11-18T12:00:00",
+   "started": "2026-11-18T11:40:00",
+   "hidden": false,
+   "pinned": false,
+   "team": "shop",
+   "member": "ui",
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 96300,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "cli-tool",
+   "project": "cli-tool",
+   "folder": "<root>/cli-tool",
+   "title": "Add --json output to the list command",
+   "cli": "claude",
+   "open": true,
+   "kind": "terminal",
+   "state": "working",
+   "label": "working",
+   "tone": "working",
+   "rank": 2,
+   "resets_at": null,
+   "context": 0.079094,
+   "crowded": false,
+   "last_active": "2026-11-18T11:59:00",
+   "started": "2026-11-18T10:59:00",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 835179,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "api-server",
+   "project": "api-server",
+   "folder": "<root>/api-server",
+   "title": "Rate limiting for the public API",
+   "cli": "claude",
+   "open": true,
+   "kind": "terminal",
+   "state": "waiting",
+   "label": "waiting for you",
+   "tone": "your-turn",
+   "rank": 1,
+   "resets_at": null,
+   "context": 0.106418,
+   "crowded": false,
+   "last_active": "2026-11-18T11:56:00",
+   "started": "2026-11-18T10:56:00",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 3899625,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "nightly",
+   "project": "nightly-reports",
+   "folder": "<root>/nightly-reports",
+   "title": "Summarise yesterday's error logs",
+   "cli": "claude",
+   "open": true,
+   "kind": "background",
+   "state": "needs-you",
+   "label": "needs you",
+   "tone": "your-turn!",
+   "rank": 0,
+   "resets_at": null,
+   "context": 0.068534,
+   "crowded": false,
+   "last_active": "2026-11-18T11:45:00",
+   "started": "2026-11-18T10:45:00",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 1586715,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "ml",
+   "project": "ml-experiments",
+   "folder": "<root>/ml-experiments",
+   "title": "Compare three tokenizer settings",
+   "cli": "claude",
+   "open": false,
+   "kind": "terminal",
+   "state": "limit",
+   "label": "◐ limit · 14:00",
+   "tone": "to-continue",
+   "rank": 9,
+   "resets_at": "2026-11-18T14:00:00",
+   "context": 0.069398,
+   "crowded": false,
+   "last_active": "2026-11-18T10:00:00",
+   "started": "2026-11-18T09:00:00",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 6279589,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "wiki",
+   "project": "release-notes",
+   "folder": "<root>/release-notes",
+   "title": "Gather the release checklist from the team wiki",
+   "cli": "claude",
+   "open": false,
+   "kind": "terminal",
+   "state": "limit",
+   "label": "◐ limit · 14:00",
+   "tone": "to-continue",
+   "rank": 9,
+   "resets_at": "2026-11-18T14:00:00",
+   "context": 0.115305,
+   "crowded": false,
+   "last_active": "2026-11-18T09:00:00",
+   "started": "2026-11-18T08:00:00",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 7322368,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "web-app",
+   "project": "web-app",
+   "folder": "<root>/web-app",
+   "title": "Fix the login redirect loop",
+   "cli": "claude",
+   "open": false,
+   "kind": "terminal",
+   "state": "done",
+   "label": "✓ done",
+   "tone": "done",
+   "rank": 9,
+   "resets_at": null,
+   "context": 0.142406,
+   "crowded": false,
+   "last_active": "2026-11-18T02:59:48",
+   "started": "2026-11-18T01:59:48",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": true
+   },
+   "tokens": 3695595,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "pcb-router",
+   "project": "pcb-router",
+   "folder": "<root>/pcb-router",
+   "title": "Route the power plane on the 4-layer board",
+   "cli": "claude",
+   "open": false,
+   "kind": "terminal",
+   "state": "cut-off",
+   "label": "▲ cut off",
+   "tone": "to-continue!",
+   "rank": 9,
+   "resets_at": null,
+   "context": 0.102004,
+   "crowded": false,
+   "last_active": "2026-11-18T02:59:30",
+   "started": "2026-11-18T01:59:30",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": true,
+    "ahead": false
+   },
+   "tokens": 8608995,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "data",
+   "project": "data-pipeline",
+   "folder": "<root>/data-pipeline",
+   "title": "Speed up the nightly CSV import",
+   "cli": "claude",
+   "open": false,
+   "kind": "terminal",
+   "state": "unanswered",
+   "label": "○ unanswered",
+   "tone": "to-continue!",
+   "rank": 9,
+   "resets_at": null,
+   "context": 0.066302,
+   "crowded": false,
+   "last_active": "2026-11-17T06:00:00",
+   "started": "2026-11-17T05:00:00",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 10204096,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "docs",
+   "project": "docs-site",
+   "folder": "<root>/docs-site",
+   "title": "Rewrite the getting-started guide",
+   "cli": "claude",
+   "open": false,
+   "kind": "terminal",
+   "state": "stopped",
+   "label": "‖ stopped",
+   "tone": "done",
+   "rank": 9,
+   "resets_at": null,
+   "context": 0.175652,
+   "crowded": false,
+   "last_active": "2026-11-16T12:00:00",
+   "started": "2026-11-16T11:00:00",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": true,
+    "ahead": false
+   },
+   "tokens": 12100851,
+   "armed": null,
+   "queued": null
+  },
+  {
+   "id": "mobile",
+   "project": "mobile-app",
+   "folder": "<root>/mobile-app",
+   "title": "Ask for notification permission at the right moment",
+   "cli": "claude",
+   "open": false,
+   "kind": "terminal",
+   "state": "done",
+   "label": "✓ done",
+   "tone": "done",
+   "rank": 9,
+   "resets_at": null,
+   "context": 0.121896,
+   "crowded": false,
+   "last_active": "2026-11-13T12:00:00",
+   "started": "2026-11-13T11:00:00",
+   "hidden": false,
+   "pinned": false,
+   "team": null,
+   "member": null,
+   "lead": false,
+   "git": {
+    "changed": false,
+    "ahead": false
+   },
+   "tokens": 12700780,
+   "armed": null,
+   "queued": null
+  }
+ ],
+ "groups": [
+  {
+   "name": "open",
+   "teams": [
+    "shop"
+   ],
+   "sessions": [
+    "cli-tool",
+    "api-server",
+    "nightly"
+   ]
+  },
+  {
+   "name": "rest",
+   "teams": [],
+   "sessions": [
+    "ml",
+    "wiki",
+    "web-app",
+    "pcb-router",
+    "data",
+    "docs",
+    "mobile"
+   ]
+  }
+ ],
+ "teams": [
+  {
+   "name": "shop",
+   "project": "shop",
+   "goal": "Add Stripe checkout with an end-to-end test",
+   "open": 4,
+   "tokens": 671200,
+   "members": [
+    {
+     "name": "lead",
+     "lead": true,
+     "focus": "plans the work, hands it out and checks it",
+     "session": "shop-lead-id",
+     "state": "working",
+     "label": "working",
+     "tone": "working",
+     "cli": "claude",
+     "model": "claude-opus-5-5",
+     "effort": "",
+     "model_note": "",
+     "fell_back": "",
+     "context": 0.6066666666666667,
+     "cap": 300000,
+     "tokens": 182300,
+     "unread": 0,
+     "last": {
+      "at": "2026-11-18T11:57:00",
+      "sender": "tests",
+      "receiver": "lead",
+      "text": "The webhook test needs a Stripe test key: can the user add one?"
+     },
+     "warm_until": null,
+     "needs_you": false,
+     "quota": null,
+     "git": {
+      "branch": "main",
+      "changed": 0,
+      "ahead": 0
+     },
+     "bus": null
+    },
+    {
+     "name": "api",
+     "lead": false,
+     "focus": "Stripe endpoints and webhooks",
+     "session": "shop-api-id",
+     "state": "working",
+     "label": "working",
+     "tone": "working",
+     "cli": "claude",
+     "model": "claude-sonnet-5-5",
+     "effort": "",
+     "model_note": "",
+     "fell_back": "",
+     "context": 0.5133333333333333,
+     "cap": 300000,
+     "tokens": 154300,
+     "unread": 0,
+     "last": {
+      "at": "2026-11-18T11:51:00",
+      "sender": "api",
+      "receiver": "ui",
+      "text": "Payload: {cart_id, email, return_url}; errors come back as 422 with field names"
+     },
+     "warm_until": null,
+     "needs_you": false,
+     "quota": null,
+     "git": {
+      "branch": "main",
+      "changed": 0,
+      "ahead": 0
+     },
+     "bus": null
+    },
+    {
+     "name": "ui",
+     "lead": false,
+     "focus": "the checkout screens",
+     "session": "shop-ui-id",
+     "state": "idle",
+     "label": "idle",
+     "tone": "done",
+     "cli": "claude",
+     "model": "claude-sonnet-5-5",
+     "effort": "",
+     "model_note": "",
+     "fell_back": "",
+     "context": 0.32,
+     "cap": 300000,
+     "tokens": 96300,
+     "unread": 0,
+     "last": {
+      "at": "2026-11-18T11:54:00",
+      "sender": "ui",
+      "receiver": "lead",
+      "text": "Form done in src/checkout/Form.tsx, wired to POST /checkout"
+     },
+     "warm_until": null,
+     "needs_you": false,
+     "quota": null,
+     "git": {
+      "branch": "main",
+      "changed": 0,
+      "ahead": 0
+     },
+     "bus": null
+    },
+    {
+     "name": "tests",
+     "lead": false,
+     "focus": "end-to-end tests of the flow",
+     "session": "shop-tests-id",
+     "state": "needs-you",
+     "label": "needs you",
+     "tone": "your-turn!",
+     "cli": "claude",
+     "model": "claude-sonnet-5-5",
+     "effort": "",
+     "model_note": "",
+     "fell_back": "",
+     "context": 0.7933333333333333,
+     "cap": 300000,
+     "tokens": 238300,
+     "unread": 0,
+     "last": {
+      "at": "2026-11-18T11:57:00",
+      "sender": "tests",
+      "receiver": "lead",
+      "text": "The webhook test needs a Stripe test key: can the user add one?"
+     },
+     "warm_until": null,
+     "needs_you": true,
+     "quota": null,
+     "git": {
+      "branch": "main",
+      "changed": 0,
+      "ahead": 0
+     },
+     "bus": null
+    }
+   ],
+   "wires": [
+    {
+     "from": "api",
+     "to": "ui",
+     "count": 1
+    },
+    {
+     "from": "lead",
+     "to": "api",
+     "count": 1
+    },
+    {
+     "from": "lead",
+     "to": "tests",
+     "count": 1
+    },
+    {
+     "from": "lead",
+     "to": "ui",
+     "count": 1
+    },
+    {
+     "from": "tests",
+     "to": "lead",
+     "count": 1
+    },
+    {
+     "from": "ui",
+     "to": "lead",
+     "count": 1
+    }
+   ],
+   "latest": [
+    {
+     "at": "2026-11-18T11:40:00",
+     "sender": "you",
+     "receiver": "lead",
+     "text": "Add Stripe checkout"
+    },
+    {
+     "at": "2026-11-18T11:40:00",
+     "sender": "you",
+     "receiver": "api",
+     "text": "work on api"
+    },
+    {
+     "at": "2026-11-18T11:40:00",
+     "sender": "you",
+     "receiver": "ui",
+     "text": "work on ui"
+    },
+    {
+     "at": "2026-11-18T11:40:00",
+     "sender": "you",
+     "receiver": "tests",
+     "text": "work on tests"
+    },
+    {
+     "at": "2026-11-18T11:46:00",
+     "sender": "lead",
+     "receiver": "api",
+     "text": "Add POST /checkout and the Stripe webhook; tell me the payload shape"
+    },
+    {
+     "at": "2026-11-18T11:47:00",
+     "sender": "lead",
+     "receiver": "ui",
+     "text": "Build the checkout form; take the payload shape from api"
+    },
+    {
+     "at": "2026-11-18T11:47:00",
+     "sender": "lead",
+     "receiver": "tests",
+     "text": "Write the e2e test for a successful payment"
+    },
+    {
+     "at": "2026-11-18T11:51:00",
+     "sender": "api",
+     "receiver": "ui",
+     "text": "Payload: {cart_id, email, return_url}; errors come back as 422 with field names"
+    },
+    {
+     "at": "2026-11-18T11:54:00",
+     "sender": "ui",
+     "receiver": "lead",
+     "text": "Form done in src/checkout/Form.tsx, wired to POST /checkout"
+    },
+    {
+     "at": "2026-11-18T11:57:00",
+     "sender": "tests",
+     "receiver": "lead",
+     "text": "The webhook test needs a Stripe test key: can the user add one?"
+    }
+   ],
+   "clis": [
+    "claude"
+   ],
+   "uses_bus": false,
+   "cap": 300000,
+   "peers": false,
+   "background": false,
+   "worktrees": false,
+   "lead": "lead",
+   "folder": "<root>/shop"
+  }
+ ],
+ "projects": [
+  {
+   "folder": "<root>/shop",
+   "name": "shop",
+   "last_active": "2026-11-18T12:00:00",
+   "sessions": 4,
+   "open": 4,
+   "waiting": 1,
+   "git": {
+    "changed": false,
+    "ahead": false
+   }
+  },
+  {
+   "folder": "<root>/cli-tool",
+   "name": "cli-tool",
+   "last_active": "2026-11-18T11:59:00",
+   "sessions": 1,
+   "open": 1,
+   "waiting": 0,
+   "git": {
+    "changed": false,
+    "ahead": false
+   }
+  },
+  {
+   "folder": "<root>/api-server",
+   "name": "api-server",
+   "last_active": "2026-11-18T11:56:00",
+   "sessions": 1,
+   "open": 1,
+   "waiting": 1,
+   "git": {
+    "changed": false,
+    "ahead": false
+   }
+  },
+  {
+   "folder": "<root>/nightly-reports",
+   "name": "nightly-reports",
+   "last_active": "2026-11-18T11:45:00",
+   "sessions": 1,
+   "open": 1,
+   "waiting": 1,
+   "git": {
+    "changed": false,
+    "ahead": false
+   }
+  },
+  {
+   "folder": "<root>/ml-experiments",
+   "name": "ml-experiments",
+   "last_active": "2026-11-18T10:00:00",
+   "sessions": 1,
+   "open": 0,
+   "waiting": 0,
+   "git": {
+    "changed": false,
+    "ahead": false
+   }
+  },
+  {
+   "folder": "<root>/release-notes",
+   "name": "release-notes",
+   "last_active": "2026-11-18T09:00:00",
+   "sessions": 1,
+   "open": 0,
+   "waiting": 0,
+   "git": {
+    "changed": false,
+    "ahead": false
+   }
+  },
+  {
+   "folder": "<root>/web-app",
+   "name": "web-app",
+   "last_active": "2026-11-18T02:59:48",
+   "sessions": 1,
+   "open": 0,
+   "waiting": 0,
+   "git": {
+    "changed": false,
+    "ahead": true
+   }
+  },
+  {
+   "folder": "<root>/pcb-router",
+   "name": "pcb-router",
+   "last_active": "2026-11-18T02:59:30",
+   "sessions": 1,
+   "open": 0,
+   "waiting": 0,
+   "git": {
+    "changed": true,
+    "ahead": false
+   }
+  },
+  {
+   "folder": "<root>/data-pipeline",
+   "name": "data-pipeline",
+   "last_active": "2026-11-17T06:00:00",
+   "sessions": 1,
+   "open": 0,
+   "waiting": 0,
+   "git": {
+    "changed": false,
+    "ahead": false
+   }
+  },
+  {
+   "folder": "<root>/docs-site",
+   "name": "docs-site",
+   "last_active": "2026-11-16T12:00:00",
+   "sessions": 1,
+   "open": 0,
+   "waiting": 0,
+   "git": {
+    "changed": true,
+    "ahead": false
+   }
+  },
+  {
+   "folder": "<root>/mobile-app",
+   "name": "mobile-app",
+   "last_active": "2026-11-13T12:00:00",
+   "sessions": 1,
+   "open": 0,
+   "waiting": 0,
+   "git": {
+    "changed": false,
+    "ahead": false
+   }
+  }
+ ],
+ "cards": {
+  "open": {
+   "working": 3,
+   "needs-you": 2,
+   "idle": 1,
+   "waiting": 1
+  },
+  "need_you": [
+   "api-server",
+   "nightly-reports",
+   "shop"
+  ],
+  "to_continue": [
+   "data-pipeline",
+   "ml-experiments",
+   "pcb-router",
+   "release-notes"
+  ]
+ },
+ "limits": [
+  {
+   "label": "session",
+   "percent": 34,
+   "resets_at": "2026-11-18T14:10:00"
+  },
+  {
+   "label": "week",
+   "percent": 61,
+   "resets_at": "2026-11-20T17:00:00"
+  }
+ ],
+ "agy_quota": {
+  "read_at": null,
+  "unreadable": false,
+  "chain": [
+   {
+    "model": "gemini-4-neon-high",
+    "name": "Neon",
+    "left": null,
+    "span": "",
+    "back": null
+   },
+   {
+    "model": "gemini-4-hydrogen-high",
+    "name": "Hydrogen",
+    "left": null,
+    "span": "",
+    "back": null
+   }
+  ],
+  "pick": "gemini-4-neon-high",
+  "why": "Neon first (quota not read yet)"
+ }
+}

@@ -1,0 +1,24 @@
+{
+ "shop": {
+  "lead": {
+   "label": "working",
+   "style": "#6cb6ff",
+   "spinning": true
+  },
+  "api": {
+   "label": "working",
+   "style": "#6cb6ff",
+   "spinning": true
+  },
+  "ui": {
+   "label": "idle",
+   "style": "#8b949e",
+   "spinning": false
+  },
+  "tests": {
+   "label": "needs you",
+   "style": "bold #f85149",
+   "spinning": false
+  }
+ }
+}

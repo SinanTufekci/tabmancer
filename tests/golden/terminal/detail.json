@@ -1,0 +1,1510 @@
+{
+ "api-server": {
+  "head": "Rate limiting for the public API",
+  "status": [
+   [
+    "waiting for you",
+    "#f85149"
+   ]
+  ],
+  "means": "Open in another terminal right now.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab (not this one: Space ticks it)",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "First prompt",
+    "add per-key rate limiting"
+   ],
+   [
+    "Claude",
+    "Done: a token bucket per API key, 60 requests/minute."
+   ],
+   [
+    "Files edited",
+    "src/config.py, tests/test_app.py"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/api-server",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Opus 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · xhigh effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ main",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "clean",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "18 Nov 10:56"
+   ],
+   [
+    "Last active",
+    "18 Nov 11:56  (4m ago)"
+   ],
+   [
+    "Going for",
+    "1h 04m"
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "3.9M",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  79k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "106k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(11%)",
+      "bold #3fb950"
+     ]
+    ]
+   ]
+  ]
+ },
+ "cli-tool": {
+  "head": "Add --json output to the list command",
+  "status": [
+   [
+    "working",
+    "#6cb6ff"
+   ]
+  ],
+  "means": "Open in another terminal right now.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab (not this one: Space ticks it)",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "First prompt",
+    "add a --json flag to `list`"
+   ],
+   [
+    "Claude",
+    "Added it, with tests."
+   ],
+   [
+    "Files edited",
+    "tests/test_app.py"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/cli-tool",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Opus 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · xhigh effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ json-output",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "clean",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "18 Nov 10:59"
+   ],
+   [
+    "Last active",
+    "18 Nov 11:59  (1m ago)"
+   ],
+   [
+    "Going for",
+    "1h 01m"
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "835k",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  25.3k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "79.1k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(8%)",
+      "bold #3fb950"
+     ]
+    ]
+   ]
+  ]
+ },
+ "nightly": {
+  "head": "Summarise yesterday's error logs",
+  "status": [
+   [
+    "needs you",
+    "bold #f85149"
+   ]
+  ],
+  "means": "Running as a background session (claude --bg). Enter attaches to it; B stops or removes background sessions.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab (not this one: Space ticks it)",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "First prompt",
+    "summarise the error logs every night"
+   ],
+   [
+    "Claude",
+    "Scheduled; first run tonight."
+   ],
+   [
+    "Files edited",
+    "src/app.py, pyproject.toml, src/routes.ts"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/nightly-reports",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Haiku 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · low effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ main",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "clean",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "18 Nov 10:45"
+   ],
+   [
+    "Last active",
+    "18 Nov 11:45  (15m ago)"
+   ],
+   [
+    "Going for",
+    "1h 15m"
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "1.6M",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  55.1k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "68.5k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(7%)",
+      "bold #3fb950"
+     ]
+    ]
+   ],
+   [
+    "Opens as",
+    [
+     [
+      "resume",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "",
+    [
+     [
+      "claude --resume nightly --autocompact 300k",
+      "#8b949e"
+     ]
+    ]
+   ]
+  ]
+ },
+ "ml": {
+  "head": "Compare three tokenizer settings",
+  "status": [
+   [
+    "◐ limit · 14:00",
+    "#d29922"
+   ]
+  ],
+  "means": "Stopped at a usage limit, which lifts at 14:00 (in 2h 00m). c continues it then.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab (not this one: Space ticks it)",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "First prompt",
+    "compare the three tokenizer configs on the eval set"
+   ],
+   [
+    "Claude",
+    "You've hit your session limit · resets 2pm"
+   ],
+   [
+    "Files edited",
+    "tests/test_app.py, src/app.py, pyproject.toml, src/config.py"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/ml-experiments",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Sonnet 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · high effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ tokenizers",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "clean",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "18 Nov 09:00"
+   ],
+   [
+    "Last active",
+    "18 Nov 10:00  (2h ago)"
+   ],
+   [
+    "Ran for",
+    "1h 00m"
+   ],
+   [
+    "Lines",
+    [
+     [
+      "+30",
+      "#3fb950"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "−4",
+      "#f85149"
+     ]
+    ]
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "6.3M",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  133k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "69.4k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(7%)",
+      "bold #3fb950"
+     ]
+    ]
+   ],
+   [
+    "Process",
+    [
+     [
+      "clean",
+      "#e6e6e6"
+     ],
+     [
+      "  closed normally: /exit, a closed window or a shutdown",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Opens as",
+    [
+     [
+      "▶ auto",
+      "bold #d97757"
+     ]
+    ]
+   ],
+   [
+    "",
+    [
+     [
+      "claude --resume ml --autocompact 300k \"Continue where you left off…\"",
+      "#8b949e"
+     ]
+    ]
+   ]
+  ]
+ },
+ "wiki": {
+  "head": "Gather the release checklist from the team wiki",
+  "status": [
+   [
+    "◐ limit · 14:00",
+    "#d29922"
+   ]
+  ],
+  "means": "Stopped at a usage limit, which lifts at 14:00 (in 2h 00m). c continues it then.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab (not this one: Space ticks it)",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "First prompt",
+    "collect the release checklist from our wiki pages"
+   ],
+   [
+    "Claude",
+    "You've hit your session limit · resets 2pm"
+   ],
+   [
+    "Files edited",
+    "src/routes.ts, README.md, pyproject.toml, src/app.py, tests/test_app.py"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/release-notes",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Opus 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · xhigh effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ main",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "clean",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "18 Nov 08:00"
+   ],
+   [
+    "Last active",
+    "18 Nov 09:00  (3h ago)"
+   ],
+   [
+    "Ran for",
+    "1h 00m"
+   ],
+   [
+    "Lines",
+    [
+     [
+      "+22",
+      "#3fb950"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "−0",
+      "#f85149"
+     ]
+    ]
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "7.3M",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  115k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "115k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(12%)",
+      "bold #3fb950"
+     ]
+    ]
+   ],
+   [
+    "Process",
+    [
+     [
+      "clean",
+      "#e6e6e6"
+     ],
+     [
+      "  closed normally: /exit, a closed window or a shutdown",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Opens as",
+    [
+     [
+      "▶ auto",
+      "bold #d97757"
+     ]
+    ]
+   ],
+   [
+    "",
+    [
+     [
+      "claude --resume wiki --autocompact 300k \"Continue where you left off…\"",
+      "#8b949e"
+     ]
+    ]
+   ]
+  ]
+ },
+ "web-app": {
+  "head": "Fix the login redirect loop",
+  "status": [
+   [
+    "✓ done",
+    "#8b949e"
+   ]
+  ],
+  "means": "Claude had finished its reply; the session was waiting for you.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "First prompt",
+    "users bounce between /login and /home"
+   ],
+   [
+    "Claude",
+    "Fixed: the session cookie was set on the wrong path. Added a regression test."
+   ],
+   [
+    "Files edited",
+    "src/auth/session.ts, src/config.py, tests/test_app.py, src/app.py, src/routes.ts, pyproject.toml"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/web-app",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Opus 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · xhigh effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ fix-login-loop",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "2 to push",
+      "#d29922"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "18 Nov 01:59"
+   ],
+   [
+    "Last active",
+    "18 Nov 02:59  (9h ago)"
+   ],
+   [
+    "Ran for",
+    "1h 00m"
+   ],
+   [
+    "Lines",
+    [
+     [
+      "+57",
+      "#3fb950"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "−12",
+      "#f85149"
+     ]
+    ]
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "3.7M",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  69.6k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "142k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(14%)",
+      "bold #3fb950"
+     ]
+    ]
+   ],
+   [
+    "Process",
+    [
+     [
+      "clean",
+      "#e6e6e6"
+     ],
+     [
+      "  closed normally: /exit, a closed window or a shutdown",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Opens as",
+    [
+     [
+      "resume",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "",
+    [
+     [
+      "claude --resume web-app --autocompact 300k",
+      "#8b949e"
+     ]
+    ]
+   ]
+  ]
+ },
+ "pcb-router": {
+  "head": "Route the power plane on the 4-layer board",
+  "status": [
+   [
+    "▲ cut off",
+    "bold #d29922"
+   ]
+  ],
+  "means": "Closed while Claude was still working: a tool call or reply was in flight.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "Summary",
+    [
+     [
+      "Routed the 3V3 plane on layer 3 and added ground stitching around the regulator. Claude was updating the design rules when the PC shut down; DRC has not run yet.",
+      ""
+     ]
+    ]
+   ],
+   [
+    "First prompt",
+    "route the 3V3 plane and stitch the ground vias"
+   ],
+   [
+    "Files edited",
+    "rules.dru, board.kicad_pcb, README.md, src/app.py, src/routes.ts"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/pcb-router",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Opus 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · xhigh effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ power-plane",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "3 changed",
+      "#d29922"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "18 Nov 01:59"
+   ],
+   [
+    "Last active",
+    "18 Nov 02:59  (9h ago)"
+   ],
+   [
+    "Ran for",
+    "1h 00m"
+   ],
+   [
+    "Lines",
+    [
+     [
+      "+412",
+      "#3fb950"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "−38",
+      "#f85149"
+     ]
+    ]
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "8.6M",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  142k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "102k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(10%)",
+      "bold #3fb950"
+     ]
+    ]
+   ],
+   [
+    "Process",
+    [
+     [
+      "clean",
+      "#e6e6e6"
+     ],
+     [
+      "  closed normally: /exit, a closed window or a shutdown",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Opens as",
+    [
+     [
+      "▶ auto",
+      "bold #d97757"
+     ]
+    ]
+   ],
+   [
+    "",
+    [
+     [
+      "claude --resume pcb-router --autocompact 300k \"Continue where you left off…\"",
+      "#8b949e"
+     ]
+    ]
+   ]
+  ]
+ },
+ "data": {
+  "head": "Speed up the nightly CSV import",
+  "status": [
+   [
+    "○ unanswered",
+    "bold #d29922"
+   ]
+  ],
+  "means": "Your last message never got a reply.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab (not this one: Space ticks it)",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "First prompt",
+    "the import takes 40 minutes"
+   ],
+   [
+    "Last prompt",
+    "can we also skip unchanged rows?"
+   ],
+   [
+    "Claude",
+    "Batched the inserts: 6 minutes now."
+   ],
+   [
+    "Files edited",
+    "src/config.py, src/app.py, pyproject.toml, tests/test_app.py, src/routes.ts, README.md"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/data-pipeline",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Opus 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · xhigh effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ main",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "clean",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "17 Nov 05:00"
+   ],
+   [
+    "Last active",
+    "17 Nov 06:00  (30h ago)"
+   ],
+   [
+    "Ran for",
+    "1h 00m"
+   ],
+   [
+    "Lines",
+    [
+     [
+      "+140",
+      "#3fb950"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "−61",
+      "#f85149"
+     ]
+    ]
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "10.2M",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  175k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "66.3k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(7%)",
+      "bold #3fb950"
+     ]
+    ]
+   ],
+   [
+    "Process",
+    [
+     [
+      "clean",
+      "#e6e6e6"
+     ],
+     [
+      "  closed normally: /exit, a closed window or a shutdown",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Opens as",
+    [
+     [
+      "▶ auto",
+      "bold #d97757"
+     ]
+    ]
+   ],
+   [
+    "",
+    [
+     [
+      "claude --resume data --autocompact 300k \"Continue where you left off…\"",
+      "#8b949e"
+     ]
+    ]
+   ]
+  ]
+ },
+ "docs": {
+  "head": "Rewrite the getting-started guide",
+  "status": [
+   [
+    "‖ stopped",
+    "#8b949e"
+   ]
+  ],
+  "means": "You pressed Esc while Claude was replying.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab (not this one: Space ticks it)",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "First prompt",
+    "rewrite the getting started page"
+   ],
+   [
+    "Files edited",
+    "start.md, src/config.py, src/app.py, src/routes.ts, pyproject.toml, README.md, tests/test_app.py"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/docs-site",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Opus 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · xhigh effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ main",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "1 changed",
+      "#d29922"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "16 Nov 11:00"
+   ],
+   [
+    "Last active",
+    "16 Nov 12:00  (2d ago)"
+   ],
+   [
+    "Ran for",
+    "1h 00m"
+   ],
+   [
+    "Lines",
+    [
+     [
+      "+80",
+      "#3fb950"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "−95",
+      "#f85149"
+     ]
+    ]
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "12.1M",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  194k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "176k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(18%)",
+      "bold #3fb950"
+     ]
+    ]
+   ],
+   [
+    "",
+    [
+     [
+      "cache gone after an hour: the next message writes all 176k of it again",
+      "#d29922"
+     ]
+    ]
+   ],
+   [
+    "Process",
+    [
+     [
+      "clean",
+      "#e6e6e6"
+     ],
+     [
+      "  closed normally: /exit, a closed window or a shutdown",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Opens as",
+    [
+     [
+      "resume",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "",
+    [
+     [
+      "claude --resume docs --autocompact 300k",
+      "#8b949e"
+     ]
+    ]
+   ]
+  ]
+ },
+ "mobile": {
+  "head": "Ask for notification permission at the right moment",
+  "status": [
+   [
+    "✓ done",
+    "#8b949e"
+   ]
+  ],
+  "means": "Claude had finished its reply; the session was waiting for you.",
+  "enter": [
+   [
+    "⏎ ",
+    "bold #d97757"
+   ],
+   [
+    "opens the 2 ticked sessions, each in a tab (not this one: Space ticks it)",
+    "#d97757"
+   ]
+  ],
+  "said": [
+   [
+    "First prompt",
+    "when should we ask for push permission?"
+   ],
+   [
+    "Claude",
+    "After the first saved item. Implemented."
+   ],
+   [
+    "Files edited",
+    "src/routes.ts, README.md, src/config.py, tests/test_app.py, pyproject.toml, src/app.py"
+   ]
+  ],
+  "facts": [
+   [
+    "Folder",
+    [
+     [
+      "<root>/mobile-app",
+      "#e6e6e6"
+     ]
+    ]
+   ],
+   [
+    "Model",
+    [
+     [
+      "Opus 5.5",
+      "#e6e6e6"
+     ],
+     [
+      " · xhigh effort",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Branch",
+    [
+     [
+      "⎇ main",
+      "#39c5cf"
+     ]
+    ]
+   ],
+   [
+    "Git",
+    [
+     [
+      "clean",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Started",
+    "13 Nov 11:00"
+   ],
+   [
+    "Last active",
+    "13 Nov 12:00  (5d ago)"
+   ],
+   [
+    "Ran for",
+    "1h 00m"
+   ],
+   [
+    "Lines",
+    [
+     [
+      "+96",
+      "#3fb950"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "−20",
+      "#f85149"
+     ]
+    ]
+   ],
+   [
+    "Tokens",
+    [
+     [
+      "12.7M",
+      "#e6e6e6"
+     ],
+     [
+      "  ·  214k out",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Context",
+    [
+     [
+      "122k of 1M ",
+      "#e6e6e6"
+     ],
+     [
+      "(12%)",
+      "bold #3fb950"
+     ]
+    ]
+   ],
+   [
+    "Process",
+    [
+     [
+      "clean",
+      "#e6e6e6"
+     ],
+     [
+      "  closed normally: /exit, a closed window or a shutdown",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "Opens as",
+    [
+     [
+      "resume",
+      "#8b949e"
+     ]
+    ]
+   ],
+   [
+    "",
+    [
+     [
+      "claude --resume mobile --autocompact 300k",
+      "#8b949e"
+     ]
+    ]
+   ]
+  ]
+ }
+}

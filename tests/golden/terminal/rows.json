@@ -1,0 +1,652 @@
+{
+ "listing": {
+  "width": 28,
+  "model_shown": false,
+  "accent": "#d97757",
+  "selected": [
+   "pcb-router",
+   "web-app"
+  ],
+  "unfolded": [],
+  "modes": {},
+  "pinned": [],
+  "more": 3
+ },
+ "rows": [
+  {
+   "key": "\u0000open",
+   "cells": {
+    "sel": [],
+    "project": [
+     [
+      "OPEN NOW",
+      "bold #3fb950"
+     ],
+     [
+      " · 7",
+      "#8b949e"
+     ]
+    ],
+    "title": [],
+    "status": [],
+    "model": [],
+    "exit": [],
+    "active": [],
+    "mode": []
+   },
+   "motion": ""
+  },
+  {
+   "key": "\u0001shop",
+   "cells": {
+    "sel": [
+     [
+      "▸",
+      "bold #d97757"
+     ]
+    ],
+    "project": [
+     [
+      "TEAM ",
+      "bold #8b949e"
+     ],
+     [
+      "shop",
+      "bold #d97757"
+     ]
+    ],
+    "title": [
+     [
+      "✶",
+      "bold #6cb6ff"
+     ],
+     [
+      " ",
+      ""
+     ],
+     [
+      "★",
+      "bold #d97757"
+     ],
+     [
+      "lead",
+      "#e6e6e6"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "✶",
+      "bold #6cb6ff"
+     ],
+     [
+      " ",
+      ""
+     ],
+     [
+      "api",
+      "#e6e6e6"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "●",
+      "#8b949e"
+     ],
+     [
+      " ",
+      ""
+     ],
+     [
+      "ui",
+      "#e6e6e6"
+     ],
+     [
+      "  ",
+      ""
+     ],
+     [
+      "!",
+      "bold #f85149"
+     ],
+     [
+      " ",
+      ""
+     ],
+     [
+      "tes…",
+      "bold #f85149"
+     ]
+    ],
+    "status": [
+     [
+      "! 1",
+      "bold #f85149"
+     ],
+     [
+      "  ✶ 2",
+      "#6cb6ff"
+     ],
+     [
+      "  ● 1",
+      "#8b949e"
+     ]
+    ],
+    "model": [],
+    "exit": [
+     [
+      "671k",
+      "#8b949e"
+     ]
+    ],
+    "active": [
+     [
+      "3m",
+      "#8b949e"
+     ]
+    ],
+    "mode": []
+   },
+   "motion": "spin"
+  },
+  {
+   "key": "api-server",
+   "cells": {
+    "sel": [],
+    "project": [
+     [
+      "api-server",
+      "dim"
+     ]
+    ],
+    "title": [
+     [
+      "Rate limiting for the publi…",
+      "dim"
+     ]
+    ],
+    "status": [
+     [
+      "● waiting for you",
+      "#f85149"
+     ]
+    ],
+    "model": [],
+    "exit": [
+     [
+      "",
+      "#8b949e"
+     ],
+     [
+      "▱▱▱▱",
+      "#2a2a2a"
+     ],
+     [
+      " 11%",
+      "#8b949e"
+     ]
+    ],
+    "active": [
+     [
+      "4m",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "",
+      ""
+     ]
+    ]
+   },
+   "motion": ""
+  },
+  {
+   "key": "cli-tool",
+   "cells": {
+    "sel": [],
+    "project": [
+     [
+      "cli-tool",
+      "dim"
+     ]
+    ],
+    "title": [
+     [
+      "Add --json output to the li…",
+      "dim"
+     ]
+    ],
+    "status": [
+     [
+      "✶ ",
+      "bold #d97757"
+     ],
+     [
+      "working",
+      "bold #6cb6ff"
+     ]
+    ],
+    "model": [],
+    "exit": [
+     [
+      "",
+      "#8b949e"
+     ],
+     [
+      "▱▱▱▱",
+      "#2a2a2a"
+     ],
+     [
+      " 8%",
+      "#8b949e"
+     ]
+    ],
+    "active": [
+     [
+      "1m",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "",
+      ""
+     ]
+    ]
+   },
+   "motion": "spin"
+  },
+  {
+   "key": "nightly",
+   "cells": {
+    "sel": [],
+    "project": [
+     [
+      "nightly-reports",
+      ""
+     ]
+    ],
+    "title": [
+     [
+      "Summarise yesterday's error…",
+      ""
+     ]
+    ],
+    "status": [
+     [
+      "! needs you · bg",
+      "bold #ffffff on #9a302b"
+     ]
+    ],
+    "model": [],
+    "exit": [
+     [
+      "",
+      "#8b949e"
+     ],
+     [
+      "▱▱▱▱",
+      "#2a2a2a"
+     ],
+     [
+      " 7%",
+      "#8b949e"
+     ]
+    ],
+    "active": [
+     [
+      "15m",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "",
+      ""
+     ]
+    ]
+   },
+   "motion": "pulse"
+  },
+  {
+   "key": "\u0000rest",
+   "cells": {
+    "sel": [],
+    "project": [
+     [
+      "EARLIER",
+      "bold #e6e6e6"
+     ],
+     [
+      " · 7",
+      "#8b949e"
+     ]
+    ],
+    "title": [],
+    "status": [],
+    "model": [],
+    "exit": [
+     [
+      "process",
+      "#8b949e"
+     ]
+    ],
+    "active": [],
+    "mode": []
+   },
+   "motion": ""
+  },
+  {
+   "key": "ml",
+   "cells": {
+    "sel": [
+     [
+      "[ ]",
+      "#5a5a5a"
+     ]
+    ],
+    "project": [
+     [
+      "ml-experiments",
+      ""
+     ]
+    ],
+    "title": [
+     [
+      "Compare three tokenizer set…",
+      ""
+     ]
+    ],
+    "status": [
+     [
+      "◐ limit · 14:00",
+      "#d29922"
+     ]
+    ],
+    "model": [],
+    "exit": [],
+    "active": [
+     [
+      "2h",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "▶ auto",
+      "bold #d97757"
+     ]
+    ]
+   },
+   "motion": ""
+  },
+  {
+   "key": "wiki",
+   "cells": {
+    "sel": [
+     [
+      "[ ]",
+      "#5a5a5a"
+     ]
+    ],
+    "project": [
+     [
+      "release-notes",
+      ""
+     ]
+    ],
+    "title": [
+     [
+      "Gather the release checklis…",
+      ""
+     ]
+    ],
+    "status": [
+     [
+      "◐ limit · 14:00",
+      "#d29922"
+     ]
+    ],
+    "model": [],
+    "exit": [],
+    "active": [
+     [
+      "3h",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "▶ auto",
+      "bold #d97757"
+     ]
+    ]
+   },
+   "motion": ""
+  },
+  {
+   "key": "web-app",
+   "cells": {
+    "sel": [
+     [
+      "[x]",
+      "bold #d97757"
+     ]
+    ],
+    "project": [
+     [
+      "web-app",
+      ""
+     ]
+    ],
+    "title": [
+     [
+      "Fix the login redirect loop",
+      ""
+     ]
+    ],
+    "status": [
+     [
+      "✓ done",
+      "#8b949e"
+     ]
+    ],
+    "model": [],
+    "exit": [],
+    "active": [
+     [
+      "9h",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "",
+      ""
+     ]
+    ]
+   },
+   "motion": ""
+  },
+  {
+   "key": "pcb-router",
+   "cells": {
+    "sel": [
+     [
+      "[x]",
+      "bold #d97757"
+     ]
+    ],
+    "project": [
+     [
+      "pcb-router",
+      ""
+     ]
+    ],
+    "title": [
+     [
+      "Route the power plane on th…",
+      ""
+     ]
+    ],
+    "status": [
+     [
+      "▲ cut off",
+      "bold #d29922 on #2e2207"
+     ]
+    ],
+    "model": [],
+    "exit": [],
+    "active": [
+     [
+      "9h",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "▶ auto",
+      "bold #d97757"
+     ]
+    ]
+   },
+   "motion": ""
+  },
+  {
+   "key": "data",
+   "cells": {
+    "sel": [
+     [
+      "[ ]",
+      "#5a5a5a"
+     ]
+    ],
+    "project": [
+     [
+      "data-pipeline",
+      ""
+     ]
+    ],
+    "title": [
+     [
+      "Speed up the nightly CSV im…",
+      ""
+     ]
+    ],
+    "status": [
+     [
+      "○ unanswered",
+      "bold #d29922 on #2e2207"
+     ]
+    ],
+    "model": [],
+    "exit": [],
+    "active": [
+     [
+      "30h",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "▶ auto",
+      "bold #d97757"
+     ]
+    ]
+   },
+   "motion": ""
+  },
+  {
+   "key": "docs",
+   "cells": {
+    "sel": [
+     [
+      "[ ]",
+      "#5a5a5a"
+     ]
+    ],
+    "project": [
+     [
+      "docs-site",
+      ""
+     ]
+    ],
+    "title": [
+     [
+      "Rewrite the getting-started…",
+      ""
+     ]
+    ],
+    "status": [
+     [
+      "‖ stopped",
+      "#8b949e"
+     ]
+    ],
+    "model": [],
+    "exit": [],
+    "active": [
+     [
+      "2d",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "",
+      ""
+     ]
+    ]
+   },
+   "motion": ""
+  },
+  {
+   "key": "mobile",
+   "cells": {
+    "sel": [
+     [
+      "[ ]",
+      "#5a5a5a"
+     ]
+    ],
+    "project": [
+     [
+      "mobile-app",
+      ""
+     ]
+    ],
+    "title": [
+     [
+      "Ask for notification permis…",
+      ""
+     ]
+    ],
+    "status": [
+     [
+      "✓ done",
+      "#8b949e"
+     ]
+    ],
+    "model": [],
+    "exit": [],
+    "active": [
+     [
+      "5d",
+      "#8b949e"
+     ]
+    ],
+    "mode": [
+     [
+      "",
+      ""
+     ]
+    ]
+   },
+   "motion": ""
+  }
+ ]
+}
