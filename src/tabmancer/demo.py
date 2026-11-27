@@ -23,6 +23,9 @@ from pathlib import Path
 NOW = time.time()
 SHUTDOWN = datetime.now() - timedelta(hours=9)
 ROOT = "C:\\dev" if sys.platform == "win32" else "/home/dev/code"
+# What prepare points at the demo's own home, and what is put back after (desktop.frame.made_up_world): Claude
+# Code's folder, tabmancer's, Codex's and the team buses' (else the machine's own, with your teams' messages).
+ENVIRON = ("CLAUDE_CONFIG_DIR", "TABMANCER_CONFIG_DIR", "CODEX_HOME", "TABMANCER_BUS_DIR")
 
 
 def clock(moment):
@@ -318,6 +321,7 @@ def prepare(home: Path) -> list[dict]:
     os.environ["CLAUDE_CONFIG_DIR"] = str(home / "claude")
     os.environ["TABMANCER_CONFIG_DIR"] = str(home / "config")
     os.environ["CODEX_HOME"] = str(home / "codex")  # should Codex be turned on (,): no sessions
+    os.environ["TABMANCER_BUS_DIR"] = str(home / "bus")  # its team's messages: never the real buses'
     build_home(home / "claude")
     _, team_live = build_team(home / "claude")
     made_up_limits()

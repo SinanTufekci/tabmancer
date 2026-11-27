@@ -29,12 +29,12 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import config_dir, merge_json, read_json
+from ..demo import ENVIRON as DEMO_ENV  # what demo.prepare points elsewhere, put back after (made_up_world)
 from . import look
 
 KNOCK_MS = 500  # how long a second window waits for the first to answer
 LAYOUT_FILE = "desktop.json"
 LAYOUT_VERSION = 1
-DEMO_ENV = ("CLAUDE_CONFIG_DIR", "TABMANCER_CONFIG_DIR", "CODEX_HOME")  # what demo.prepare points elsewhere
 COLLECT_MS = 1000  # how often the GUI thread looks whether Python's cycle collector is due, while a window is up
 # Of the youngest generation's collections, every MIDDLE_EVERY-th takes the middle one too and every FULL_EVERY-th
 # all of it: gc's own default schedule (thresholds 10 and 10), counted here, since 3.14's incremental collector

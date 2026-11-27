@@ -1,11 +1,12 @@
 """`tabmancer --demo`: the made-up sessions in the dashboard, and nothing real within reach."""
 
+import os
 from pathlib import Path
 
 import pytest
 from conftest import box_has_focus, wait_until
 
-from tabmancer import actions, alerts, app, cli, demo, focus, launch, teamview
+from tabmancer import actions, alerts, app, cli, demo, focus, launch, teambus, teamview
 from tabmancer.app import SessionPicker
 from tabmancer.launch import Launch, Mode
 
@@ -189,3 +190,17 @@ async def test_the_demo_shows_a_second_account_and_a_session_from_another_organi
                     if options.get_option_at_index(i).id == work.key)
         assert "session reset since · week 47% · read 5h" in line  # as Bit says it
         await pilot.press("escape")
+
+
+def test_the_demo_never_reads_the_real_team_buses(tmp_path):
+    """The machine's team buses (<temp>/tabmancer-bus: your teams', and a test's left behind) are never the
+    demo's: a message on the real "shop" bus does not show as the demo team's. conftest's bus folder stands in
+    for the real one, and is put back after (as made_up_world puts ENVIRON back)."""
+    real = teambus.bus_root()
+    teambus.send("shop", "lead", "dev", "from outside the demo")
+    before = dict(os.environ)
+    demo.prepare(tmp_path / "home")
+    assert teambus.bus_root() == tmp_path / "home" / "bus" and teambus.bus_root() != real
+    assert not any("outside the demo" in message["text"] for message in teambus.messages("shop"))
+    changed = {name for name in {*before, *os.environ} if before.get(name) != os.environ.get(name)}
+    assert changed <= set(demo.ENVIRON)  # all it points elsewhere is put back by name
