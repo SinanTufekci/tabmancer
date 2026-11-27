@@ -1158,8 +1158,8 @@ def test_esc_clears_the_words_then_the_card_then_the_project_then_closes(qapp, w
     shown = window()
     read(qapp, shown)
     key = shown.rail.projects.rows[1].key
+    shown.toggle_card("continue")  # first: in that project alone, nothing to continue would keep the card off
     shown.set_project(key)
-    shown.toggle_card("continue")
     press(shown, "/")
     QTest.keyClicks(shown.filter_box, "fix x a")  # typed: never the keys x and a
     assert shown.words == "fix x a" and shown.selected == set() and saved_marks()["hidden"] == []

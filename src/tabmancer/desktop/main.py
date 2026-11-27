@@ -952,8 +952,13 @@ class MainWindow(QMainWindow):
         self.refilter()
 
     def toggle_card(self, card: str) -> None:
-        """1 2 3, or a click on a lane's heading: only what that card counts; the same again shows all."""
-        self.card = VM.toggle_card(self.card, card)
+        """1 2 3, or a click on a lane's heading: only what that card counts; the same again shows all. With
+        nothing there it says so, as the terminal does, and the list stays as it was."""
+        was, self.card = self.card, VM.toggle_card(self.card, card)
+        if self.card is not None and self.snap is not None and not self.shown():
+            self.card = was
+            self.say(f"Nothing for {VM.CARDS[card][1]} right now.", 3)
+            return
         self.refilter()
 
     def only_open(self) -> None:
