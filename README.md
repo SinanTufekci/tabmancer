@@ -12,9 +12,9 @@
 # tabmancer
 
 **Many Claude Code sessions in many terminals: one screen for all of them, and none lost.**
-tabmancer is a dashboard for your coding-agent sessions, in the terminal. See every session
-from every project, which ones are working, which one waits for you and how full each one's
-context is, and go to any of them in a key. Close them when you have to, even halfway through
+tabmancer is a dashboard for your coding-agent sessions, in a desktop window of its own (or in
+the terminal). See every session from every project, which ones are working, which one waits for
+you and how full each one's context is, and go to any of them in a key. Close them when you have to, even halfway through
 a task: they come back where they left off, each in its own tab and folder, and the ones cut
 off mid-reply carry on by themselves. Claude Code first, Codex and Antigravity if you use them.
 
@@ -30,22 +30,30 @@ off mid-reply carry on by themselves. Claude Code first, Codex and Antigravity i
 ## Try it
 
 ```sh
-uvx tabmancer --demo         # made-up sessions: nothing of yours is read or changed
+uvx --from "tabmancer[desktop]" tabmancer --demo   # made-up sessions: nothing of yours is read or changed
 ```
 
 Every key works in the demo, but nothing opens and no model is asked. Then install it:
 
 ```sh
-uv tool install tabmancer    # or: pipx install tabmancer
-tabmancer                    # the dashboard
+uv tool install "tabmancer[desktop]"    # or: pipx install "tabmancer[desktop]"
+tabmancer                               # the dashboard, in its window
+tabmancer --terminal                    # the dashboard in the terminal, as before
 ```
+
+The window needs Qt, which the `desktop` extra brings. Without it, `tabmancer --terminal` runs the
+dashboard in the terminal and `tabmancer` says how to add the window. The terminal dashboard is
+kept for now, while the window takes over all it does.
 
 It needs Python 3.10+ and Claude Code's `claude` on your PATH. Upgrade it with
 `uv tool upgrade tabmancer` (or `pipx upgrade tabmancer`): the dashboard says when a newer
-version is out ([updating](docs/setup.md#updating)). `?` lists every key and runs
-the one you pick; the footer shows the common ones and what they do on the row you are on.
+version is out ([updating](docs/setup.md#updating)). `?` lists every key; in the terminal
+dashboard `Enter` runs the one you pick, and in the window `Ctrl+K` runs any of them by a few
+words. The footer shows the common ones and what they do on the row you are on.
 On Windows, `tabmancer shortcut` adds a desktop shortcut and `tabmancer startup on` opens the
-picker at login when sessions were left open.
+dashboard at login when sessions were left open. A shortcut made by an earlier version opens the
+terminal dashboard: `tabmancer shortcut` writes it again for the window (`tabmancer doctor` says
+when).
 
 ## What it does
 
@@ -129,17 +137,22 @@ tabmancer wrapped --period month --gif   # the last 30 days, moving
 | `c` | continue the sessions stopped at a usage limit |
 | `u` | stats; `5` all time, `p` one project |
 | `W` | Claude Code Wrapped: your week as slides; `←` `→` go through them, `p` shares one, `f` makes it a story |
-| `?` | every key, explained; `Enter` runs the one picked |
+| `?` | every key, explained; in the terminal dashboard `Enter` runs the one picked (in the window: `Ctrl+K`) |
 
-[All the keys](docs/using.md#keys).
+In the window the menus name every key too, and `Ctrl+K` finds and runs any of them by a few
+words. [All the keys](docs/using.md#keys).
 
 ## Where it runs
 
 Built and used every day on Windows 11 with Windows Terminal: tabs, going to a session's tab,
-start at login, desktop notifications and a desktop shortcut. On Linux, tabs open in tmux
+start at login, desktop notifications and a desktop shortcut. The window's tabs open in one
+Windows Terminal window named `tabmancer` (in the current one when you type `tabmancer` in a
+Windows Terminal tab). On Linux, tabs open in tmux
 (tried for real), WezTerm, kitty, GNOME Terminal and Konsole; on macOS in iTerm2 and
-Terminal.app, which have not been tried on a real Mac yet. In any other terminal, tabmancer
-prints the commands to run. [What has been tried where](docs/how-it-works.md#status).
+Terminal.app, which have not been tried on a real Mac yet. The window, started outside a
+terminal, opens its tabs in Terminal.app on macOS and in GNOME Terminal on Linux, not tried yet
+either. In any other terminal, tabmancer prints the commands to run.
+[What has been tried where](docs/how-it-works.md#status).
 Reports are welcome.
 
 Claude Code's formats are its own and can change between releases: after an update,

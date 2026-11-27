@@ -142,8 +142,9 @@ the lead) and `x` twice closes the members' tabs.
 in a window of its own, made for a second screen. In Windows Terminal it opens maximized on the
 first screen that is not the main one (with one screen, maximized there); `M` again brings it to
 the front rather than open a second. Elsewhere it opens in a tmux window, or says what to run:
-`tabmancer team watch <team>` (with no name: the one team with members open, else the list of
-teams to pick from).
+`tabmancer --terminal team watch <team>` (with no name: the one team with members open, else the
+list of teams to pick from). This is the terminal dashboard's monitor (`tabmancer --terminal`); in
+the window, `M` opens the team's monitor in a desktop window ([below](#in-a-desktop-window-tabmancer-desktop---monitor)).
 
 The monitor shows the team the way its view does, the cards and the conversation, with more on
 it: the plan limits beside the team's name (and agy's quota, for a team with agy members), a line
@@ -155,7 +156,8 @@ every member stands in a table beside the conversation instead.
 Its keys are the team view's (`← →`, `Enter`, `s`, `a`, `d`, `g`, `h`, `H`, `x`), and `j` picks
 the next member that needs you, `p` writes to the picked one (typed into its tab once it waits,
 over the bus for a member on it), `T` shows another team's monitor in the same window, `D` brings
-the dashboard to the front (or opens it), `?` lists them all, `Esc` picks nobody and `q` closes
+the dashboard to the front (or opens it: the window, with the `desktop` extra), `?` lists them
+all, `Esc` picks nobody and `q` closes
 the monitor (twice while a handover asked for there is on its way, or a handover is being
 written: that one still ends, the tab waiting for it, but its fresh session does not open). A tab
 it opens joins the dashboard's window, not its own.
@@ -168,10 +170,11 @@ the dashboard read last (up to 15 minutes old) rather than ask Claude Code a sec
 #### In a desktop window (`tabmancer desktop --monitor`)
 
 The same monitor can open in a desktop window of its own, with room for more than a terminal
-gives it: `tabmancer desktop --monitor [team]` (with no name: the one team with members open,
-else the list of teams). It needs Qt, from an optional extra: `pip install "tabmancer[desktop]"`
-(or `uv tool install "tabmancer[desktop]"`). Without it, `tabmancer desktop` says so, and
-everything else, the terminal monitor too, runs as ever.
+gives it: `tabmancer desktop --monitor [team]`, or `tabmancer team watch [team]` (with no name:
+the one team with members open, else the list of teams). It needs Qt, from the `desktop` extra:
+`uv tool install "tabmancer[desktop]"` (or `pipx install "tabmancer[desktop]"`). Without it,
+`tabmancer desktop` says so, and the terminal monitor runs as ever:
+`tabmancer --terminal team watch [team]`.
 
 It is the dashboard's black with its colours: a card for each member (what it does, its state,
 model, how full its context is, its tokens and git, its newest message), the conversation as
@@ -180,20 +183,21 @@ and agy's chain (Neon, then Hydrogen) as rings. Each of those is a panel you can
 elsewhere, float or close; View puts them back, and the window keeps where you left them. The
 menus name every key of the monitor, and the key bar stays under the window.
 
-For now it only watches. It reads the team every two seconds, as the terminal monitor does, and
-never claims the dashboard's part: the dashboard that acts goes on acting. `← →`, `j` and `Esc`
-pick members, `Enter` brings the picked member's tab to the front, `T` watches another team, `?`
-lists the keys and `q` closes the window. The keys that change the team (`s`, `a`, `d`, `g`, `h`,
-`H`, `x`, `p`) and `D` are in its menus, greyed, saying they are the terminal monitor's for now:
-`tabmancer team watch <team>`. `tabmancer desktop --monitor --demo` shows it over the made-up
-team of `tabmancer --demo`.
+Every key of the terminal monitor works here. It reads the team every two seconds, as the
+terminal monitor does. `← →`, `j` and `Esc` pick members, `Enter` brings the picked member's tab to
+the front (and opens a closed one), `T` watches another team, `D` brings the dashboard to the front
+(or opens it), `Ctrl+K` finds a command or a member by name, `?` lists the keys and `q` closes the
+window. The keys that change the team (`s`, `a`, `d`, `g`, `h`, `H`, `x`, `p`) act through a
+dashboard window, as the terminal monitor's act through the dashboard under it: the one `M` was
+pressed in, or, opened on its own, one that is never shown. What runs by itself (continuing when a
+limit lifts, desktop notes) stays with the dashboard that acts. `tabmancer desktop --monitor
+--demo` shows it over the made-up team of `tabmancer --demo`.
 
-`M` in the dashboard opens the terminal monitor unless you choose the desktop one:
-`tabmancer desktop --m-opens desktop` (and `--m-opens terminal` back). With that choice and the
-extra installed, `M` opens the desktop window; without the extra, the terminal monitor as ever,
-and the note says what the desktop one needs. A team's desktop monitor opens once: `M` again, or
-the command again, brings the open one to the front. If the window M started does not show, what
-it said on its way out is in `desktop.log` in tabmancer's folder.
+`M` in the window opens this one. In the terminal dashboard `M` opens the terminal monitor
+unless you choose the desktop one there: `tabmancer desktop --m-opens desktop` (and
+`--m-opens terminal` back), deprecated now that the window is the dashboard. A team's desktop
+monitor opens once: `M` again, or the command again, brings the open one to the front. If the
+window M started does not show, what it said on its way out is in `desktop.log` in tabmancer's folder.
 
 A team whose members are all closed, after a restart say, stays a team: its row sits among
 the closed sessions where it last worked, with a box to tick the whole team. `s` on it

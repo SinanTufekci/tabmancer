@@ -9,12 +9,15 @@ Windows Terminal, tmux, WezTerm, kitty, iTerm2, Terminal.app, GNOME Terminal or 
 In any other terminal, tabmancer prints the commands to run.
 
 ```sh
-uv tool install tabmancer    # or: pipx install tabmancer
-tabmancer shortcut           # Windows: adds a "tabmancer" shortcut to the desktop
+uv tool install "tabmancer[desktop]"    # or: pipx install "tabmancer[desktop]"
+tabmancer shortcut                      # Windows: adds a "tabmancer" shortcut to the desktop
 ```
 
-Or run `tabmancer` from any terminal. For the latest from GitHub:
-`uv tool install git+https://github.com/SinanTufekci/tabmancer`.
+Or run `tabmancer` from any terminal: it opens the dashboard in a window of its own. The window
+needs Qt, which the `desktop` extra brings; without it (`uv tool install tabmancer`),
+`tabmancer --terminal` runs the dashboard in the terminal, as before, and `tabmancer` says how to
+add the window. For the latest from GitHub:
+`uv tool install "tabmancer[desktop] @ git+https://github.com/SinanTufekci/tabmancer"`.
 
 ## Updating
 
@@ -62,21 +65,35 @@ tabmancer report         # a report of the week, written by Claude (--save)
 tabmancer wrapped        # your week as a picture to share, in Downloads (--out, --story, --share x); off: no word on Fridays
 tabmancer --days 30      # look further back (default 14)
 tabmancer --all          # include claude -p, desktop app and IDE sessions
+tabmancer live           # the window on its Live view (l)
+tabmancer --terminal     # the dashboard in the terminal (with --demo, live or team watch too)
 tabmancer doctor         # check that everything tabmancer relies on still works
 tabmancer updates        # whether a newer tabmancer is out (off: never ask PyPI)
 tabmancer claude-updates # claude update once a day before sessions open (on, off, now)
 tabmancer --demo         # the dashboard over made-up sessions: nothing of yours is touched
-tabmancer desktop                   # the dashboard in a desktop window, begun: it only watches (the desktop extra, below; --demo)
-tabmancer desktop --monitor [team]  # a team's monitor in a desktop window (the desktop extra, below; --demo)
-tabmancer desktop --m-opens desktop # M in the dashboard opens that window (terminal: the terminal monitor)
+tabmancer desktop --monitor [team]  # a team's monitor in a desktop window (--demo); tabmancer team watch opens it too
 ```
 
-The desktop window needs Qt, from an optional extra: `uv tool install "tabmancer[desktop]"` (or
-`pipx install "tabmancer[desktop]"`). Without it tabmancer runs as ever. So far the window holds the
-team's monitor, read-only ([teams](teams.md#in-a-desktop-window-tabmancer-desktop---monitor)), and the
-dashboard's beginning: its top bar, every key in its menus (the ones not done there yet greyed: the
-terminal dashboard does them), and panels you can move, float and close, still empty. It only watches,
-as a second dashboard does, and opens once: `tabmancer desktop` again brings it to the front.
+### The window and the terminal dashboard
+
+`tabmancer` (or `tabmancer desktop`) opens the dashboard in a window of its own: the top bar, the
+sessions as a board or a table, the Live view, the teams, and panels you can move, float and
+close, kept as you left them. Its menus name every key; the few still done only in the terminal
+dashboard are greyed and say so. It opens once: `tabmancer` again brings it to the front, and
+`tabmancer live` brings it on its Live view. Closing it puts it in the tray; `q`, `Esc` or Quit in
+the tray's menu quits. Started from its shortcut, the tray or at login, its tabs go into one
+Windows Terminal window named `tabmancer` (`--tabs-window` names another); typed in a Windows
+Terminal tab, into that window.
+
+`tabmancer --terminal` is the dashboard in the terminal, as it was before the window, kept for
+now while the window takes over all it does: `tabmancer --terminal --demo`, `tabmancer --terminal
+live` and `tabmancer --terminal team watch [team]` are its demo, its Live view and its team
+monitor. It needs no extra.
+
+The commands that opened the terminal ones say where they went: `tabmancer live` opens the window
+on its Live view and `tabmancer team watch` the team's monitor in a desktop window
+([teams](teams.md#in-a-desktop-window-tabmancer-desktop---monitor)). `tabmancer desktop --m-opens`
+is deprecated: it only sets what `M` opens in the terminal dashboard.
 
 Run `tabmancer doctor` after a Claude Code update if something looks off. It checks the
 CLI (its version against the one tabmancer was last checked with, and that every flag and
@@ -90,11 +107,12 @@ tabmancer startup on       # also: off, status
 ```
 
 At login a windowless check runs. If sessions were left open at the last shutdown, the
-picker opens with them ticked, in a terminal window of its own; if none were, nothing
-appears. On Windows this is a shortcut in your Startup folder, on macOS a LaunchAgent
-(`~/Library/LaunchAgents/com.tabmancer.startup.plist`) whose picker opens in Terminal, and on
-Linux an autostart entry (`~/.config/autostart/tabmancer.desktop`) whose picker opens in the
-first terminal found (x-terminal-emulator, GNOME Terminal, Konsole, kitty, WezTerm, ...).
+dashboard's window opens with them ticked (without the `desktop` extra, the terminal dashboard,
+in a terminal window of its own); if none were, nothing appears. On Windows this is a shortcut
+in your Startup folder, on macOS a LaunchAgent (`~/Library/LaunchAgents/com.tabmancer.startup.plist`)
+and on Linux an autostart entry (`~/.config/autostart/tabmancer.desktop`). Without the extra, the
+terminal dashboard opens in Terminal on macOS, and on Linux in the first terminal found
+(x-terminal-emulator, GNOME Terminal, Konsole, kitty, WezTerm, ...).
 
 ## Desktop notifications
 

@@ -41,7 +41,9 @@ tests run on Windows and Linux.
 
 On macOS and Linux it has not been used day to day yet. What is known:
 
-- The dashboard itself is plain Textual and runs anywhere Python does.
+- The dashboard's window is Qt (PySide6) and the terminal dashboard plain Textual: both run
+  anywhere Python does. Started outside a terminal, the window opens its tabs in Terminal.app on
+  macOS and in GNOME Terminal on Linux; neither has been tried by hand.
 - In tmux on Debian (under WSL) it has been installed with pipx and run for real: `Enter`
   opened the ticked sessions in tmux windows, each with the right `claude --resume`, and a
   cut-off session carried on with an auto-continue prompt full of quotes, `$(...)` and `%`,
@@ -50,7 +52,7 @@ On macOS and Linux it has not been used day to day yet. What is known:
   tried by hand.
 - The shutdown times (the journal, wtmp) and focusing a session's pane in a real tmux server
   run for real in the Linux tests. Start at login writes its autostart entry in the tests
-  too, but neither the entry nor the picker's terminal window has been tried at an actual
+  too, but neither the entry nor the window it opens has been tried at an actual
   desktop login, nor have the desktop notifications (`notify-send`).
 - Nothing has been tried on a real Mac: the LaunchAgent, `last`'s output there, the
   AppleScript that finds a tab in iTerm2 or Terminal, and the notifications through

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **The window is the dashboard.** `tabmancer` opens it, from the `desktop` extra
+  (`uv tool install "tabmancer[desktop]"`, Qt): `--demo`, `--days`, `--all` and `--tabs-window`
+  go to it, `tabmancer live` opens it on its Live view (or turns the open one to it), and
+  `tabmancer team watch` opens the team's monitor in a desktop window. `D` in the terminal team
+  monitor brings the window to the front (or opens it), not a second dashboard in the terminal.
+  The terminal dashboard is `tabmancer --terminal` (with `--demo`, `live` or `team watch` too),
+  kept for now; without the extra, `tabmancer` says how to add the window and offers it.
+  `tabmancer desktop --m-opens` is deprecated.
+- **Where the window's tabs open.** Started from its shortcut, the tray or at login, it puts them
+  in one Windows Terminal window named `tabmancer`, as the terminal dashboard does
+  (`--tabs-window` names another), not a new window each; typed in a Windows Terminal tab,
+  `tabmancer` puts them in that window, as a command typed there does. With no console behind
+  it, the window runs on `pythonw.exe`; what it starts (a team member's tab, its MCP server,
+  agy's plugin and hook, the sign-in tab's browser launcher, typing into tabs) runs on the
+  `python.exe` beside it.
+- **The desktop shortcut and start at login open the window**, with no console behind it (a
+  `tabmancer-desktop` launcher). A shortcut made by an earlier version opens the terminal
+  dashboard: `tabmancer shortcut` writes it again, and `tabmancer doctor` says when one is old.
 - **Teams that mix Claude Code and Antigravity.** Tag a member `@agy` and it runs on `agy` in a
   tab of its own. A team with one talks over tabmancer's local bus (`tabmancer team send`,
   `listen`, `who`), which works inside `agy`'s sandbox; a pure Claude Code team keeps Claude's own
@@ -32,19 +50,19 @@
   agy on the chain's model, Codex with `codex exec resume`. Handing over an open agy or Codex
   member waits for it to exit.
 - **A team's monitor (`M`).** One team's members, messages and quota in a window of its own,
-  maximized on a second screen, only watching. In a window of 180x40 or more the preview stands
-  beside the list, with a team's cards in it (`V` puts it back under the list).
-- **The team's monitor in a desktop window.** `tabmancer desktop --monitor [team]`, from an
-  optional extra (`pip install "tabmancer[desktop]"`, Qt): the cards, the conversation as lanes, the
+  maximized on a second screen, with the team view's keys. In a window of 180x40 or more the
+  preview stands beside the list, with a team's cards in it (`V` puts it back under the list).
+- **The team's monitor in a desktop window.** `tabmancer desktop --monitor [team]` (or
+  `tabmancer team watch`), from the `desktop` extra: the cards, the conversation as lanes, the
   messages, the team's hours and the limits as rings, in panels you can move, float and close;
-  every key in the menus. Read-only for now. Without the extra, tabmancer runs as ever.
-  `tabmancer desktop --m-opens desktop` makes `M` in the dashboard open it instead of the
-  terminal monitor; a team's window opens once, and `M` again brings it to the front.
-- **The dashboard in a desktop window, begun.** `tabmancer desktop` opens it (`--demo` over the
-  made-up sessions): the top bar as the terminal dashboard's (the sessions, who each CLI is signed
-  in as, the plan limits and agy's chain, a live dot, the clock), menus with every key of the
-  dashboard, the key bar, and panels you can move, float and close, kept as you left them. It only
-  watches for now: the panels fill in, and the keys not done there yet are greyed and say so.
+  every key of the terminal monitor, in the menus and acting on the team. `M` in the window opens
+  it; a team's window opens once, and `M` again brings it to the front.
+- **The dashboard's window.** The top bar as the terminal dashboard's (the sessions, who each CLI
+  is signed in as, the plan limits and agy's chain, a live dot, the clock), the sessions as a
+  board or a table, the Live view, the teams, menus with every key of the dashboard, the key bar,
+  `Ctrl+K` to find a command, and panels you can move, float and close, kept as you left them.
+  Closing it puts it in the tray. The few keys still done only in the terminal dashboard are
+  greyed and say so.
 - **One dashboard acts.** With several open, only one reads limits, sends desktop notes, updates
   Claude Code and runs queued handovers; the others watch and take over when it closes.
 - **An account is an account in an organisation.** The same email in your personal plan and in a

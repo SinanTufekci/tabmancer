@@ -32,8 +32,12 @@ and asks what to do with the ticked ones (all to begin with; `Tab` to the list, 
 
 What opens by itself (a session whose limit lifted, the fresh session of a handover that waited
 for its session to finish) opens in the dashboard's own window, not in the window you used last,
-and another window you are in keeps the keys. In Windows Terminal the dashboard knows its window
-by name when tabmancer started it (the desktop shortcut, start at login, `D` in a team's monitor).
+and another window you are in keeps the keys. Started from its shortcut, the tray or at login,
+the window puts every tab it opens in one Windows Terminal window named `tabmancer`; typed in a
+Windows Terminal tab, `tabmancer` puts them in that window, as a command typed there does
+(`--tabs-window` names one either way). The terminal dashboard knows its window by name when
+tabmancer started it (a shortcut from before the window, `D` in a team's monitor without the
+`desktop` extra).
 Started by hand, it does not know it, and never brings its own tab to the front for this (what you
 type meanwhile would reach the dashboard): such a tab goes to the window used last, as any other,
 unless a team's monitor is open (that may be the window used last): then to a window of its own
@@ -212,7 +216,8 @@ Opened rows stay open while the list updates.
 
 ![Live view: open sessions sorted by what needs you first](live.png)
 
-`tabmancer live`, or `l` in the picker, lists only the sessions that are open right now.
+`l` in the dashboard, or `tabmancer live` to open the window on it (an open window turns to it),
+lists only the sessions that are open right now (`tabmancer --terminal live` in the terminal).
 It refreshes every few seconds and sorts them by what needs you first:
 
 - **needs you**: a background session reports that it is blocked
