@@ -38,7 +38,7 @@ from functools import partial
 from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 from .. import (
     accountwords,
@@ -135,6 +135,7 @@ class WindowFront(QObject):
     continued = Signal(object)  # c's continue prompt typed into the open ones' tabs: an actions.Continued
     told = Signal(object)  # a member's message typed into its tab, or not: an actions.Told
     newer = Signal(str, str)  # a newer tabmancer: its version, the command that upgrades to it
+    heard = Signal(str, float, str)  # a note said (words, seconds, severity): a team's monitor whose keys act here says it
 
     def __init__(self, window: MainWindow, update: bool = True) -> None:
         super().__init__(window)
@@ -185,7 +186,8 @@ class WindowFront(QObject):
         return teams.cap_of(session.session_id, state.team if state is not None else None)
 
     def monitoring(self) -> bool:
-        return False  # a dashboard's window, not a team's monitor
+        """A team monitor's hands (MainWindow.monitor): it never acts, and its tabs go where the window's go."""
+        return self.window().monitor
 
     def live_ids(self) -> set[str]:
         """The sessions a Claude process has open now, asked just before tabs open (opening.live_ids)."""
@@ -203,6 +205,7 @@ class WindowFront(QObject):
 
     def say_note(self, note: actions.Note) -> None:
         self.window().say_note(note.words, float(note.seconds or 4), note.severity)
+        self.heard.emit(note.words, float(note.seconds or 4), note.severity)
 
     def show_bit(self, bit: alerts.Bit) -> None:
         """Bit's words in its tone. Its line is one: while something else is said there (a note, what a key
@@ -282,7 +285,18 @@ class WindowFront(QObject):
     def ask_handover(self, session: Session, then: Callable[[str], None]) -> None:
         """The h dialog, over the window; then with the way picked, never when it was closed."""
         window = self.window()
-        HandoverDialog(window, session, then, window.accent).open()
+        HandoverDialog(self.over(), session, then, window.accent).open()
+
+    def over(self) -> QWidget:
+        """What a dialog asked for from here shows over: a team's monitor in front whose keys act through this window
+        (H, h twice there), or the monitor of a window that is its hands (never shown); else the window."""
+        window = self.window()
+        mine = [shown for shown in QApplication.topLevelWidgets()
+                if shown.isVisible() and getattr(shown, "hands_ref", lambda: None)() is window]
+        active = QApplication.activeWindow()
+        if any(active is shown for shown in mine):
+            return active
+        return mine[0] if window.monitor and mine else window
 
     def hand_over(self, session: Session, how: str | AskHow = ASK_HOW) -> None:
         """The handover written on a thread of its own (actions.write_handover: a minute or more, the old
@@ -357,7 +371,7 @@ class WindowFront(QObject):
                        then: Callable[[tuple[str, str] | None], None]) -> None:
         """The team handover dialog, over the window; then with (the line-up, the cap), or None."""
         window = self.window()
-        TeamHandoverDialog(window, team, written, lineup, suggested, then, window.accent).open()
+        TeamHandoverDialog(self.over(), team, written, lineup, suggested, then, window.accent).open()
 
     def adopt_team(self, team: teams.Team) -> None:
         """The team as saved now: read again (the store reads the teams with the sessions)."""
@@ -505,8 +519,9 @@ class WindowFront(QObject):
             self.update_row(session)
 
     def open_in_dashboard_window(self, launches: list[Launch]) -> None:
-        """Never asked: the window is a dashboard's, not a monitor's (monitoring); were it, they open as any."""
-        self.window().engine.open(launches, None, True)
+        """A monitor's hands (monitoring): its tabs go where the window's go (launch's named window: "" names none,
+        as None would, past Engine.open's look for a monitor). Today's claude update is the dashboard's to run."""
+        self.window().engine.open(launches, "" if self.monitoring() else None, True)
 
     # --- typing into a tab --------------------------------------------------------------------------
 

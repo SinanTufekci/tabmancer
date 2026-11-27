@@ -54,6 +54,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+import weakref
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
@@ -322,11 +323,14 @@ class MainWindow(QMainWindow):
 
     def __init__(self, *, store: Callable[[], DashboardStore] = watching_store, poll_ms: int = POLL_MS,
                  start: bool = True, brand: str = "◆ tabmancer", demo: bool = False,
-                 in_tray: bool = False) -> None:
+                 in_tray: bool = False, monitor: bool = False) -> None:
         super().__init__()
         self.collected = frame.collector().hold(self)  # Python's cycle collector on this thread while it is up
         self.store = store()
         self.demo = demo  # over the made-up sessions: nothing opens, and Bit says what would have
+        # A team monitor's hands (monitor.run: its keys act through this window, as the terminal monitor's through
+        # the dashboard under it): never shown, never acts (Engine.mount), no door for `tabmancer` to knock at.
+        self.monitor = monitor
         self.snap: DashSnapshot | None = None
         self.agy_first = False
         self.waiting = False
@@ -370,7 +374,8 @@ class MainWindow(QMainWindow):
         self.door = QLocalServer(self)  # `tabmancer desktop` again knocks here instead of opening a second window
         self.door.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
         self.door.newConnection.connect(self.answer_door)
-        frame.listen(self.door, door())
+        if not monitor:
+            frame.listen(self.door, door())
         self.setStyleSheet(look.sheet(self.accent))
         self.setWindowTitle("tabmancer")
         self.resize(1500, 950)
@@ -431,6 +436,8 @@ class MainWindow(QMainWindow):
         what acting runs starts; else the sessions to continue as saved, and Bit says who acts (or that this one
         could not read its own start time: it never acts then). The lock looked at every ACTOR_MS from now."""
         self.engine.mount()
+        if self.monitor:
+            return  # a monitor's hands: Engine.mount claimed nothing, and no look takes the lock over later
         if self.engine.state.acts:
             self.front.start_acting()
         else:
@@ -1106,7 +1113,7 @@ class MainWindow(QMainWindow):
             self.say(f"The monitor of {team} is in front.")
             return
         if shown is None:
-            shown = self.monitors[team] = MonitorWindow(team)
+            shown = self.monitors[team] = MonitorWindow(team, hands=weakref.ref(self))  # its keys act through this one
             shown.show()
             elsewhere(shown, self)
         else:  # closed since: the same window again, where it was (none is deleted while this one lives)
@@ -2007,7 +2014,8 @@ class MainWindow(QMainWindow):
         for shown in self.monitors.values():  # the monitors M opened go with the window
             shown.close()
             shown.deleteLater()
-        frame.save_layout(self, LAYOUT_KEY)
+        if not self.monitor:  # a monitor's hands, never shown, keep the dashboard's layout as it is
+            frame.save_layout(self, LAYOUT_KEY)
         if self.looker is not None:
             self.looker.join(LOOK_WAIT)  # a look under way could take the lock just as it goes
         self.engine.unmount()  # a real quit, never the tray: the actor lock goes, for another dashboard to take

@@ -250,7 +250,7 @@ def test_every_key_of_the_monitor_is_in_the_menus(qapp, window):
     assert len(tips) == sum(len(keys) for _, keys in MONITOR_KEYS) + 1  # ← → is two: next and previous
     enabled = {key for key, actions in shown.actions_by_key.items() if all(a.isEnabled() for a in actions)}
     assert enabled == monitor.HERE
-    assert "tabmancer --terminal team watch shop" in shown.actions_by_key["s"][0].toolTip()  # where it is done
+    assert not [tip for tip in tips if "terminal" in tip]  # every key works here: none sends you elsewhere
     assert set(shown.keybar.keys) == monitor.HERE | {commandbar.KEY}  # the keys that work here, and the palette
     assert [a.text() for a in shown.menuBar().actions()] == ["&Members", "&Team", "&Windows", "&View", "&Help"]
 
@@ -380,7 +380,7 @@ def test_a_read_of_the_team_left_is_dropped(qapp, window):
     shown.take(old, snap, {}, "")
     assert shown.snap is None and shown.cards == {}
     assert "no team other" in shown.bit_line.text()
-    assert "team watch other" in shown.actions_by_key["s"][0].toolTip()
+    assert shown.actions_by_key["s"][0].isEnabled()  # its keys wait for a team, never send you elsewhere
 
 
 def test_the_orbit_in_the_middle_and_the_cards_a_panel(qapp, window):
@@ -434,7 +434,7 @@ def test_a_right_click_on_a_member_offers_its_actions(qapp, window):
     assert title.text() == "ui" and not title.isEnabled()
     assert offered == [a for key in monitor.MEMBER_KEYS for a in shown.actions_by_key[key]]
     assert [a.isEnabled() for a in offered] == [key in monitor.HERE for key in monitor.MEMBER_KEYS]
-    assert all("tabmancer --terminal team watch shop" in a.toolTip() for a in offered if not a.isEnabled())  # where it is done
+    assert all(a.isEnabled() for a in offered)  # every one works here
     other = graph.drawn["api"].toPoint()
     qapp.sendEvent(graph, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, other, graph.mapToGlobal(other)))
     qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)  # the first one deleted

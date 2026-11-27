@@ -6,20 +6,30 @@ and as panels you can drag, split, float and close (View puts them back): a card
 conversation as lanes, the messages, the team's hours and the plan limits as rings. The menus name
 every key of the monitor and the key bar stays under the window; View also says how much moves.
 
-It only watches. The team is read through the one-team store on a thread of its own, every two
-seconds; nothing here claims the actor lock, opens, starts, sends or closes a session. Enter goes
-to a member's open tab, as in the terminal monitor, and so does a click on it in the picture (a
-right-click: its actions); what changes the team (s a d g h H x p, and D for the dashboard) is named
-in the menus and done in the terminal monitor for now. Ctrl+K finds any of the monitor's commands by a
-few of its words, or a member by name (commandbar).
+Every key of the terminal monitor works here, on your keys only. The team is read through the one-team
+store on a thread of its own, every two seconds. Enter goes to a member's open tab (a click on it in the
+picture too; a right-click: its actions), and opens a closed one. What changes the team (s a d g h H x p)
+acts through a dashboard window, the monitor's hands: the one M was pressed in, or, opened on its own
+(`tabmancer desktop --monitor`), one of its own that is never shown, as the terminal monitor acts through
+the dashboard under it (MainWindow with monitor: it never acts, never claims the actor lock, has no door
+for `tabmancer` to knock at). So the dialogs are the window's (teamkeysdialogs; h's and H's shown over this
+one), and so are the presses, the openings and the handovers (teamkeys.TeamKeys: one copy); what they say
+comes here while you are in this window. What runs by itself (continuing at a reset, desktop notes) stays
+with the dashboard that acts. D brings the dashboard forward: the one M was pressed in, or one open
+already; else it starts one (`tabmancer desktop`), never the hidden hands. Ctrl+K finds any of the
+monitor's commands by a few of its words, or a member by name (commandbar).
 """
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import threading
+import weakref
 from collections.abc import Callable
 from datetime import datetime
 from functools import partial
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
@@ -39,15 +49,30 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, agy, bitart, commands, engine, errorlog, focus, teams, teamwords
+from .. import (
+    __version__,
+    agy,
+    bitart,
+    commands,
+    engine,
+    errorlog,
+    focus,
+    launch,
+    shortcuts,
+    teams,
+    teamwatch,
+    teamwords,
+)
 from ..commands import short
+from ..config import config_dir
 from ..keys import MONITOR_KEYS
-from ..sessions import Exit, Status
+from ..sessions import Exit, Session, Status
 from ..store import Snapshot, TeamStore
 from ..tokens import human
-from . import commandbar, frame, look, teamgraph
+from . import commandbar, frame, look, teamgraph, teamkeysdialogs
 from .conversation import Conversation
 from .frame import DEMO_ENV, LAYOUT_FILE, LAYOUT_VERSION, KeysDialog, made_up_world  # noqa: F401  (the first two: named here for the tests)
+from .naming import NameDialog
 from .widgets import (
     HourChart,
     KeyBar,
@@ -61,17 +86,32 @@ from .widgets import (
     tone_colour,
 )
 
+if TYPE_CHECKING:
+    from .main import MainWindow
+
 POLL_MS = 2000  # as often as the terminal monitor reads its team
 SAID_MS = 7000  # how long Bit says what just happened before it says how the team stands again
 ACTOR_MS = engine.ACTOR_SECONDS * 1000  # whether any dashboard acts, looked at as often as the terminal monitor did
 CARD_WIDTH = 340  # a card's least width: as many columns as fit
-# The monitor's keys that work here (MONITOR_KEYS names them all); the rest are the terminal monitor's.
-HERE = {"← →", "Enter", "j", "Esc", "T", "?", "q"}
+# The monitor's keys that work here: every one MONITOR_KEYS names, as in the terminal monitor.
+HERE = {key for _group, keys in MONITOR_KEYS for key, _action, _words in keys}
 MEMBER_KEYS = ("Enter", "p", "H", "d")  # what a right-click on a member offers: what acts on the picked one
 MENUS = {"Members": "&Members", "The team": "&Team", "Windows": "&Windows"}
-KEY_BAR = [("← →", "member"), ("Enter", "its tab"), ("j", "needs you"), ("Esc", "everyone"), ("T", "teams"),
-           (commandbar.KEY, "commands"), ("?", "keys"), ("q", "quit")]
+KEY_BAR = [("← →", "member"), ("Enter", "its tab"), ("j", "needs you"), ("p", "write"), ("Esc", "everyone"),
+           ("s", "start"), ("a", "add"), ("d", "take off"), ("g", "goal"), ("h", "hand over"), ("H", "member over"),
+           ("x", "close"), ("T", "teams"), ("D", "dashboard"), (commandbar.KEY, "commands"), ("?", "keys"),
+           ("q", "quit")]
 PICK_FIRST = "Pick a member first: ← →, or its name here."  # a command on the picked member, nobody picked
+NOT_READ = "{team} is not read yet: a moment."  # a team key before the first reading
+# The window M was pressed in has closed meanwhile (it closes its monitors, so rarely seen).
+NO_HANDS = "The dashboard this monitor acts through has closed: D opens one, and M there this monitor again."
+DASHBOARD_FRONT = "The dashboard is in front."
+DASHBOARD_OPENS = "The dashboard opens in a window of its own."
+DASHBOARD_DEMO = "D would start the dashboard (tabmancer desktop) now: the demo starts nothing."
+MESSAGE_ABOUT = "Typed into its tab once it waits for you; over the team bus for a team on it; a closed one opens with it."
+MESSAGE_KEYS = [("Enter", "send"), ("Esc", "cancel")]
+QUIT_AGAIN_MS = 8000  # q (or X) once with something unfinished: again this soon closes it
+SEVERITY = {"error": look.RED, "warning": look.AMBER}  # a note's colour on Bit's line
 AGY_TONE = {"ok": look.CYAN, "low": look.AMBER, "out": look.RED, "unknown": look.MUTED}
 GROUND = {look.AMBER: "#221b0c", look.RED: "#2a0f0e"}  # a pill's patch under amber or red words
 
@@ -88,13 +128,48 @@ def sequences(key: str) -> list[QKeySequence]:
     return [QKeySequence(key.upper())]
 
 
-def elsewhere(team: str) -> str:
-    return f"In the terminal monitor for now: tabmancer --terminal team watch {team}"
+def nobody() -> None:
+    """No hands yet (a monitor's hands_ref before its first team key)."""
 
 
-def tip(words: str, key: str, team: str) -> str:
-    """What a key does, and for a key this window does not do yet, where it is done."""
-    return words if key in HERE else f"{words}. {elsewhere(team or '<team>')}"
+def quit_words(queued: int, writing: list[str]) -> str:
+    """What q (or X) says the first time when closing this monitor leaves something of its own hands undone, as the
+    terminal monitor's q (monitorview.quit_note): handovers queued here for when a member finishes go with it, and
+    one being written still ends first (the window waits for it) but its fresh session does not open; "" for none."""
+    if not queued and not writing:
+        return ""
+    words = "q again closes the monitor"
+    if queued:
+        words += (f", and loses {queued} handover{'s' if queued != 1 else ''} queued here for when "
+                  f"{'its member finishes' if queued == 1 else 'their members finish'}")
+    if writing:
+        words += (f". The handover of {' and '.join(writing)} being written still ends first (the window waits for "
+                  "it), but what it would open next does not open")
+    return words + "."
+
+
+def open_dashboard(demo: bool) -> tuple[str, str]:
+    """D in a monitor opened on its own: the dashboard window open already comes to the front (it is knocked at,
+    main.knock); else `tabmancer desktop` starts in a process of its own, as teamwatch.open_desktop starts a
+    monitor (in tabmancer's folder, no console). Never its own hands (MainWindow with monitor: no door to knock
+    at). What to say, and its colour."""
+    from .main import knock as knock_dashboard  # here: main imports this module
+
+    if knock_dashboard():
+        return DASHBOARD_FRONT, look.MUTED
+    if demo:
+        return DASHBOARD_DEMO, look.MUTED
+    command = teamwatch.desktop_command("")
+    command = command[:command.index("--monitor")]  # `tabmancer desktop` on the same Python, pythonw where there is one
+    try:
+        home = config_dir()
+        home.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(command, cwd=home, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                         start_new_session=sys.platform != "win32")
+    except OSError as error:
+        return f"Could not start the dashboard: {error}", look.RED
+    return DASHBOARD_OPENS, look.MUTED
 
 
 class Relay(QObject):
@@ -196,9 +271,18 @@ def bit_words(snap: Snapshot | None, team: str, bar: dict | None = None) -> tupl
 
 class MonitorWindow(QMainWindow):
     def __init__(self, team: str, *, store: Callable[[str], TeamStore] = TeamStore, poll_ms: int = POLL_MS,
-                 start: bool = True) -> None:
+                 start: bool = True, hands: Callable[[], MainWindow | None] | None = None, own_hands: bool = False,
+                 demo: bool = False) -> None:
+        """hands: the dashboard window the team's keys act through, asked for at a key (a weak reference to the one
+        M was pressed in; run's maker of the monitor's own, never shown: own_hands); None, the keys say so."""
         super().__init__()
         self.collected = frame.collector().hold(self)  # Python's cycle collector on this thread while it is up
+        self.make_hands = hands
+        self.own_hands = own_hands
+        self.hands_ref: Callable[[], MainWindow | None] = nobody  # the hands heard so far (front.over looks)
+        self.demo = demo  # D starts nothing over the made-up team
+        self.quitting = False  # q (or X) once with something unfinished: the next one closes it
+        self.leaving = False  # run closes it as the app quits: nothing is asked
         self.make_store = store
         self.team = team
         self.store: TeamStore | None = store(team) if team else None
@@ -325,7 +409,7 @@ class MonitorWindow(QMainWindow):
         self.resizeDocks([self.docks["messages"]], [560], Qt.Orientation.Horizontal)
         self.resizeDocks([self.docks["conversation"]], [240], Qt.Orientation.Vertical)
         self.build_menus()
-        self.keybar = KeyBar(KEY_BAR, "read-only · the rest: tabmancer --terminal team watch")
+        self.keybar = KeyBar(KEY_BAR)
         self.statusBar().addWidget(self.keybar, 1)
         self.show_bit()
 
@@ -341,13 +425,15 @@ class MonitorWindow(QMainWindow):
         return made
 
     def build_menus(self) -> None:
-        """A menu a group of the monitor's keys, every key in it: the ones done here, and the ones the
-        terminal monitor does (greyed, saying so). View brings closed panels back."""
+        """A menu a group of the monitor's keys, every key in it, as MONITOR_KEYS has them. View brings closed
+        panels back."""
         bar = self.menuBar()
         bar.setFont(look.font(9.5))
         self.actions_by_key: dict[str, list[QAction]] = {}
-        doing = {"← →": None, "Enter": self.go_to_tab, "j": self.next_needs, "Esc": self.clear_pick,
-                 "T": self.choose_team, "?": self.show_keys, "q": self.close}
+        doing = {"← →": None, "Enter": self.go_to_tab, "j": self.next_needs, "p": self.message, "Esc": self.clear_pick,
+                 "s": self.start_team, "a": self.add_members, "d": self.remove_member, "g": self.edit_goal,
+                 "h": self.handover_team, "H": self.handover_member, "x": self.close_team, "T": self.choose_team,
+                 "D": self.dashboard, "?": self.show_keys, "q": self.close}
         for group, keys in MONITOR_KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
             menu.setToolTipsVisible(True)
@@ -359,9 +445,6 @@ class MonitorWindow(QMainWindow):
                     made = [self.action(menu, short(words), sequences(key), doing.get(key), words)]
                 for action in made:
                     action.setData(words)
-                    action.setEnabled(key in HERE)
-                    action.setToolTip(tip(words, key, self.team))
-                    action.setStatusTip(tip(words, key, self.team))
                 self.actions_by_key[key] = made
         view = bar.addMenu("&View")
         for dock in self.docks.values():
@@ -658,8 +741,7 @@ class MonitorWindow(QMainWindow):
         self.go_to_tab()
 
     def member_menu(self, name: str, at: QPoint) -> None:
-        """A right-click on a member: picked, and what can be done to it, as the menus name it (the
-        ones done in the terminal monitor greyed, saying so)."""
+        """A right-click on a member: picked, and what can be done to it, as the menus name it."""
         self.picked = name
         self.refresh_pick()
         if self.member_popup is not None:
@@ -687,14 +769,19 @@ class MonitorWindow(QMainWindow):
         self.lanes.set_motion(teamgraph.motion())
 
     def go_to_tab(self) -> None:
-        """Enter: the picked member's tab to the front, where it is open in one."""
+        """Enter: the picked member's tab to the front, where it is open in one; a closed one opens, resumed when it
+        has a session (TeamKeys.open_member, through the hands)."""
         if self.snap is None or self.picked is None:
             self.say("Pick a member with ← → first.", look.MUTED)
             return
-        session = self.snap.state.sessions.get(self.picked)
+        state = self.snap.state
+        session = state.sessions.get(self.picked)
         name = self.picked
         if session is None or session.exit is not Exit.RUNNING:
-            self.say(f"{name} is not open. {elsewhere(self.team)} opens it.", look.AMBER)
+            hands = self.hands()
+            if hands is not None:
+                member = next((m for m in state.team.members if m.name == name), None)
+                hands.front.team_keys().open_member(state.team, member, session)
             return
         if session.status is Status.BACKGROUND:
             self.say(f"{name} runs in the background, with no tab: B in the dashboard attaches to it.", look.MUTED)
@@ -726,19 +813,15 @@ class MonitorWindow(QMainWindow):
         for card in self.cards.values():
             card.deleteLater()
         self.cards, self.columns = {}, 0
-        for key, actions in self.actions_by_key.items():
-            for action in actions:
-                action.setToolTip(tip(str(action.data()), key, name))
-                action.setStatusTip(tip(str(action.data()), key, name))
         self.name_window()
         self.open_door()
         self.show_bit()
         self.poll()
 
     def open_commands(self) -> None:
-        """Ctrl+K: the palette, over every key of the monitor (the ones done in the terminal monitor greyed,
-        saying so; Enter greyed while nobody is picked) and the team's members."""
-        entries = commands.commands(MONITOR_KEYS, HERE, elsewhere(self.team or "<team>"), needs_pick={"Enter"},
+        """Ctrl+K: the palette, over every key of the monitor (the ones on the picked member greyed while nobody
+        is picked: p goes to the lead then) and the team's members."""
+        entries = commands.commands(MONITOR_KEYS, HERE, "", needs_pick={"Enter", "d", "H"},
                                     picked=self.picked is not None, pick_first=PICK_FIRST)
         self.command_bar.offer(entries + commands.member_jumps(self.members()))
 
@@ -753,7 +836,160 @@ class MonitorWindow(QMainWindow):
             made[0].trigger()
 
     def show_keys(self) -> None:
-        KeysDialog(self, "Keys · tabmancer monitor", MONITOR_KEYS, HERE, elsewhere(self.team or "<team>")).show()
+        KeysDialog(self, "Keys · tabmancer monitor", MONITOR_KEYS, HERE, "").show()
+
+    # --- the team's keys, through the hands ----------------------------------------------------------
+
+    def hands(self) -> MainWindow | None:
+        """The dashboard window the team's keys act through (its front's teamkeys.TeamKeys, as its own Team menu's:
+        the same dialogs, presses, openings and handovers): the one M was pressed in, or this monitor's own, never
+        shown (run makes it at the first key). Its notes are said here too (hear). None: said why."""
+        hands = self.make_hands() if self.make_hands is not None else None
+        if hands is None:
+            self.say(NO_HANDS, look.AMBER)
+            return None
+        if self.hands_ref() is not hands:
+            self.hands_ref = weakref.ref(hands)
+            hands.front.heard.connect(self.hear)
+        return hands
+
+    def hear(self, words: str, seconds: float, severity: str) -> None:
+        """A note the hands said: on Bit's line here too while you are in this monitor (always for its own hands,
+        which nobody sees), for as long as it is meant to stay."""
+        if self.own_hands or self.looked_at():
+            self.put_bit(words, SEVERITY.get(severity, look.TEXT))
+            self.said_timer.start(max(SAID_MS, int(seconds * 1000)))
+
+    def looked_at(self) -> bool:
+        """Whether you are in this monitor: it, or a dialog of its, is the active window."""
+        active = QApplication.activeWindow()
+        return active is not None and (active is self or active.parent() is self)
+
+    def team_now(self) -> teams.TeamState | None:
+        """The team as the newest reading has it; before the first, said."""
+        if self.snap is None:
+            self.say(NOT_READ.format(team=self.team or "The team"), look.MUTED)
+            return None
+        return self.snap.state
+
+    def members_now(self) -> dict[str, Session | None]:
+        """The members, each with its session (None: never run), as the newest reading has them: a dialog's answer
+        comes after the readings made while it was open."""
+        return dict(self.snap.state.sessions) if self.snap is not None else {}
+
+    def member_now(self) -> tuple[teams.TeamState, teams.Member, Session | None] | None:
+        """The picked member, its team and its session; nobody picked: said."""
+        state = self.team_now()
+        if state is None:
+            return None
+        member = next((m for m in state.team.members if m.name == self.picked), None)
+        if member is None:
+            self.say(PICK_FIRST, look.MUTED)
+            return None
+        return state, member, state.sessions.get(member.name)
+
+    def start_team(self) -> None:
+        """s: every member not open, the lead last (WindowFront.start_team: TeamKeys.start; its cache gone, said
+        first, s again starts it)."""
+        state = self.team_now()
+        hands = self.hands() if state is not None else None
+        if state is not None and hands is not None:
+            hands.front.start_team(state.team, self.members_now())
+
+    def add_members(self) -> None:
+        """a: new members asked for, then added (teamkeysdialogs.ask_add: TeamKeys.add)."""
+        state = self.team_now()
+        hands = self.hands() if state is not None else None
+        if state is not None and hands is not None:
+            teamkeysdialogs.ask_add(self, self.accent, hands.front.team_keys, state.team, self.members_now)
+
+    def remove_member(self) -> None:
+        """d, twice: the picked member taken off the team, its sessions kept (TeamKeys.remove: the first press says
+        what the second does, never the lead), then the lead told (TeamKeys.changed)."""
+        found = self.member_now()
+        hands = self.hands() if found is not None else None
+        if found is None or hands is None:
+            return
+        state, member, session = found
+        keys = hands.front.team_keys()
+        changed = keys.remove(state.team, member, session)
+        if changed is None:
+            return
+        self.picked = None
+        self.refresh_pick()
+        keys.changed(changed, self.members_now())
+        self.poll()
+
+    def edit_goal(self) -> None:
+        """g: the team's goal in a box of several lines (teamkeysdialogs.ask_goal); saved, its lead told."""
+        state = self.team_now()
+        hands = self.hands() if state is not None else None
+        if state is not None and hands is not None:
+            teamkeysdialogs.ask_goal(self, self.accent, hands.front.team_keys, state.team, self.members_now)
+
+    def handover_team(self) -> None:
+        """h, twice: the whole team handed over (Engine.team_handover, the hands' engine; its dialog over this
+        window, WindowFront.over)."""
+        state = self.team_now()
+        hands = self.hands() if state is not None else None
+        if state is not None and hands is not None:
+            hands.engine.team_handover(state.team, self.members_now())
+
+    def handover_member(self) -> None:
+        """H: the picked member alone handed over to a fresh session, asked how first (TeamKeys.hand_over)."""
+        found = self.member_now()
+        hands = self.hands() if found is not None else None
+        if found is not None and hands is not None:
+            _state, member, session = found
+            hands.front.team_keys().hand_over(member, session)
+
+    def close_team(self) -> None:
+        """x, twice: every open member's tab closed, the sessions kept (TeamKeys.close)."""
+        state = self.team_now()
+        hands = self.hands() if state is not None else None
+        if state is not None and hands is not None:
+            hands.front.team_keys().close(state.team, self.members_now())
+
+    def message(self) -> None:
+        """p: a message for the picked member, or the lead with nobody picked, asked on one line and sent as the
+        dashboard sends one (TeamKeys.tell_team: typed in once it waits for you, over the bus, or it opens with it)."""
+        state = self.team_now()
+        if state is None:
+            return
+        member = next((m for m in state.team.members if m.name == self.picked), None) or state.team.lead
+        if member is None:
+            self.say(PICK_FIRST, look.MUTED)
+            return
+        dialog = NameDialog(self, f"A message for {member.name}", "", "what it should hear", MESSAGE_KEYS,
+                            self.accent, about=MESSAGE_ABOUT)
+        dialog.named.connect(partial(self.send_message, state.team.name, state.team.session_name(member)))
+        dialog.open()
+
+    def send_message(self, team: str, to: str, text: str) -> None:
+        hands = self.hands()
+        if hands is not None and text.strip():
+            hands.front.team_keys().tell_team(team, to, text)
+
+    def dashboard(self) -> None:
+        """D: the dashboard to the front: the window M was pressed in; for a monitor opened on its own, one open
+        already, else one started (open_dashboard), never its hidden hands."""
+        if self.own_hands or self.make_hands is None:
+            self.say(*open_dashboard(self.demo))
+            return
+        hands = self.hands()
+        if hands is not None:
+            hands.come_forward()
+
+    def unfinished(self) -> str:
+        """What closing now would leave undone of this monitor's own hands (quit_words); the hands of the window M
+        was pressed in stay with it: nothing."""
+        hands = self.hands_ref() if self.own_hands else None
+        if hands is None:
+            return ""
+        return quit_words(len(hands.engine.state.queued), hands.front.handing_now())
+
+    def quit_off(self) -> None:
+        self.quitting = False
 
     # --- one window a team ------------------------------------------------------------------------
 
@@ -798,6 +1034,14 @@ class MonitorWindow(QMainWindow):
             dock.show()
 
     def closeEvent(self, event) -> None:
+        """q or X: closed; the first time with something of its own hands unfinished, said first (unfinished)."""
+        words = "" if self.quitting or self.leaving else self.unfinished()
+        if words:
+            event.ignore()
+            self.quitting = True
+            QTimer.singleShot(QUIT_AGAIN_MS, self, self.quit_off)
+            self.say(words, look.AMBER)
+            return
         self.door.close()
         self.timer.stop()
         self.actor_timer.stop()
@@ -834,24 +1078,37 @@ def clear(layout) -> None:
             widget.deleteLater()
 
 
-def run(team: str, demo: bool = False) -> int:
+def run(team: str, demo: bool = False, tabs_window: str = "") -> int:
     """The window, till it is closed. With demo, over the made-up sessions and team of `tabmancer
     --demo`, in a folder of its own that goes when it closes: nothing real is read, and what the
-    demo put in place of the world is put back after it."""
+    demo put in place of the world is put back after it. Its team's keys act through hands of its own (made at
+    the first, never shown: MainWindow with monitor), whose tabs go into the dashboard's named Windows Terminal
+    window (tabs_window, else shortcuts.DASHBOARD_WINDOW, as launch.gui_tabs says); closed with it, a handover
+    being written there waited for (settle)."""
     look.fonts_for_offscreen()
     app = QApplication.instance() or QApplication(["tabmancer"])
-    with made_up_world(demo):
+    made: list[MainWindow] = []
+
+    def hands() -> MainWindow:
+        if not made:
+            from .main import MainWindow  # here: main imports this module
+
+            made.append(MainWindow(monitor=True, demo=demo))
+        return made[0]
+
+    with made_up_world(demo), launch.gui_tabs(tabs_window or shortcuts.DASHBOARD_WINDOW):
         team = team or ("shop" if demo else "")  # the demo's team
         window = None
         try:
             if knock(team):  # watched already (M again, or the command twice): that window comes forward
                 return 0
-            window = MonitorWindow(team)
+            window = MonitorWindow(team, hands=hands, own_hands=True, demo=demo)
             window.show()
             if not team:
                 QTimer.singleShot(0, window.choose_team)
             code = app.exec()
             if window.isVisible():  # the app was told to quit, the window not closed: its layout is kept too
+                window.leaving = True
                 window.close()
             return code
         finally:
@@ -860,4 +1117,11 @@ def run(team: str, demo: bool = False) -> int:
                 window.actor_timer.stop()
                 window.settle()
                 window.deleteLater()  # gone here, on the GUI thread: never freed by a collection on another one
-                QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+            for shown in made:  # the hands: closed (nothing asked), a handover being written there waited for
+                shown.leaving = True
+                shown.close()
+                shown.timer.stop()
+                shown.ticker.stop()
+                shown.settle()
+                shown.deleteLater()
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
