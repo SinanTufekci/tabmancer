@@ -112,9 +112,10 @@ def test_g_d_and_h_are_in_a_team_menu_in_the_team_views_words(qapp, window):
     shown = window()
     menu = shown.menus_by_group[main.TEAM_GROUP]
     assert menu.title() == "Te&am"
-    assert [(a.data(), a.isEnabled()) for a in menu.actions()] == [("d", True), ("g", True), ("H", True)]
+    assert [(a.data(), a.isEnabled()) for a in menu.actions()] == [("d", True), ("g", True), ("H", True),
+                                                                   ("Del", True)]  # and the saved teams, to delete one
     assert shown.actions_by_key["g"].toolTip() == "the team's goal; the lead is told"
-    assert [a.shortcuts()[0].toString() for a in menu.actions()] == ["D", "G", "Shift+H"]
+    assert [a.shortcuts()[0].toString() for a in menu.actions()] == ["D", "G", "Shift+H", "Del"]
     groups = [group for group, _ in main.WINDOW_KEYS]
     assert groups.index(main.TEAM_GROUP) == groups.index("Work with a session") + 1
 

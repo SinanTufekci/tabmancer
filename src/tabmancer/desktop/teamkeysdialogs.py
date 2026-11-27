@@ -5,6 +5,10 @@ several lines, its lines kept (GoalDialog: Ctrl+S saves, Enter is a new line, Es
 
 d (twice) and H ask nothing: the window calls TeamKeys.remove / changed and TeamKeys.hand_over itself.
 
+Delete team… (a team card's menu, the drawer's button, the palette) lists the saved teams, the picked one
+first in view, as the terminal's T list does: d (or Delete) twice deletes the one picked (TeamKeys.delete),
+its sessions kept (DeleteTeamDialog).
+
 The team keys come from a callable (the window's front builds a TeamKeys on each call, its presses kept in
 the engine's state), and the members as they are when the answer comes: a dialog stays open while the
 window reads the sessions again."""
@@ -15,9 +19,10 @@ from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut, QShowEvent, QTextCursor
-from PySide6.QtWidgets import QDialog, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QListWidget, QPlainTextEdit, QVBoxLayout, QWidget
 
 from .. import teamforms, teamkeys, teams
+from ..config import UI_TRIES
 from ..sessions import Session
 from . import look
 from .formparts import keys_html
@@ -26,6 +31,7 @@ from .naming import NameDialog
 
 Members = Callable[[], dict[str, Session | None]]
 Keys = Callable[[], teamkeys.TeamKeys]
+DELETE_KEYS = (("↑↓", "pick a team"), ("d d", "delete it, its sessions kept"), ("Esc", "close"))
 
 
 class AddMembersDialog(NameDialog):
@@ -97,5 +103,66 @@ def ask_goal(parent: QWidget, accent: str, keys: Keys, team: teams.Team, members
     goal, or none, changes nothing."""
     dialog = GoalDialog(parent, team.goal, accent, team.name)
     dialog.saved.connect(lambda goal: keys().change_goal(team, goal, members()))
+    dialog.open()
+    return dialog
+
+
+class DeleteTeamDialog(QDialog):
+    """Delete team…: the saved teams, the picked one first in view; d (or Delete) twice deletes the one picked
+    (TeamKeys.delete: the first press says what the second does, here and on the window's line), and it leaves
+    the list. Esc closes it. Window-modal and never waited on (open(), not exec())."""
+
+    def __init__(self, parent: QWidget, accent: str, keys: Keys, names: list[str], picked: str | None = None) -> None:
+        super().__init__(parent)
+        self.keys = keys
+        self.setWindowTitle(teamkeys.DELETE_TITLE)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.setMinimumSize(460, 320)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(18, 14, 18, 12)
+        box.setSpacing(8)
+        box.addWidget(label(look.span(teamkeys.DELETE_TITLE, f"bold {look.TEXT}")))
+        self.teams = QListWidget()
+        self.teams.setFont(look.font(10))
+        self.teams.addItems(names)
+        box.addWidget(self.teams, 1)
+        self.said = label("", wrap=True)
+        box.addWidget(self.said)
+        box.addWidget(label(keys_html(DELETE_KEYS)))
+        at = names.index(picked) if picked in names else 0
+        if names:
+            self.teams.setCurrentRow(at)
+        else:
+            self.said.setText(look.span(teamkeys.NO_TEAM_TO_DELETE, look.MUTED))
+        for key in ("D", "Delete"):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(self.delete)
+        self.setStyleSheet(f"QDialog {{ background:{look.SURFACE}; }}"
+                           f"QListWidget {{ color:{look.TEXT}; background:{look.BLACK}; border:1px solid {look.BORDER};"
+                           " border-radius:4px; padding:4px; }"
+                           f"QListWidget::item:selected {{ background:{look.PANEL}; color:{accent}; }}")
+        self.finished.connect(self.deleteLater)
+
+    def picked(self) -> str | None:
+        item = self.teams.currentItem()
+        return item.text() if item is not None else None
+
+    def delete(self) -> None:
+        name = self.picked()
+        if name is None:
+            return
+        if self.keys().delete(name):
+            self.teams.takeItem(self.teams.currentRow())
+            self.said.setText(look.span(teamkeys.deleted(name), look.MUTED))
+        elif self.keys().presses.get("delete", ("",))[0] == name:  # a first press: what the second does
+            self.said.setText(look.span(teamkeys.delete_again(name), look.AMBER))
+        else:  # not deleted: the window's line says why
+            self.said.setText("")
+
+
+def ask_delete(parent: QWidget, accent: str, keys: Keys, picked: str | None = None) -> DeleteTeamDialog:
+    """Delete team…: the saved teams listed (teams.load, UI_TRIES: a teams.json held past them, or unreadable,
+    lists none), the picked one first in view; d twice deletes one (DeleteTeamDialog)."""
+    dialog = DeleteTeamDialog(parent, accent, keys, sorted(teams.load(UI_TRIES)), picked)
     dialog.open()
     return dialog

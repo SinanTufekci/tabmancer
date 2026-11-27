@@ -120,7 +120,7 @@ def sequences(key: str) -> list[QKeySequence]:
     """The shortcuts of a key as MONITOR_KEYS writes it: 'j', 'T' (Shift+T), 'Enter', 'Esc', '?'."""
     # '?' as typed: with Shift on most layouts, which some platforms' key maps keep in the key.
     named = {"Enter": ["Return", "Enter"], "Esc": ["Escape"], "?": ["?", "Shift+?"], "← →": [], "Space": ["Space"],
-             "Tab": ["Tab"]}
+             "Tab": ["Tab"], "Del": ["Delete"]}
     if key in named:
         return [QKeySequence(k) for k in named[key]]
     if len(key) == 1 and key.isalpha() and key.isupper():

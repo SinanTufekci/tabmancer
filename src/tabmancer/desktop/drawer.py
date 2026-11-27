@@ -26,7 +26,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
 
-from .. import footer, picks, sessionwords, teams, teamwords
+from .. import footer, picks, sessionwords, teamkeys, teams, teamwords
 from .. import viewmodel as VM
 from ..launch import Mode
 from ..sessions import Session
@@ -46,6 +46,8 @@ BUTTONS = (("Enter", "open", "Open"), ("s", "summarize", "Summary"), ("p", "prom
            ("h", "handover", "Hand over"),
            ("c", "continue_at_reset", "Continue"), ("M", "monitor", "Monitor"), ("f", "pin", "Pin"),
            ("x", "hide", "Hide"))
+# A team card's own, after the footer's: the saved teams to delete one (d twice; main.delete_team_key).
+TEAM_BUTTONS = (("Del", "delete_team", teamkeys.DELETE_BUTTON),)
 PER_ROW = 3
 
 
@@ -215,7 +217,8 @@ class Drawer(QScrollArea):
         at_work = bool(open_now)
         row = footer.row(snap.sessions.values(), (name, at_work, False), None, 0, member_ids(snap.team_states))
         stopped = any(session is not None and VM.at_limit(session) for session in state.sessions.values())
-        self.offer(self.offered_for(snap, row, pinned=False, at_limit=stopped))
+        self.offer(self.offered_for(snap, row, pinned=False, at_limit=stopped)
+                   + [(key, words) for key, _action, words in TEAM_BUTTONS])
         self.graph.set(view, state.said, colours)
         self.graph.show()
         lines = []

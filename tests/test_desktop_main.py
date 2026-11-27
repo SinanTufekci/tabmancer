@@ -175,7 +175,7 @@ def test_every_dashboard_key_is_in_the_menus(qapp, window):
             assert made.toolTip() == (words if key in main.HERE else f"{words}. {main.done_where(key)}")
             assert made.shortcuts()  # its key is named beside it, greyed or not
     assert {key for _group, keys in main.WINDOW_KEYS for key, _a, _w in keys} == set(shown.actions_by_key)
-    assert ({key for _group, keys in KEYS for key, _a, _w in keys} | {"g", "d", "H"}) - main.LEFT_OUT \
+    assert ({key for _group, keys in KEYS for key, _a, _w in keys} | {"g", "d", "H", "Del"}) - main.LEFT_OUT \
         == set(shown.actions_by_key)
     assert set(shown.keybar.keys) - {commandbar.KEY} <= set(shown.actions_by_key)  # the dashboard's keys, and the palette
     assert shown.actions_by_key["?"].shortcuts()[0].toString() == "?"

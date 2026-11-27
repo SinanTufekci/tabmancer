@@ -101,6 +101,7 @@ from .. import (
     rename,
     search,
     sessionwords,
+    teamkeys,
     teams,
     toast,
     workspaces,
@@ -132,7 +133,7 @@ from .board import Board
 from .cleanup import CleanupDialog
 from .clisettings import CliSettingsDialog
 from .closing import CloseDialog
-from .drawer import BUTTONS, ROOM, Drawer
+from .drawer import BUTTONS, ROOM, TEAM_BUTTONS, Drawer
 from .frame import KeysDialog, made_up_world
 from .front import WindowFront
 from .monitor import MonitorWindow, sequences
@@ -163,14 +164,16 @@ TERMINALS = {"V": "The terminal dashboard's own: here the panels drag, split and
 LEFT_OUT = {"t"}
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
-        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H", "c", "u", "W", "b"}
+        "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H", "c", "u", "W", "b", "Del"}
 # The window's own words for a key it does its own way: b, Bit here has no pixels or blocks to pick between.
 OWN_WORDS = {"b": "Bit lively, calm, or away (remembered, for the terminal's Bit too)"}
 TEAM_GROUP = "The team"
 # The terminal team view's own keys (keys.MONITOR_KEYS' "The team": its a, s, h and x are the dashboard's
 # too, on a team's card): g the team's goal; on a member, picked in the Team panel or its row in the Table, d
 # takes it off and H hands it alone over. A menu of their own after a session's, in their words.
-TEAM_KEYS = [entry for entry in dict(MONITOR_KEYS)[TEAM_GROUP] if entry[0] in {"g", "d", "H"}]
+# Del, the window's own: the saved teams, to delete one (d twice), as the terminal's T list deletes one.
+TEAM_KEYS = [*(entry for entry in dict(MONITOR_KEYS)[TEAM_GROUP] if entry[0] in {"g", "d", "H"}),
+             ("Del", "delete_team", teamkeys.DELETE_KEY)]
 AFTER_SESSION = [group for group, _ in KEYS].index("Work with a session") + 1
 WINDOW_KEYS = [(group, [(key, action, OWN_WORDS.get(key, words)) for key, action, words in entries
                         if key not in LEFT_OUT])
@@ -662,7 +665,7 @@ class MainWindow(QMainWindow):
                  "A": self.accounts_key, "w": self.save_workspace_key, "o": self.open_workspace_key,
                  "n": self.new_sessions_key, "s": self.start_key, "g": self.goal_key, "d": self.remove_key,
                  "H": self.member_handover_key, "c": self.continue_key, "u": self.stats_key,
-                 "W": self.wrapped_key, "b": self.bit_key}
+                 "W": self.wrapped_key, "b": self.bit_key, "Del": self.delete_team_key}
         self.menus_by_group = {}
         for group, keys in WINDOW_KEYS:
             menu = bar.addMenu(MENUS.get(group, group))
@@ -864,7 +867,7 @@ class MainWindow(QMainWindow):
         words = self.words.strip()
         if key and len(words) >= search.SHORTEST and self.index is not None and key in self.said_in():
             found = self.index.snippet(key, words, width=2 * ROOM)
-        why = {button: self.why_not(button) for button, _, _ in BUTTONS}
+        why = {button: self.why_not(button) for button, _, _ in (*BUTTONS, *TEAM_BUTTONS)}
         self.drawer.ticked = frozenset(self.selected)  # what its Enter opens
         self.drawer.set(self.snap, key or None, found, why)
 
@@ -1376,6 +1379,11 @@ class MainWindow(QMainWindow):
             self.team_panel.picked = None
             self.team_panel.show_team()
         keys.changed(changed, self.members_now(state))
+
+    def delete_team_key(self) -> None:
+        """Del, a team card's Delete team…, or the palette: the saved teams, the picked one (or the picked member's)
+        first in view; d twice deletes one, its sessions kept (teamkeysdialogs.ask_delete: TeamKeys.delete)."""
+        teamkeysdialogs.ask_delete(self, self.accent, self.front.team_keys, self.team_of_pick())
 
     def member_handover_key(self) -> None:
         """H: the member at hand alone handed over to a fresh session with its name and role, asked how first

@@ -26,9 +26,24 @@ if TYPE_CHECKING:
 CLOSE_AGAIN_SECONDS = 6  # x once on a team: x again this soon closes its members' tabs
 COLD_AGAIN_SECONDS = 12  # a team whose cache is gone: a second press this soon starts it (cold_note)
 REMOVE_AGAIN_SECONDS = 6  # d once on a member: d again this soon takes it off
+DELETE_AGAIN_SECONDS = 6  # d once on a saved team (the terminal's T list, the window's Delete team…): again deletes it
 NOBODY_OPEN = "No member is open."
 PICK_FIRST = "Pick a member with ← → first."
 NOTHING_TO_HAND_OVER = "This member has no session to hand over yet."
+# A saved team deleted (TeamKeys.delete), in the terminal T list's words: its sessions stay, and so do the tabs
+# of its members open now.
+DELETE_KEY = "delete a saved team (d twice; the picked one first in the list): its sessions stay"
+DELETE_TITLE = "Delete a team"
+DELETE_BUTTON = "Delete team…"  # on a team's card: its menu, the drawer's button
+NO_TEAM_TO_DELETE = "There is no saved team to delete."
+
+
+def delete_again(team: str) -> str:
+    return f"Press d again to delete the team {team}. Its sessions stay."
+
+
+def deleted(team: str) -> str:
+    return f"The team {team} is deleted. Its sessions stay."
 
 
 class Surface(Protocol):
@@ -272,6 +287,22 @@ class TeamKeys:
         except Busy as error:
             self.say(teams.not_saved_words(f"{member.name} is still on the team", error), 8, "warning")
             return None
+
+    def delete(self, name: str) -> bool:
+        """d, twice, on a saved team: deleted (teams.drop under the teams' lock, UI_TRIES), as the terminal's T
+        list deletes one; its sessions stay, and so do its members' open tabs. The first press says what the
+        second does; a handover its lead wrote for it, not taken yet, goes with it. True once deleted."""
+        if not self.again("delete", name, DELETE_AGAIN_SECONDS):
+            self.say(delete_again(name), DELETE_AGAIN_SECONDS)
+            return False
+        try:
+            teams.drop(name, UI_TRIES)
+        except Busy as error:
+            self.say(teams.not_saved_words(f"{name} is not deleted", error), 8, "warning")
+            return False
+        self.surface.kept_handovers().pop(name, None)
+        self.say(deleted(name), 5)
+        return True
 
     def change_goal(self, team: teams.Team, goal: str, members: dict[str, Session | None]) -> None:
         """g's answer: the team's goal changed (actions.change_goal) and its lead told; said when the
