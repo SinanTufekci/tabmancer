@@ -241,7 +241,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(team_run(args.team, args.rest))
     elif args.command == "desktop":
         sys.exit(m_opens(args.m_opens) if args.m_opens else desktop_window(
-            args.monitor, args.team, args.made_up, args.days, args.all))
+            args.monitor, args.team, args.made_up, args.days, args.all, args.tabs_window))
     elif args.command == "mcp":
         from . import mcpserver
 
@@ -262,7 +262,8 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"The terminal dashboard is not installed (no Textual), so {PROG} live cannot run here. "
                       f"The dashboard is a desktop window: {PROG} desktop.", file=sys.stderr)
                 sys.exit(1)
-            sys.exit(without_textual(parser, days=args.days, include_all=args.all))  # the window, or how to get it
+            sys.exit(without_textual(parser, days=args.days, include_all=args.all,  # the window, or how to get it
+                                     tabs_window=args.tabs_window))
         from . import sixel
 
         sixel.probe()  # whether Bit can be drawn in real pixels: asked before Textual reads the keys
@@ -569,15 +570,17 @@ def has_textual() -> bool:
 
 
 def without_textual(parser: argparse.ArgumentParser | None = None, demo: bool = False,
-                    team: str | None = None, days: float = 14, include_all: bool = False) -> int:
+                    team: str | None = None, days: float = 14, include_all: bool = False,
+                    tabs_window: str = "") -> int:
     """Where the terminal dashboard is not installed (no Textual): the desktop window if Qt is there
     (the dashboard, over the made-up sessions with demo, or a team's monitor with team: "" asks which),
     the way `tabmancer desktop` opens it; else how to add it, and with parser what the commands are.
-    days and include_all: --days and --all, which the dashboard's window lists by as the terminal's did."""
+    days and include_all: --days and --all, which the dashboard's window lists by as the terminal's did;
+    tabs_window: --tabs-window, the Windows Terminal window its tabs go to (desktop_window)."""
     from . import desktop
 
     if desktop.available():
-        return desktop_window(team is not None, team or "", demo, days, include_all)
+        return desktop_window(team is not None, team or "", demo, days, include_all, tabs_window)
     what = "A team's monitor" if team is not None else "The demo" if demo else "The dashboard"
     print(f"{what} is a desktop window, which needs Qt: {CORE_INSTALL}")
     if parser is not None:
@@ -586,11 +589,13 @@ def without_textual(parser: argparse.ArgumentParser | None = None, demo: bool = 
 
 
 def desktop_window(monitor: bool, name: str, demo: bool = False, days: float = 14,
-                   include_all: bool = False) -> int:
+                   include_all: bool = False, tabs_window: str = "") -> int:
     """`tabmancer desktop`: the dashboard in a Qt window, from the desktop extra, listing the sessions
     of the last days (--days) and with include_all those tools started too (--all); with --monitor
     [team], a team's monitor. Without Qt it says how to add it; the terminal dashboard and monitor
-    (team watch) are there either way."""
+    (team watch) are there either way. The dashboard's tabs go into one named Windows Terminal window:
+    tabs_window (--tabs-window), else the terminal dashboard's own (shortcuts.DASHBOARD_WINDOW), as
+    launch.gui_tabs says."""
     from . import desktop
 
     if not desktop.available():
@@ -598,9 +603,11 @@ def desktop_window(monitor: bool, name: str, demo: bool = False, days: float = 1
         print(f"The terminal ones need nothing more: {PROG}, and {PROG} team watch [team]", file=sys.stderr)
         return 1
     if not monitor and not name:
+        from . import launch, shortcuts
         from .desktop.main import run as run_dashboard
 
-        return run_dashboard(demo=demo, days=days, include_all=include_all)
+        with launch.gui_tabs(tabs_window or shortcuts.DASHBOARD_WINDOW):
+            return run_dashboard(demo=demo, days=days, include_all=include_all)
     if not monitor:  # a team named, not --monitor
         print(f"A team's monitor: {PROG} desktop --monitor {name}", file=sys.stderr)
         from .teamwatch import monitor_choice

@@ -8,6 +8,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -361,6 +363,41 @@ def apple_terminal_script(launches: list[Launch]) -> str:
     return "\n".join([*lines, "end tell"])
 
 
+# A front with no terminal around it (the desktop window), while it runs (gui_tabs): the Windows Terminal window
+# its tabs go to by name, and that it is one (off Windows, a terminal found on the machine opens them).
+_gui_window: str | None = None
+_gui = False
+
+
+@contextmanager
+def gui_tabs(window: str) -> Iterator[None]:
+    """While the desktop window runs. Started from a shortcut, the tray or at login it has no WT_SESSION, so its
+    tabs would each open a new Windows Terminal window: they go into the one named window instead (window, as
+    the terminal dashboard's do with --tabs-window), made by the first and found by the rest. Off Windows a
+    GUI app has none of the terminals' variables (TMUX, KITTY_WINDOW_ID…): a terminal found on the machine
+    opens them (gui_terminal), not shell lines to run by hand. Put back after."""
+    global _gui, _gui_window
+    kept = _gui, _gui_window
+    _gui, _gui_window = True, window or None
+    try:
+        yield
+    finally:
+        _gui, _gui_window = kept
+
+
+def gui_terminal() -> str:
+    """Off Windows, for a front with no terminal around it: macOS's Terminal (always there), or on Linux with a
+    display GNOME Terminal when installed (it hands each tab to its server, so starting one never waits for it
+    to close); else none, and the commands are given back. Konsole, kitty and WezTerm open tabs only from inside
+    themselves (their variables, read in terminal_kind)."""
+    if sys.platform == "darwin":
+        return "apple-terminal"
+    has_display = os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    if sys.platform != "win32" and has_display and shutil.which("gnome-terminal"):
+        return "gnome-terminal"
+    return "none"
+
+
 def terminal_kind() -> str:
     env = os.environ
     if sys.platform == "win32" and shutil.which("wt"):
@@ -379,7 +416,7 @@ def terminal_kind() -> str:
         return "gnome-terminal"
     if env.get("KONSOLE_VERSION") and shutil.which("konsole"):
         return "konsole"
-    return "none"
+    return gui_terminal() if _gui else "none"
 
 
 COMMAND_BUILDERS = {
@@ -407,7 +444,8 @@ def open_tabs(launches: list[Launch], window: str | None = None) -> list[str]:
 
     Inside Windows Terminal the tabs join the current window (the one used last: "0"), otherwise a
     new one; window says which instead ("0", "new" or a window's name), for a caller that is not
-    where the tabs belong (the team monitor, in a window of its own). Anything that could not be
+    where the tabs belong (the team monitor, in a window of its own). The desktop window's go to its
+    named one (gui_tabs) unless window says otherwise. Anything that could not be
     opened comes back as a shell line to run by hand. Raises OSError when Windows Terminal would
     not start.
     """
@@ -416,7 +454,7 @@ def open_tabs(launches: list[Launch], window: str | None = None) -> list[str]:
     _note(launches)
     kind = terminal_kind()
     if kind == "windows-terminal":
-        window = window or ("0" if os.environ.get("WT_SESSION") else "new")
+        window = window or _gui_window or ("0" if os.environ.get("WT_SESSION") else "new")
         started = None
         for command in windows_terminal_commands(launches, window):
             if started is not None:  # in their order: a team's lead, which comes last, opens last

@@ -142,3 +142,79 @@ def test_many_long_tabs_go_in_several_command_lines_each_short_enough():
     assert window.startswith("tabmancer-") and all(c[2] == window for c in commands)  # all in one window
     assert L.windows_terminal_commands([launch()], "new") == [windows_terminal_command([launch()], "new")]
     assert [c[2] for c in L.windows_terminal_commands(long, "0")] == ["0"] * len(commands)
+
+
+# --- the desktop window's tabs: one named Windows Terminal window, a terminal found off Windows ---------------
+
+def windows_terminal_started(monkeypatch) -> list[list[str]]:
+    """Windows Terminal there, never started: each command it would run, kept here."""
+    started: list[list[str]] = []
+
+    class Started:
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(L, "terminal_kind", lambda: "windows-terminal")
+    monkeypatch.setattr(L.claudeupdate, "before_opening", lambda: None)
+    monkeypatch.setattr(L.subprocess, "Popen", lambda command, **kwargs: started.append(command) or Started())
+    monkeypatch.delenv("WT_SESSION", raising=False)  # started from a shortcut, the tray or at login
+    return started
+
+
+def test_the_desktop_windows_tabs_go_into_its_named_window_not_a_new_one_each(monkeypatch):
+    started = windows_terminal_started(monkeypatch)
+    assert L.open_tabs([launch()]) == [] and started[-1][1:3] == ["-w", "new"]  # outside the window: as ever
+    with L.gui_tabs("tabmancer"):
+        L.open_tabs([launch()])
+        L.open_tabs([launch(), launch(title="demo: two")])
+        assert [command[1:3] for command in started[1:]] == [["-w", "tabmancer"]] * 2  # each Enter: the one window
+        L.open_tabs([launch()], "0")  # a caller that says where: there
+        assert started[-1][1:3] == ["-w", "0"]
+    L.open_tabs([launch()])
+    assert started[-1][1:3] == ["-w", "new"]  # put back once the window is gone
+
+
+def test_off_windows_the_desktop_window_finds_a_terminal_where_a_shell_had_its_variables(monkeypatch, real_launch):
+    """A GUI app has none of the terminals' variables: macOS's Terminal opens its tabs, on Linux GNOME Terminal
+    with a display; else none (the commands given back). A terminal the window was started in still wins."""
+    monkeypatch.setattr(L.shutil, "which", lambda name: f"/usr/bin/{name}")
+    for var in ("TMUX", "WEZTERM_PANE", "KITTY_WINDOW_ID", "TERM_PROGRAM", "GNOME_TERMINAL_SCREEN",
+                "GNOME_TERMINAL_SERVICE", "KONSOLE_VERSION", "DISPLAY", "WAYLAND_DISPLAY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(L.sys, "platform", "darwin")
+    assert L.terminal_kind() == "none"  # a shell's command (tabmancer list…): as ever
+    with L.gui_tabs("tabmancer"):
+        assert L.terminal_kind() == "apple-terminal"
+        monkeypatch.setattr(L.sys, "platform", "linux")
+        assert L.terminal_kind() == "none"  # no display to show a terminal on
+        monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+        assert L.terminal_kind() == "gnome-terminal"
+        monkeypatch.setattr(L.shutil, "which", lambda name: None if name == "gnome-terminal" else f"/usr/bin/{name}")
+        assert L.terminal_kind() == "none"
+        monkeypatch.setenv("TMUX", "/tmp/tmux")
+        assert L.terminal_kind() == "tmux"
+
+
+def test_tabmancer_desktop_runs_the_window_with_its_tabs_window(monkeypatch):
+    """--tabs-window as the terminal dashboard takes it (the shortcut's), else the terminal dashboard's own window,
+    for as long as the window runs: never after."""
+    import sys
+    import types
+
+    import pytest
+
+    from tabmancer import cli, desktop
+
+    monkeypatch.setattr(desktop, "available", lambda: True)
+    named = []
+    window = types.ModuleType("tabmancer.desktop.main")
+    window.run = lambda demo=False, days=14, include_all=False: named.append((L._gui, L._gui_window)) or 0
+    monkeypatch.setitem(sys.modules, "tabmancer.desktop.main", window)
+    for argv in (["desktop"], ["--tabs-window", "mine", "desktop"]):
+        with pytest.raises(SystemExit) as out:
+            cli.main(argv)
+        assert out.value.code == 0
+    assert named == [(True, "tabmancer"), (True, "mine")]
+    assert (L._gui, L._gui_window) == (False, None)
+    monkeypatch.setattr(cli, "has_textual", lambda: False)  # a core install: bare tabmancer is the window
+    assert cli.without_textual(tabs_window="mine") == 0 and named[-1] == (True, "mine")
