@@ -1582,6 +1582,28 @@ def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch, later):  
     assert not shiboken6.isValid(shown[0]) and gc.isenabled()
 
 
+def test_run_opens_on_the_view_asked_for(qapp, world, later):  # noqa: F811
+    """`tabmancer live`, the window now: run(view="live") opens it on the live view, and l goes back to the
+    board (the view it had before)."""
+    seen = []
+
+    def look_then_quit():
+        windows = [w for w in qapp.topLevelWidgets() if isinstance(w, main.MainWindow) and w.isVisible()]
+        if not windows:
+            later(100, look_then_quit)
+            return
+        shown = windows[0]
+        seen.append((shown.view, shown.views.checkedButton().text(), shown.table.live))
+        shown.toggle_live()
+        seen.append((shown.view, shown.views.checkedButton().text(), shown.table.live))
+        qapp.quit()
+
+    later(100, look_then_quit)
+    later(30_000, lambda: qapp.exit(1))  # never hangs the suite
+    assert main.run(view="live") == 0
+    assert seen == [("live", "Live", True), ("board", "Board", False)]
+
+
 def test_the_demo_puts_the_world_back(qapp, monkeypatch, later):  # noqa: F811
     """`tabmancer desktop --demo`: the made-up sessions, and afterwards nothing of them left; the days
     and --all given reach the window's store and its info line."""

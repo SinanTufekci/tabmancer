@@ -293,7 +293,7 @@ def test_the_dashboards_own_launcher_names_its_window(monkeypatch):
     assert workspace[:3] == ["wt.exe", "-w", "new"] and "--tabs-window" not in workspace
     monkeypatch.setattr(teams, "_tabmancer_cmd", lambda: ("tabmancer",))
     line = teamwatch.wt_command("shop", "", None, tabs_window="tabmancer")
-    assert line[-6:] == ["tabmancer", "--tabs-window", "tabmancer", "team", "watch", "shop"]
+    assert line[-7:] == ["tabmancer", "--terminal", "--tabs-window", "tabmancer", "team", "watch", "shop"]
 
 
 async def test_the_dashboard_still_opens_tabs_as_before(fake_home, monkeypatch):
@@ -378,7 +378,7 @@ def test_the_monitors_window_runs_tabmancer_itself(monkeypatch, tmp_path):
     assert line[:3] == ["wt.exe", "-w", "tabmancer-watch-shop-now"]
     assert line[3:5] == ["--pos", "-1880,40"] and "--maximized" in line
     assert line[line.index("--title") + 1] == r"tabmancer · shop\;now"
-    assert line[-4:] == ["tabmancer", "team", "watch", r"shop\;now"]  # no shell around it: q closes the tab
+    assert line[-5:] == ["tabmancer", "--terminal", "team", "watch", r"shop\;now"]  # no shell: q closes the tab
     assert not any(word in line for word in ("pwsh.exe", "powershell.exe", "-Command", "--"))
     assert "--suppressApplicationTitle" not in line  # T retitles the tab, and M finds it by the new name
     assert "--pos" not in teamwatch.wt_command("shop", "", None)
@@ -391,7 +391,8 @@ def test_d_with_no_dashboard_opens_it_in_a_window_of_its_own(monkeypatch):
     monkeypatch.setattr(teams, "_tabmancer_cmd", lambda: ("tabmancer",))
     assert teamwatch.open_dashboard("tabmancer") == "The dashboard opens in a new tab."
     assert started[0][:3] == ["wt.exe", "-w", "tabmancer"]  # named ("0" would be the monitor's own window)
-    assert started[0][-3:] == ["tabmancer", "--tabs-window", "tabmancer"]  # and the dashboard told the name
+    assert started[0][-4:] == ["tabmancer", "--terminal", "--tabs-window", "tabmancer"]  # told the name, and
+    # the terminal dashboard, as the monitor is the terminal one
     monkeypatch.setattr(teamwatch.focus, "focus_tab", lambda title: True)
     assert teamwatch.open_dashboard("tabmancer") == "" and len(started) == 1
 

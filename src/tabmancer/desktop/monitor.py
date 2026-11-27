@@ -1,6 +1,6 @@
 """The team monitor in a desktop window: `tabmancer desktop --monitor [team]`.
 
-The terminal monitor's team (`tabmancer team watch`) in the dashboard's black, with room: the team
+The terminal monitor's team (`tabmancer --terminal team watch`) in the dashboard's black, with room: the team
 as a picture that moves in the middle (teamgraph: messages fly along the wires, members breathe),
 and as panels you can drag, split, float and close (View puts them back): a card a member, the
 conversation as lanes, the messages, the team's hours and the plan limits as rings. The menus name
@@ -89,7 +89,7 @@ def sequences(key: str) -> list[QKeySequence]:
 
 
 def elsewhere(team: str) -> str:
-    return f"In the terminal monitor for now: tabmancer team watch {team}"
+    return f"In the terminal monitor for now: tabmancer --terminal team watch {team}"
 
 
 def tip(words: str, key: str, team: str) -> str:
@@ -325,7 +325,7 @@ class MonitorWindow(QMainWindow):
         self.resizeDocks([self.docks["messages"]], [560], Qt.Orientation.Horizontal)
         self.resizeDocks([self.docks["conversation"]], [240], Qt.Orientation.Vertical)
         self.build_menus()
-        self.keybar = KeyBar(KEY_BAR, "read-only · the rest: tabmancer team watch")
+        self.keybar = KeyBar(KEY_BAR, "read-only · the rest: tabmancer --terminal team watch")
         self.statusBar().addWidget(self.keybar, 1)
         self.show_bit()
 

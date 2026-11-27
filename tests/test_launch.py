@@ -216,5 +216,6 @@ def test_tabmancer_desktop_runs_the_window_with_its_tabs_window(monkeypatch):
         assert out.value.code == 0
     assert named == [(True, "tabmancer"), (True, "mine")]
     assert (L._gui, L._gui_window) == (False, None)
-    monkeypatch.setattr(cli, "has_textual", lambda: False)  # a core install: bare tabmancer is the window
-    assert cli.without_textual(tabs_window="mine") == 0 and named[-1] == (True, "mine")
+    with pytest.raises(SystemExit) as out:  # bare tabmancer is the window, by the same path
+        cli.main(["--tabs-window", "mine"])
+    assert out.value.code == 0 and named[-1] == (True, "mine")

@@ -305,12 +305,14 @@ def test_the_cli_says_what_m_opens(monkeypatch, capsys):
     for choice, words in (("desktop", "once Qt is installed"), ("terminal", "in a terminal window")):
         with pytest.raises(SystemExit) as out:
             cli.main(["desktop", "--m-opens", choice])
-        assert out.value.code == 0 and words in capsys.readouterr().out
+        said = capsys.readouterr()
+        assert out.value.code == 0 and words in said.out
+        assert "--m-opens is deprecated" in said.err  # it sets the terminal dashboard's M alone
         assert config.read_json("config.json")["monitor"] == choice == teamwatch.monitor_choice()
     monkeypatch.setattr(desktop, "available", lambda: True)
-    with pytest.raises(SystemExit):
-        cli.main(["desktop", "shop"])  # a team, without --monitor: what M opens is said with it
-    assert "M in the dashboard opens the terminal monitor" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as out:
+        cli.main(["desktop", "shop"])  # a team, without --monitor
+    assert out.value.code == 2 and "tabmancer desktop --monitor shop" in capsys.readouterr().err
 
 
 def test_the_extra_is_qt_essentials_alone():

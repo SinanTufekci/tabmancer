@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> None:
                 stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description="A terminal dashboard for Claude Code sessions: see what they are doing, write to them, "
+        description="A dashboard for Claude Code sessions: see what they are doing, write to them, "
                     "reopen them after a reboot.")
     # The same filters work before or after the subcommand. SUPPRESS keeps the
     # subcommand from overwriting a value given before it with its own default.
@@ -61,12 +61,16 @@ def main(argv: list[str] | None = None) -> None:
     # The Windows Terminal window the dashboard runs in, by the name tabmancer's own launcher gave it
     # (wt -w <name>): what opens by itself goes there. A monitor is told the dashboard's.
     parser.add_argument("--tabs-window", default="", help=argparse.SUPPRESS)
+    # The terminal dashboard while the window takes over: one flag, which the archive drops (shortcuts.TERMINAL).
+    parser.add_argument(shortcuts.TERMINAL, dest="terminal", action="store_true",
+                        help="the terminal dashboard, as before the window (being retired): alone, with --demo, "
+                             "live or team watch")
     parser.set_defaults(days=None, all=False)  # 14, or a week for report: see below
     sub = parser.add_subparsers(dest="command", metavar="command")
     listing = sub.add_parser("list", parents=[filters],
                              help="print recent sessions instead of opening the picker")
     listing.add_argument("--json", action="store_true", help="machine-readable output")
-    sub.add_parser("live", parents=[filters], help="watch open sessions: which are working, which need you")
+    sub.add_parser("live", parents=[filters], help="deprecated: the window's Live view (l in the window)")
     stating = sub.add_parser("stats", parents=[filters],
                              help="tokens, when you work, tools and files, plan limits (text, JSON or CSV)")
     stating.add_argument("--all-time", action="store_true",
@@ -119,7 +123,7 @@ def main(argv: list[str] | None = None) -> None:
     shortcut = sub.add_parser("shortcut", help="create a desktop shortcut (Windows)")
     shortcut.add_argument("--workspace", metavar="NAME",
                           help="open this workspace directly instead of the picker")
-    startup = sub.add_parser("startup", help="open the picker at login when sessions were left open")
+    startup = sub.add_parser("startup", help="open the dashboard at login when sessions were left open")
     startup.add_argument("action", choices=["on", "off", "status"])
     teaming = sub.add_parser("team", help="manage a team: add/start members, send/listen/who on the cross-CLI bus, "
                                           "or watch it in a monitor of its own")
@@ -166,21 +170,24 @@ def main(argv: list[str] | None = None) -> None:
     windowing.add_argument("--demo", dest="made_up", action="store_true",
                            help="over the made-up sessions and team of tabmancer --demo: nothing of yours is read")
     windowing.add_argument("--m-opens", dest="m_opens", choices=("terminal", "desktop"),
-                           help="what M in the dashboard opens: the terminal monitor (the default) or this window")
+                           help="deprecated: what M in the terminal dashboard (--terminal) opens")
     # What the login shortcut runs when there is no windowless gui launcher.
     sub.add_parser("startup-run", help="(used by the login shortcut)")
     args = parser.parse_args(argv)
     if args.days is None:
         args.days = 7 if args.command == "report" else 14
+    watching = args.command == "team" and args.action == "watch"
+    if args.terminal and args.command not in (None, "live") and not watching:
+        parser.error(f"{shortcuts.TERMINAL} is the terminal dashboard: alone, with --demo, live or team watch")
 
     if args.demo:
         if args.command:
             parser.error("--demo opens the dashboard: leave out the command")
-        if not has_textual():
-            sys.exit(without_textual(demo=True, days=args.days, include_all=args.all))  # `desktop --demo`
-        from .demo import run
-
-        run(args.days)
+        if args.terminal:
+            terminal_dashboard(args.days, args.all, demo=True)
+        else:  # `desktop --demo`
+            sys.exit(window_or_install(parser, demo=True, days=args.days, include_all=args.all,
+                                       tabs_window=args.tabs_window))
     elif args.command == "list":
         print_sessions(args.days, args.all, args.json)
     elif args.command == "tokens":
@@ -222,8 +229,12 @@ def main(argv: list[str] | None = None) -> None:
         save_wrapped(args.action, args.out, "story" if args.story else "wide", args.share, args.period, args.slide,
                      args.gif, args.names)
     elif args.command == "team":
-        if args.action == "watch":
+        if args.action == "watch" and args.terminal:
             sys.exit(team_watch(args.team, args.days, args.tabs_window))
+        if args.action == "watch":
+            print(f"{PROG} team watch is now {PROG} desktop --monitor; "
+                  f"{PROG} {shortcuts.TERMINAL} team watch is the terminal one, for now.", file=sys.stderr)
+            sys.exit(monitor_or_install(args.team))
         if not args.team:
             parser.error(f"team {args.action} needs the team's name")
         if args.action in ("add", "start"):
@@ -242,6 +253,14 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "desktop":
         sys.exit(m_opens(args.m_opens) if args.m_opens else desktop_window(
             args.monitor, args.team, args.made_up, args.days, args.all, args.tabs_window))
+    elif args.command == "live":
+        if args.terminal:
+            terminal_dashboard(args.days, args.all, live=True, tabs_window=args.tabs_window)
+        else:
+            print(f"{PROG} live is now the window's Live view (l); "
+                  f"{PROG} {shortcuts.TERMINAL} live is the terminal one, for now.", file=sys.stderr)
+            sys.exit(window_or_install(parser, days=args.days, include_all=args.all, tabs_window=args.tabs_window,
+                                       view="live"))
     elif args.command == "mcp":
         from . import mcpserver
 
@@ -252,25 +271,31 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(agyplugin.main([args.action]))
     elif args.command == "startup-run":
         startup_main()
-    else:
-        try:
-            from .app import SessionPicker  # Textual is slow to import; only the picker needs it
-        except ModuleNotFoundError as error:
-            if not (error.name or "").startswith("textual"):
-                raise
-            if args.command == "live":
-                print(f"The terminal dashboard is not installed (no Textual), so {PROG} live cannot run here. "
-                      f"The dashboard is a desktop window: {PROG} desktop.", file=sys.stderr)
-                sys.exit(1)
-            sys.exit(without_textual(parser, days=args.days, include_all=args.all,  # the window, or how to get it
-                                     tabs_window=args.tabs_window))
-        from . import sixel
+    elif args.terminal:
+        terminal_dashboard(args.days, args.all, tabs_window=args.tabs_window)
+    else:  # the dashboard: the window, or how to get it
+        sys.exit(window_or_install(parser, days=args.days, include_all=args.all, tabs_window=args.tabs_window))
 
-        sixel.probe()  # whether Bit can be drawn in real pixels: asked before Textual reads the keys
-        # The picker opens sessions itself and stays open; it only hands back commands
-        # when no supported terminal can open tabs.
-        print_leftover(SessionPicker(args.days, args.all, live=args.command == "live",
-                                     tabs_window=args.tabs_window).run())
+
+def terminal_dashboard(days: float, include_all: bool, demo: bool = False, live: bool = False,
+                       tabs_window: str = "") -> None:
+    """`tabmancer --terminal`: the terminal dashboard, as it was before the window took over; with demo
+    over the made-up sessions (`--terminal --demo`), with live on its live view (`--terminal live`).
+    Being retired: this, team_watch's terminal monitor and shortcuts.TERMINAL go when it is archived."""
+    if not has_textual():
+        sys.exit(f"The terminal dashboard is not installed (no Textual). The dashboard is the window: {PROG}")
+    if demo:
+        from .demo import run
+
+        run(days)
+        return
+    from . import sixel
+    from .app import SessionPicker  # Textual is slow to import; only the picker needs it
+
+    sixel.probe()  # whether Bit can be drawn in real pixels: asked before Textual reads the keys
+    # The picker opens sessions itself and stays open; it only hands back commands
+    # when no supported terminal can open tabs.
+    print_leftover(SessionPicker(days, include_all, live=live, tabs_window=tabs_window).run())
 
 
 def launch_all(launches: list[Launch]) -> None:
@@ -507,27 +532,34 @@ def watched_team(name: str) -> tuple[str, str]:
     return (working[0] if len(working) == 1 else ""), ""
 
 
+def monitor_or_install(name: str) -> int:
+    """`tabmancer team watch [team]`: the desktop monitor (`tabmancer desktop --monitor`); without Qt,
+    who is in the team (as `team who` says it) and how to get the monitor."""
+    from . import desktop
+
+    if desktop.available():
+        return window_or_install(team=name or "")
+    team, problem = watched_team(name)
+    if problem:
+        print(problem, file=sys.stderr)
+    elif team:
+        team_who(team)
+    else:  # none named and not one at work: the window would ask which
+        from . import teams
+
+        print(f"Teams: {', '.join(sorted(teams.load()))}. `tabmancer team who TEAM` lists one's members.")
+    window_or_install(team=name or "")
+    return 1 if problem else 0
+
+
 def team_watch(name: str, days: float, tabs_window: str = "") -> int:
-    """`tabmancer team watch [team]`: the team's monitor, in this window. It acts only when asked
-    (no limits continued, no toasts, no updates): the dashboard stays the one that does. Without
-    Textual, the desktop monitor (`tabmancer desktop --monitor`); without Qt too, who is in the team
-    (as `team who` says it) and how to get the monitor."""
+    """`tabmancer --terminal team watch [team]`: the team's terminal monitor, in this window. It acts
+    only when asked (no limits continued, no toasts, no updates): the dashboard stays the one that
+    does. Being retired with the terminal dashboard (terminal_dashboard)."""
     if not has_textual():
-        from . import desktop
-
-        if desktop.available():
-            return without_textual(team=name or "")
-        team, problem = watched_team(name)
-        if problem:
-            print(problem, file=sys.stderr)
-        elif team:
-            team_who(team)
-        else:  # none named and not one at work: the window would ask which
-            from . import teams
-
-            print(f"Teams: {', '.join(sorted(teams.load()))}. `tabmancer team who TEAM` lists one's members.")
-        without_textual(team=name or "")
-        return 1 if problem else 0
+        print(f"The terminal monitor is not installed (no Textual). The monitor is a window: "
+              f"{PROG} desktop --monitor", file=sys.stderr)
+        return 1
     team, problem = watched_team(name)
     if problem:
         print(problem, file=sys.stderr)
@@ -542,9 +574,12 @@ def team_watch(name: str, days: float, tabs_window: str = "") -> int:
 
 
 def m_opens(choice: str) -> int:
-    """`tabmancer desktop --m-opens terminal|desktop`: which monitor M in the dashboard opens."""
+    """`tabmancer desktop --m-opens terminal|desktop`, deprecated: which monitor M in the terminal
+    dashboard opens (M in the window opens its own). Kept, and said so, till the terminal one goes."""
     from . import desktop
 
+    print(f"--m-opens is deprecated: it sets only what M in the terminal dashboard ({PROG} {shortcuts.TERMINAL}) "
+          "opens; M in the window opens its own monitor.", file=sys.stderr)
     merge_json("config.json", monitor=choice)
     if choice == "terminal":
         print("M in the dashboard opens the team's monitor in a terminal window.")
@@ -562,60 +597,59 @@ CLEAN_UP_BY_HAND = "To pick them by hand: {how}, then Settings ▸ Free disk spa
 
 
 def has_textual() -> bool:
-    """Whether the terminal dashboard can run: Textual installed (a core install has none)."""
+    """Whether the terminal dashboard can run (`tabmancer --terminal`): Textual installed."""
     try:
         return importlib.util.find_spec("textual") is not None
     except ImportError:
         return False
 
 
-def without_textual(parser: argparse.ArgumentParser | None = None, demo: bool = False,
-                    team: str | None = None, days: float = 14, include_all: bool = False,
-                    tabs_window: str = "") -> int:
-    """Where the terminal dashboard is not installed (no Textual): the desktop window if Qt is there
-    (the dashboard, over the made-up sessions with demo, or a team's monitor with team: "" asks which),
-    the way `tabmancer desktop` opens it; else how to add it, and with parser what the commands are.
-    days and include_all: --days and --all, which the dashboard's window lists by as the terminal's did;
-    tabs_window: --tabs-window, the Windows Terminal window its tabs go to (desktop_window)."""
+def window_or_install(parser: argparse.ArgumentParser | None = None, demo: bool = False,
+                      team: str | None = None, days: float = 14, include_all: bool = False,
+                      tabs_window: str = "", view: str = "") -> int:
+    """`tabmancer`, `--demo`, `live` and `team watch`: the desktop window if Qt is there (the dashboard,
+    over the made-up sessions with demo, or a team's monitor with team: "" asks which), the way
+    `tabmancer desktop` opens it; else how to add it, the terminal dashboard while it is kept, and with
+    parser what the commands are (exit 0: they work as they are). days and include_all: --days and
+    --all, which the window lists by as the terminal's did; tabs_window: --tabs-window, the Windows
+    Terminal window its tabs go to; view: the view it opens on (`live`). `live` without Qt exits 1."""
     from . import desktop
 
     if desktop.available():
-        return desktop_window(team is not None, team or "", demo, days, include_all, tabs_window)
+        return desktop_window(team is not None, team or "", demo, days, include_all, tabs_window, view)
     what = "A team's monitor" if team is not None else "The demo" if demo else "The dashboard"
     print(f"{what} is a desktop window, which needs Qt: {CORE_INSTALL}")
+    if has_textual():
+        print(f"The terminal one runs as before, for now: {PROG} {shortcuts.TERMINAL}")
     if parser is not None:
         print(f"Without it the commands work as they are:\n\n{parser.format_help()}")
-    return 0
+    return 1 if view else 0
 
 
 def desktop_window(monitor: bool, name: str, demo: bool = False, days: float = 14,
-                   include_all: bool = False, tabs_window: str = "") -> int:
+                   include_all: bool = False, tabs_window: str = "", view: str = "") -> int:
     """`tabmancer desktop`: the dashboard in a Qt window, from the desktop extra, listing the sessions
     of the last days (--days) and with include_all those tools started too (--all); with --monitor
     [team], a team's monitor. Without Qt it says how to add it; the terminal dashboard and monitor
     (team watch) are there either way. The dashboard's tabs go into one named Windows Terminal window:
     tabs_window (--tabs-window), else the terminal dashboard's own (shortcuts.DASHBOARD_WINDOW), as
-    launch.gui_tabs says."""
+    launch.gui_tabs says. view: the view the dashboard opens on ("live" for `tabmancer live`), else its own."""
     from . import desktop
 
     if not desktop.available():
         print(f"The desktop window needs Qt, from the desktop extra: {desktop.INSTALL}", file=sys.stderr)
-        print(f"The terminal ones need nothing more: {PROG}, and {PROG} team watch [team]", file=sys.stderr)
+        if has_textual():
+            print(f"The terminal ones need nothing more, for now: {PROG} {shortcuts.TERMINAL}, and "
+                  f"{PROG} {shortcuts.TERMINAL} team watch [team]", file=sys.stderr)
         return 1
     if not monitor and not name:
-        from . import launch, shortcuts
+        from . import launch
         from .desktop.main import run as run_dashboard
 
         with launch.gui_tabs(tabs_window or shortcuts.DASHBOARD_WINDOW):
-            return run_dashboard(demo=demo, days=days, include_all=include_all)
+            return run_dashboard(demo=demo, days=days, include_all=include_all, **({"view": view} if view else {}))
     if not monitor:  # a team named, not --monitor
         print(f"A team's monitor: {PROG} desktop --monitor {name}", file=sys.stderr)
-        from .teamwatch import monitor_choice
-
-        where = "this window" if monitor_choice() == "desktop" else "the terminal monitor"
-        other = "terminal" if monitor_choice() == "desktop" else "desktop"
-        print(f"M in the dashboard opens {where} ({PROG} desktop --m-opens {other} for the other).",
-              file=sys.stderr)
         return 2
     team = name
     if not demo:  # the demo's teams are made up when it starts
@@ -1078,14 +1112,24 @@ def _windows_only(what: str) -> None:
 
 
 def create_shortcut(workspace_name: str | None = None) -> None:
+    """The desktop shortcut: the dashboard's window, with no console (shortcuts.window_argv); without Qt
+    the terminal dashboard while it is kept. A workspace's opens its sessions in a terminal tab."""
     _windows_only("Creating shortcuts")
-    name, extra = shortcuts.PICKER_TITLE, []
+    from . import desktop
+
+    name = shortcuts.PICKER_TITLE
     if workspace_name:
         workspace = _get_workspace(workspace_name)  # names are kept plain, see clean_name
-        name, extra = f"{workspace.name} (Claude)", ["open", workspace.name]
+        name = f"{workspace.name} (Claude)"
+        argv = shortcuts.picker_argv(["open", workspace.name], title=name)
+    elif desktop.available():
+        argv = shortcuts.window_argv()
+    elif has_textual():
+        argv = shortcuts.picker_argv([shortcuts.TERMINAL], title=name)
+    else:
+        sys.exit(f"The dashboard is a desktop window, which needs Qt: {CORE_INSTALL}")
     try:
-        path = shortcuts.write_shortcut(shortcuts.special_folder("Desktop"), name,
-                                        shortcuts.picker_argv(extra, title=name),
+        path = shortcuts.write_shortcut(shortcuts.special_folder("Desktop"), name, argv,
                                         "Reopen recent Claude Code sessions")
     except OSError as error:
         sys.exit(f"Could not create the shortcut: {error}")
@@ -1101,10 +1145,10 @@ def manage_startup(action: str) -> None:
             if argv is None:
                 sys.exit("No windowless launcher found (tabmancer-startup or pythonw); reinstall tabmancer.")
             path = shortcuts.enable_startup(argv)
-            print(f"On: {path}\nAt login the picker opens only if sessions were open at shutdown.")
+            print(f"On: {path}\nAt login the dashboard opens only if sessions were open at shutdown.")
         elif action == "off":
             path.unlink(missing_ok=True)
-            print("Off: the picker no longer opens at login.")
+            print("Off: the dashboard no longer opens at login.")
         else:
             print(f"On ({path})" if path.exists() else "Off")
     except OSError as error:
@@ -1112,13 +1156,26 @@ def manage_startup(action: str) -> None:
 
 
 def startup_main() -> None:
-    """Runs at login without a console window: opens the picker only when sessions
-    were open at the last shutdown, otherwise exits without showing anything."""
+    """Runs at login without a console window: opens the dashboard only when sessions
+    were open at the last shutdown, otherwise exits without showing anything. The window
+    runs here, windowless already; without Qt, the terminal dashboard in a terminal window
+    while it is kept (--terminal)."""
+    from . import desktop
+
     try:
         sessions = find_sessions(quick=True)
         if not open_at_shutdown(sessions, recent_shutdowns()):
             return
-        subprocess.Popen(shortcuts.picker_argv([]),
-                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+        if desktop.available():
+            desktop_window(False, "")
+        elif has_textual():
+            subprocess.Popen(shortcuts.picker_argv([shortcuts.TERMINAL]),
+                             creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
     except OSError:
         pass  # nothing could show the error anyway; the desktop shortcut still works
+
+
+def desktop_main() -> None:
+    """The tabmancer-desktop launcher (a gui-script: no console behind it), which the desktop shortcut
+    starts: `tabmancer desktop` with what it was given."""
+    main(["desktop", *sys.argv[1:]])

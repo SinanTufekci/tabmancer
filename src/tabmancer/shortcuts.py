@@ -17,6 +17,10 @@ PICKER_TITLE = "tabmancer"
 # told to the dashboard with --tabs-window: what opens by itself later (a session whose limit lifted,
 # a queued handover's fresh one) goes there by name, not to the window used last.
 DASHBOARD_WINDOW = "tabmancer"
+# The terminal dashboard while the window takes over: `tabmancer --terminal` (also with --demo, live and team
+# watch), and what the terminal dashboard and monitor start of themselves. The window is the dashboard; this
+# flag, and each place that passes it, go when the terminal dashboard is archived.
+TERMINAL = "--terminal"
 STARTUP_NAME = "tabmancer at login"
 LAUNCH_AGENT = "com.tabmancer.startup"  # macOS: ~/Library/LaunchAgents/<this>.plist
 # Linux terminals that open a window running a command, the first found wins, and how each is told
@@ -43,7 +47,8 @@ def _windows_terminal() -> str | None:
 
 
 def picker_argv(extra: list[str], title: str = PICKER_TITLE) -> list[str]:
-    """Command that opens tabmancer (with extra arguments) in a new terminal window.
+    """Command that opens tabmancer (with extra arguments) in a new terminal window. The terminal
+    dashboard itself is extra [TERMINAL] (or [], as before the window took over).
 
     In Windows Terminal it runs inside PowerShell 7 when that is installed, so the
     tab is a PowerShell tab with your profile loaded rather than a bare console.
@@ -56,7 +61,7 @@ def picker_argv(extra: list[str], title: str = PICKER_TITLE) -> list[str]:
     if not wt:
         return _terminal_window(command)
     window = "new"
-    if not extra and title == PICKER_TITLE:  # the dashboard itself: in its named window
+    if extra in ([], [TERMINAL]) and title == PICKER_TITLE:  # the dashboard itself: in its named window
         window = DASHBOARD_WINDOW
         command = [*command, "--tabs-window", DASHBOARD_WINDOW]
     pwsh = shutil.which("pwsh")
@@ -66,6 +71,20 @@ def picker_argv(extra: list[str], title: str = PICKER_TITLE) -> list[str]:
         script = "& " + " ".join(_ps_quote(arg) for arg in command)  # & runs a quoted path
         command = [pwsh, "-NoLogo", "-Command", script]
     return [wt, "-w", window, "new-tab", "--title", title, *command]
+
+
+def window_argv() -> list[str]:
+    """The dashboard's window with no console behind it, as the desktop shortcut starts it: the
+    tabmancer-desktop gui-script launcher, else pythonw -m tabmancer desktop (python.exe where there is
+    no pythonw; the interpreter itself off Windows, where nothing opens a console)."""
+    launcher = shutil.which(f"{PROG}-desktop")
+    if launcher:
+        return [launcher]
+    python = Path(sys.executable)
+    if sys.platform == "win32":
+        quiet = python.with_name("pythonw.exe")
+        python = quiet if quiet.exists() else python.with_name("python.exe")
+    return [str(python), "-m", PROG, "desktop"]
 
 
 def _terminal_window(command: list[str]) -> list[str]:
@@ -95,7 +114,7 @@ def startup_file() -> Path:
 def enable_startup(argv: list[str]) -> Path:
     """Run argv at login: a Startup shortcut, a LaunchAgent or an autostart entry."""
     path = startup_file()
-    about = "Open the tabmancer picker if sessions were left open"
+    about = "Open the tabmancer dashboard if sessions were left open"
     if sys.platform == "win32":
         return write_shortcut(path.parent, path.stem, argv, about)
     path.parent.mkdir(parents=True, exist_ok=True)

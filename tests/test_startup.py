@@ -52,15 +52,20 @@ def test_login_does_nothing_without_sessions_left_open(tools, monkeypatch):
     assert launched == []
 
 
-def test_login_opens_the_picker_when_sessions_were_left_open(tools, monkeypatch):
+def test_login_without_qt_opens_the_terminal_dashboard_when_sessions_were_left_open(tools, monkeypatch):
+    from tabmancer import desktop
+
     launched = []
+    monkeypatch.setattr(desktop, "available", lambda: False)
+    monkeypatch.setattr(cli, "has_textual", lambda: True)
     monkeypatch.setattr(cli, "find_sessions", lambda **kw: [])
     monkeypatch.setattr(cli, "recent_shutdowns", list)
     monkeypatch.setattr(cli, "open_at_shutdown", lambda sessions, shutdowns: {"abc"})
     monkeypatch.setattr(cli.subprocess, "Popen", lambda argv, **k: launched.append(argv))
     cli.startup_main()
     (argv,) = launched
-    assert argv[0] == "C:/bin/wt.exe" and argv[-3:] == ["C:/bin/tabmancer.exe", "--tabs-window", "tabmancer"]
+    assert argv[0] == "C:/bin/wt.exe" and argv[-4:] == ["C:/bin/tabmancer.exe", "--terminal", "--tabs-window",
+                                                        "tabmancer"]
     assert argv[1:3] == ["-w", "tabmancer"]  # the dashboard's named window
 
 

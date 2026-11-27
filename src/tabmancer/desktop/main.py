@@ -30,7 +30,7 @@ team with members open, x twice closes their tabs, as on /exit), X shows the hid
 the sessions, Esc clears what the list is narrowed to. Pins and hides go to marks.json as every
 dashboard changes it (marks.change): what another one changed meanwhile stays, and each shows them at
 its next read; Bit says what a key did. The panels fill in slice by slice; till then a key not done here is greyed in its
-menu and in the key bar, and done in the terminal dashboard (tabmancer). The Team panel (teampanel), a tab beside the list, shows each team's
+menu and in the key bar, and done in the terminal dashboard (tabmancer --terminal). The Team panel (teampanel), a tab beside the list, shows each team's
 picture over its conversation; T brings it to the front. On a team (its card, or its tab with the panel in
 front) s starts it, a adds members and g changes its goal; on the member clicked there (or its row in the
 Table) d twice takes it off and H hands it alone over: the terminal team view's keys (teamkeys, one copy), g, d
@@ -143,7 +143,7 @@ TICK_MS = 100  # the live dot breathes and the clock goes on
 INFO_LEAST = 20  # characters the info line keeps before the accounts give way
 IN_TRAY = "tabmancer_in_tray"  # a window of the window's that went to the tray with it
 LAYOUT_KEY = "main"  # desktop.json's
-ELSEWHERE = "In the terminal dashboard for now: tabmancer"
+ELSEWHERE = "In the terminal dashboard for now: tabmancer --terminal"
 # The terminal dashboard's keys for good, in their own words: V lays out its list and preview, where the window's
 # panels drag, split and float.
 TERMINALS = {"V": "The terminal dashboard's own: here the panels drag, split and float (Panels)"}
@@ -507,7 +507,7 @@ class MainWindow(QMainWindow):
                          Qt.Orientation.Horizontal)
         self.resizeDocks([docks["Sessions"], docks["Bit"]], [700, 100], Qt.Orientation.Vertical)
         self.build_menus()
-        self.keybar = KeyBar(KEY_BAR, "greyed: in the terminal dashboard for now (tabmancer)",
+        self.keybar = KeyBar(KEY_BAR, "greyed: in the terminal dashboard for now (tabmancer --terminal)",
                              dim={key for key, _ in KEY_BAR if key not in HERE and key != commandbar.KEY})
         self.statusBar().addWidget(self.keybar, 1)
 
@@ -2097,11 +2097,13 @@ def knock() -> bool:
     return frame.knock(door())
 
 
-def run(demo: bool = False, days: float = DAYS, include_all: bool = False) -> int:
+def run(demo: bool = False, days: float = DAYS, include_all: bool = False, view: str = "") -> int:
     """The window, till tabmancer quits: closed where there is no tray; else q, or Quit in the tray's menu (X
     puts the window in the tray, so the app outlives its last window: quit_now ends it). With demo, over the
     made-up sessions of `tabmancer --demo`: nothing real is read (frame.made_up_world). days and include_all:
-    the sessions it lists, as `tabmancer --days N --all` (the last days; sessions started by tools too)."""
+    the sessions it lists, as `tabmancer --days N --all` (the last days; sessions started by tools too).
+    view: the Sessions panel's view to open on (VIEWS), as `tabmancer live` asks for the live one; "" the
+    window's own."""
     look.fonts_for_offscreen()
     app = QApplication.instance() or QApplication(["tabmancer"])
     last_closed_quits = app.quitOnLastWindowClosed()
@@ -2117,6 +2119,8 @@ def run(demo: bool = False, days: float = DAYS, include_all: bool = False) -> in
             if window.tray is not None:  # a monitor or a dialog closed while the window is in the tray: no quit
                 app.setQuitOnLastWindowClosed(False)
                 window.quit_now.connect(app.quit)
+            if view:
+                window.set_view(view)
             window.show()
             code = app.exec()
             if not window.closed:  # the app was told to quit (a logoff, say), the window not closed: closed

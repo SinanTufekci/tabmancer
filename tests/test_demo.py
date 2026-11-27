@@ -136,7 +136,7 @@ def test_tabmancer_demo_runs_in_a_folder_of_its_own_and_cleans_it_up(tmp_path, m
             seen["stand-in"] = app_module.open_tabs is not real_open_tabs
 
     monkeypatch.setattr(demo, "picker", lambda days: Dashboard())
-    cli.main(["--demo"])
+    cli.main(["--terminal", "--demo"])
     assert seen["sessions"] >= len(demo.SESSIONS) and seen["stand-in"]
     assert seen["home"].name.startswith("tabmancer-demo-") and not seen["home"].exists()
 

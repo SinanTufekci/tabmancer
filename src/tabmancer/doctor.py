@@ -221,26 +221,39 @@ def _an_agy_member() -> bool:
 
 
 def shortcut_check() -> Result | None:
-    """Whether the desktop shortcut starts the dashboard in its own named Windows Terminal window
-    (shortcuts.DASHBOARD_WINDOW), where what opens by itself goes; one written before that sends it
-    to the window used last. Only read: tabmancer shortcut writes it again. None off Windows, with no
-    desktop shortcut, or with one that does not go through Windows Terminal."""
+    """Whether the desktop shortcut starts the dashboard as it is now: the window (shortcuts.window_argv),
+    or without Qt the terminal dashboard (--terminal) in its own named Windows Terminal window. One
+    written before the window took over starts bare `tabmancer` in a terminal tab, which now opens the
+    window from a console it closes with (or, without Qt, says how to get it and is gone); one older
+    still also sends what opens by itself to the window used last. Only read: tabmancer shortcut writes
+    it again. None off Windows, with no desktop shortcut, or with one that is neither."""
     if sys.platform != "win32":
         return None
-    from . import shortcuts
+    from . import desktop, shortcuts
 
     try:
         folder = shortcuts.special_folder("Desktop")
     except OSError:
         return None
     found = shortcuts.read_shortcut(folder / f"{shortcuts.PICKER_TITLE}.lnk")
-    if found is None or ntpath.basename(found[0]).lower() != "wt.exe":  # a Windows path, read as one
+    if found is None:
         return None
+    target, args = ntpath.basename(found[0]).lower(), found[1].split()  # a Windows path, read as one
+    again = "tabmancer shortcut writes it again."
+    if target in (f"{shortcuts.PROG}-desktop.exe", "pythonw.exe", "python.exe") and (
+            target.endswith("-desktop.exe") or args[-1:] == ["desktop"]):
+        if desktop.available():
+            return "ok", "The desktop shortcut opens the dashboard's window."
+        return "warn", f"The desktop shortcut opens the dashboard's window, which needs Qt: {desktop.INSTALL}"
+    if target != "wt.exe":
+        return None
+    if desktop.available() or shortcuts.TERMINAL not in found[1]:
+        return "warn", ("The desktop shortcut opens the dashboard in a terminal tab, as before the window took "
+                        f"over: {again}")
     if "--tabs-window" in found[1]:
-        return "ok", "The desktop shortcut starts the dashboard in a window of its own name."
+        return "ok", "The desktop shortcut starts the terminal dashboard in a window of its own name."
     return "warn", ("The desktop shortcut predates the dashboard's named window: what opens by itself (a "
-                    "session whose limit lifted) goes to the window used last. tabmancer shortcut writes it "
-                    "again.")
+                    f"session whose limit lifted) goes to the window used last. {again}")
 
 
 def update_check() -> Result:

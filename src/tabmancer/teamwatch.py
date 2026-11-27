@@ -43,13 +43,15 @@ def window_name(team: str) -> str:
 
 
 def command(team: str, tabs_window: str = "") -> list[str]:
-    """The monitor's command line: tabmancer as a member's tab runs it (teams._tabmancer_cmd).
-    tabs_window: the dashboard's window, when the dashboard knows its name: the monitor's tabs go
-    there by name, with no tab brought to the front first."""
+    """The terminal monitor's command line: tabmancer as a member's tab runs it (teams._tabmancer_cmd),
+    told --terminal (shortcuts.TERMINAL: `team watch` alone is the desktop monitor now). tabs_window:
+    the dashboard's window, when the dashboard knows its name: the monitor's tabs go there by name,
+    with no tab brought to the front first."""
+    from .shortcuts import TERMINAL
     from .teams import _tabmancer_cmd
 
     told = ["--tabs-window", tabs_window] if tabs_window else []
-    return [*_tabmancer_cmd(), *told, "team", "watch", team]
+    return [*_tabmancer_cmd(), TERMINAL, *told, "team", "watch", team]
 
 
 def second_screen() -> tuple[int, int] | None:
@@ -165,14 +167,16 @@ def open_terminal(team: str, folder: str = "", tabs_window: str = "") -> str:
         subprocess.run(["tmux", "new-window", "-n", title(team)[:30], shlex.join(command(team))], check=False,
                        capture_output=True)
         return f"The monitor of {team} opens in a tmux window."
-    return f"Run `tabmancer team watch {team}` in a window of its own for the monitor."
+    return f"Run `tabmancer --terminal team watch {team}` in a window of its own for the monitor."
 
 
 def open_dashboard(dashboard: str, folder: str = "") -> str:
     """A monitor's D: the dashboard's tab (titled dashboard) to the front; with none open, the
-    dashboard in a new tab. Returns a word for a note, or "" when there is nothing to say."""
+    terminal dashboard in a new tab (--terminal, as the monitor is the terminal one). Returns a word
+    for a note, or "" when there is nothing to say."""
     if focus.focus_tab(dashboard):
         return ""
+    from .shortcuts import TERMINAL
     from .teams import _tabmancer_cmd
 
     kind = terminal_kind()
@@ -184,12 +188,12 @@ def open_dashboard(dashboard: str, folder: str = "") -> str:
         args = ["wt.exe", "-w", DASHBOARD_WINDOW, "new-tab", "--title", _wt_escape(dashboard)]
         if folder and os.path.isdir(folder):
             args += ["-d", _wt_escape(folder)]
-        line = [*_tabmancer_cmd(), "--tabs-window", DASHBOARD_WINDOW]
+        line = [*_tabmancer_cmd(), TERMINAL, "--tabs-window", DASHBOARD_WINDOW]
         subprocess.Popen([*args, *(_wt_escape(arg) for arg in line)],
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return "The dashboard opens in a new tab."
     if kind == "tmux":
-        subprocess.run(["tmux", "new-window", "-n", dashboard, shlex.join(_tabmancer_cmd())], check=False,
+        subprocess.run(["tmux", "new-window", "-n", dashboard, shlex.join([*_tabmancer_cmd(), TERMINAL])], check=False,
                        capture_output=True)
         return "The dashboard opens in a tmux window."
-    return "Run `tabmancer` in another window for the dashboard."
+    return "Run `tabmancer --terminal` in another window for the dashboard."

@@ -168,30 +168,37 @@ def test_no_command_without_textual_or_qt_says_how_to_get_the_window(home):
     assert "cleanup" in done.stdout and "doctor" in done.stdout  # the command list
 
 
-WINDOWS = {  # what opens the terminal dashboard, and the desktop window it opens without Textual
-    "no command": ([], "WINDOW False '' False 14 False ''"),
-    "--days --all": (["--days", "3", "--all"], "WINDOW False '' False 3.0 True ''"),  # listing as the terminal's
-    "--tabs-window": (["--tabs-window", "mine"], "WINDOW False '' False 14 False 'mine'"),  # its tabs go there
-    "--demo": (["--demo"], "WINDOW False '' True 14 False ''"),  # tabmancer desktop --demo
-    "--demo --days": (["--demo", "--days", "2"], "WINDOW False '' True 2.0 False ''"),
-    "team watch": (["team", "watch", "shop"], "WINDOW True 'shop' False 14 False ''"),  # desktop --monitor shop
-    "team watch, no team": (["team", "watch"], "WINDOW True '' False 14 False ''"),  # the window asks which
+WINDOWS = {  # what opened the terminal dashboard, and the desktop window it opens now
+    "no command": ([], "WINDOW False '' False 14 False '' ''"),
+    "--days --all": (["--days", "3", "--all"], "WINDOW False '' False 3.0 True '' ''"),  # listing as the terminal's
+    "--tabs-window": (["--tabs-window", "mine"], "WINDOW False '' False 14 False 'mine' ''"),  # its tabs go there
+    "--demo": (["--demo"], "WINDOW False '' True 14 False '' ''"),  # tabmancer desktop --demo
+    "--demo --days": (["--demo", "--days", "2"], "WINDOW False '' True 2.0 False '' ''"),
+    "live": (["live"], "WINDOW False '' False 14 False '' 'live'"),  # on its Live view
+    "live --days --all": (["live", "--days", "2", "--all"], "WINDOW False '' False 2.0 True '' 'live'"),
+    "team watch": (["team", "watch", "shop"], "WINDOW True 'shop' False 14 False '' ''"),  # desktop --monitor shop
+    "team watch, no team": (["team", "watch"], "WINDOW True '' False 14 False '' ''"),  # the window asks which
 }
+DEPRECATED = {"live": "tabmancer live is now the window's Live view (l); tabmancer --terminal live",
+              "team": "tabmancer team watch is now tabmancer desktop --monitor; tabmancer --terminal team watch"}
 
 
 @pytest.mark.parametrize("name", list(WINDOWS))
-def test_without_textual_the_desktop_window_opens_instead(home, name):
+def test_the_desktop_window_opens_instead(home, name):
     """With Qt there (stood in for: this test's Python has none), each is the window, by
-    `tabmancer desktop`'s own path, not a copy of it."""
+    `tabmancer desktop`'s own path, not a copy of it. live and team watch say so, on stderr."""
     command, said = WINDOWS[name]
     stand_in = ("from tabmancer import cli, desktop\n"
                 "desktop.available = lambda: True\n"
-                "cli.desktop_window = lambda monitor, name, demo=False, days=14, include_all=False, tabs_window='': "
-                "print('WINDOW', monitor, repr(name), demo, days, include_all, repr(tabs_window)) or 0\n")
+                "cli.desktop_window = lambda monitor, name, demo=False, days=14, include_all=False, tabs_window='', "
+                "view='': print('WINDOW', monitor, repr(name), demo, days, include_all, repr(tabs_window), "
+                "repr(view)) or 0\n")
     done = run(home, *command, tail=stand_in + CLI)
     assert "the test " not in done.stderr, done.stderr[-3000:]
     assert done.returncode == 0 and "LOADED []" in done.stderr, done.stderr[-3000:]
     assert said in done.stdout and "uv tool install" not in done.stdout
+    word = DEPRECATED.get(command[0] if command else "", "")
+    assert (word in done.stderr) if word else " is now " not in done.stderr, done.stderr[-3000:]
 
 
 @pytest.mark.parametrize(("command", "what"), [(["--demo"], "The demo"),
@@ -201,6 +208,8 @@ def test_without_textual_or_qt_they_say_how_to_get_the_window(home, command, wha
     assert "the test " not in done.stderr, done.stderr[-3000:]
     assert done.returncode == 0 and "LOADED []" in done.stderr, done.stderr[-3000:]
     assert f'{what} is a desktop window, which needs Qt: uv tool install "tabmancer[desktop]"' in done.stdout
+    assert ("doctor" in done.stdout) == (command == ["--demo"])  # the command list, as bare tabmancer says it
+    assert "The terminal one runs as before" not in done.stdout  # nothing to offer without Textual
 
 
 WATCHED = {  # team watch with neither Textual nor Qt: what `team who` says, then the hint; exit code
@@ -229,11 +238,30 @@ def test_team_watch_without_textual_or_qt_says_there_is_no_such_team(home):
     assert "A team's monitor is a desktop window, which needs Qt" in done.stdout
 
 
-def test_live_without_textual_says_the_terminal_dashboard_is_not_installed(home):
+def test_live_without_qt_says_it_is_the_windows_live_view_and_how_to_get_it(home):
     done = run(home, "live")
     assert "the test " not in done.stderr and "Traceback" not in done.stderr, done.stderr[-3000:]
-    assert done.returncode == 1 and "LOADED []" in done.stderr
-    assert "terminal dashboard is not installed" in done.stderr and "tabmancer desktop" in done.stderr
+    assert done.returncode == 1 and "LOADED []" in done.stderr  # it could not do what it was asked
+    assert DEPRECATED["live"] in done.stderr
+    assert 'The dashboard is a desktop window, which needs Qt: uv tool install "tabmancer[desktop]"' in done.stdout
+
+
+TERMINAL = {  # --terminal without Textual: what it says on stderr, and its exit code
+    "alone": ([], "The terminal dashboard is not installed (no Textual)", 1),
+    "--demo": (["--demo"], "The terminal dashboard is not installed (no Textual)", 1),
+    "live": (["live"], "The terminal dashboard is not installed (no Textual)", 1),
+    "team watch": (["team", "watch", "shop"], "The terminal monitor is not installed (no Textual)", 1),
+    "with list": (["list"], "--terminal is the terminal dashboard: alone, with --demo, live or team watch", 2),
+}
+
+
+@pytest.mark.parametrize("name", list(TERMINAL))
+def test_terminal_without_textual_says_it_is_not_installed(home, name):
+    given, said, code = TERMINAL[name]
+    done = run(home, "--terminal", *given)
+    assert "the test " not in done.stderr and "Traceback" not in done.stderr, done.stderr[-3000:]
+    assert done.returncode == code and said in done.stderr, done.stderr[-3000:]
+    assert "LOADED []" in done.stderr
 
 
 def test_wrapped_saves_its_picture_without_textual_or_qt(home, tmp_path):

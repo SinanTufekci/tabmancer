@@ -46,6 +46,8 @@ tabmancer = "tabmancer.cli:main"
 # Windowless launcher for the login shortcut: no console flashes up when there is
 # nothing to restore.
 tabmancer-startup = "tabmancer.cli:startup_main"
+# The dashboard's window with no console behind it, for the desktop shortcut (shortcuts.window_argv).
+tabmancer-desktop = "tabmancer.cli:desktop_main"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff"]
