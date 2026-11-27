@@ -12,7 +12,7 @@ import os
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from functools import partial
 from pathlib import Path
 
@@ -179,9 +179,11 @@ def place_new(window: QMainWindow, known: set[str] | None, dock: QDockWidget, be
 
 
 class KeysDialog(QDialog):
-    """?: every key, what it does, and where the ones this window does not do yet are done."""
+    """?: every key, what it does, and where the ones this window does not do are done (elsewhere; own: a key's
+    own words for that)."""
 
-    def __init__(self, parent: QWidget, title: str, groups: list, here: set[str], elsewhere: str) -> None:
+    def __init__(self, parent: QWidget, title: str, groups: list, here: set[str], elsewhere: str,
+                 own: Mapping[str, str] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(760, 560)
@@ -192,7 +194,7 @@ class KeysDialog(QDialog):
         for group, keys in groups:
             rows.append(look.span(group.upper(), f"bold {look.MUTED}"))
             for key, _action, words in keys:
-                where = "" if key in here else look.span(f"   ({elsewhere})", look.DIM)
+                where = "" if key in here else look.span(f"   ({(own or {}).get(key, elsewhere)})", look.DIM)
                 rows.append(look.span(f"{key:<6}", f"bold {look.TEXT if key in here else look.DIM}")
                             + look.span(words, look.TEXT if key in here else look.MUTED) + where)
             rows.append("")

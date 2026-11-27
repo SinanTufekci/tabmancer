@@ -1,8 +1,8 @@
 """The dashboard in a desktop window: `tabmancer desktop`.
 
-The terminal dashboard in its black, with room: monospace, the accent, panels you can drag, split,
-float and close (Panels puts them back), menus that name every key of the dashboard, and the key
-bar under the window. The top bar says what the terminal dashboard's says, in the same words
+The terminal dashboard in its black, with room: monospace, its accent (one look: no theme here), panels you
+can drag, split, float and close (Panels puts them back), menus that name every key of the dashboard, and the
+key bar under the window. The top bar says what the terminal dashboard's says, in the same words
 (viewmodel): the sessions listed, who each CLI is signed in as, the plan limits and agy's chain,
 a live dot and the clock. The Sessions panel shows the sessions three ways, picked by a switch under
 the top bar: the Board (board.py), as cards in lanes by what they want from you; the Table
@@ -52,6 +52,7 @@ import math
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -113,7 +114,7 @@ from .clisettings import CliSettingsDialog
 from .closing import CloseDialog
 from .drawer import BUTTONS, ROOM, Drawer
 from .frame import KeysDialog, made_up_world
-from .front import TYPES_INTO_TABS, WindowFront
+from .front import WindowFront
 from .monitor import MonitorWindow, sequences
 from .naming import NameDialog, PromptDialog, Renamer
 from .opening import Opener
@@ -130,6 +131,11 @@ TICK_MS = 100  # the live dot breathes and the clock goes on
 INFO_LEAST = 20  # characters the info line keeps before the accounts give way
 LAYOUT_KEY = "main"  # desktop.json's
 ELSEWHERE = "In the terminal dashboard for now: tabmancer"
+# The terminal dashboard's keys for good, in their own words: V lays out its list and preview, where the window's
+# panels drag, split and float.
+TERMINALS = {"V": "The terminal dashboard's own: here the panels drag, split and float (Panels)"}
+# The keys the window leaves out altogether: t, the next colour theme (one look here: look.accent).
+LEFT_OUT = {"t"}
 # The dashboard's keys that work here (KEYS names them all); the rest are the terminal dashboard's.
 HERE = {"?", "q", "T", "/", "1", "2", "3", "l", "Space", "a", "e", "E", "x", "X", "f", "Tab", "Esc", "Enter", "m",
         "j", "M", "h", "r", "p", "B", ",", "A", "w", "o", "n", "s", "g", "d", "H", "c"}
@@ -139,12 +145,14 @@ TEAM_GROUP = "The team"
 # takes it off and H hands it alone over. A menu of their own after a session's, in their words.
 TEAM_KEYS = [entry for entry in dict(MONITOR_KEYS)[TEAM_GROUP] if entry[0] in {"g", "d", "H"}]
 AFTER_SESSION = [group for group, _ in KEYS].index("Work with a session") + 1
-WINDOW_KEYS = [*KEYS[:AFTER_SESSION], (TEAM_GROUP, TEAM_KEYS), *KEYS[AFTER_SESSION:]]
+WINDOW_KEYS = [(group, [entry for entry in entries if entry[0] not in LEFT_OUT])
+               for group, entries in [*KEYS[:AFTER_SESSION], (TEAM_GROUP, TEAM_KEYS), *KEYS[AFTER_SESSION:]]]
 PICK_MEMBER = "d and H act on a team's member: click one in the Team panel (T), or pick its row in the Table."
 GOAL_PICK = "g changes a team's goal: pick its card, or bring its tab in the Team panel (T)."
 TEAMS_SAID = "The Team panel: T again starts a new team."
 START_ELSEWHERE = "s starts a team, or summarizes a session: pick one."
-# A goal the new-team dialog found a team at work has already, or adds to: the window types into no member's tab.
+# A goal the new-team dialog found a team at work has already, or adds to, with typing into tabs off
+# (front.TYPES_INTO_TABS): its words on the clipboard instead.
 TELL_ELSEWHERE = ("{team} is on this goal already: nothing was made. The message for {to} is on the clipboard, to "
                   "paste into its tab (Ctrl+V, Enter).")
 JOIN_ELSEWHERE = ("{team} is at work on this goal: nothing was made. Adding members to a team at work is the terminal "
@@ -164,7 +172,7 @@ MENUS = {"Pick and open": "&Open", "Keep the list tidy": "&Tidy", "Work with a s
          TEAM_GROUP: "Te&am",
          "Views": "&Views", "Workspaces": "&Workspaces", "Settings and the rest": "Se&ttings"}
 KEY_BAR = [("Enter", "open"), ("n", "new"), ("T", "teams"), ("h", "hand over"), ("c", "continue"), ("M", "monitor"),
-           ("V", "split"), ("/", "filter"), ("A", "accounts"), (commandbar.KEY, "commands"), ("?", "all keys"),
+           ("j", "needs you"), ("/", "filter"), ("A", "accounts"), (commandbar.KEY, "commands"), ("?", "all keys"),
            ("q", "quit")]
 # The top bar's tones (viewmodel.usage_parts, account_parts) as colours.
 TONES = {"muted": look.MUTED, "text": look.TEXT, "empty": "#2a2a2a", "ok": look.GREEN, "low": look.AMBER,
@@ -181,6 +189,11 @@ VIEW_TIPS = {"board": "The sessions as cards, by what they want from you",
              "live": "Only the open sessions and what each is doing (l)"}
 FILTER_WORDS = "Find by project, title or anything said  ( / )"
 TEAM_GONE = "There is no team {team} any more."  # a team key on a team gone meanwhile (teamkeys' words for Join)
+
+
+def done_where(key: str) -> str:
+    """Where a key the window does not do is done: the terminal dashboard's for now, or its own (TERMINALS)."""
+    return TERMINALS.get(key, ELSEWHERE)
 
 
 def parts_html(parts: list[tuple[str, str]]) -> str:
@@ -529,7 +542,7 @@ class MainWindow(QMainWindow):
                 made = QAction(commands.short(words), self)
                 made.setShortcuts(sequences(key))
                 made.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
-                said = words if key in HERE else f"{words}. {ELSEWHERE}"
+                said = words if key in HERE else f"{words}. {done_where(key)}"
                 made.setToolTip(said)
                 made.setStatusTip(said)
                 made.setData(key)
@@ -712,7 +725,7 @@ class MainWindow(QMainWindow):
         """None when this window does the key on what is picked; else why its button is greyed."""
         action = self.actions_by_key.get(key)
         if action is None or not action.isEnabled():
-            return ELSEWHERE
+            return done_where(key)
         return None
 
     def run_key(self, key: str) -> None:
@@ -1264,12 +1277,13 @@ class MainWindow(QMainWindow):
             self.table.tick(now)  # its stars turn, its light sweeps, its red breathes
 
     def show_keys(self) -> None:
-        KeysDialog(self, "Keys · tabmancer", WINDOW_KEYS, HERE, ELSEWHERE).show()
+        KeysDialog(self, "Keys · tabmancer", WINDOW_KEYS, HERE, ELSEWHERE, own=TERMINALS).show()
 
     def open_commands(self) -> None:
         """Ctrl+K: the palette, over every key of the dashboard (the ones done in the terminal dashboard
         greyed, saying so), the teams, the projects and the sessions in sight."""
-        entries = commands.commands(WINDOW_KEYS, HERE, ELSEWHERE)
+        entries = [replace(entry, why=done_where(entry.key)) if not entry.enabled and entry.key in TERMINALS else entry
+                   for entry in commands.commands(WINDOW_KEYS, HERE, ELSEWHERE)]
         sessions = {}
         if self.snap is not None:
             entries += commands.team_jumps(self.snap.view.teams)
@@ -1397,8 +1411,10 @@ class MainWindow(QMainWindow):
         """The new team's Ctrl+S: saved under the teams' lock (UI_TRIES), started, its members first and the
         lead last, and shown in the Team panel; not made, and that is said, while another tabmancer changes the
         teams, teams.json can't be read, or a team of that name was made meanwhile. A goal a team at work has
-        already, or adds to, is the terminal dashboard's for now (the window types into no member's tab): said,
-        its words on the clipboard."""
+        already (Tell: its lead, or the peer it concerns, is told) or adds to (Join: the members join and open, and
+        it is told), as the terminal's T does (teamkeys.TeamKeys, one copy): the message typed into its tab once it
+        waits for you. With typing into tabs off (front.TYPES_INTO_TABS) neither: said, its words on the
+        clipboard."""
         if isinstance(made, TellTeam):
             if self.front.types_in([], made.message):  # the terminal's Tell: typed in once it waits, a closed one opens
                 self.front.team_keys().tell_team(made.team, made.to, made.message)
@@ -1406,7 +1422,9 @@ class MainWindow(QMainWindow):
             self.tell_note(actions.Note(TELL_ELSEWHERE.format(team=made.team, to=made.to), "warning", 14))
             return
         if isinstance(made, JoinTeam):
-            QApplication.clipboard().setText(made.goal)
+            if self.front.types_in([], made.goal):  # the terminal's join: the goal grows, they open, it is told
+                self.front.team_keys().join_team(made)
+                return
             self.tell_note(actions.Note(JOIN_ELSEWHERE.format(team=made.team), "warning", 14))
             return
         if not isinstance(made, teams.Team):
@@ -1709,7 +1727,7 @@ class MainWindow(QMainWindow):
         if isinstance(asked, actions.Note):
             self.tell_note(asked)
             return
-        dialog = limit.LimitDialog(self, asked, self.accent, acts=self.engine.state.acts, types=TYPES_INTO_TABS)
+        dialog = limit.LimitDialog(self, asked, self.accent, acts=self.engine.state.acts, types=self.front.types())
         dialog.chosen.connect(partial(self.continue_chosen, asked))
         dialog.open()
 

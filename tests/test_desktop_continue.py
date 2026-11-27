@@ -1,10 +1,11 @@
 """c in the window (main.py, desktop/front.py), as the terminal dashboard's c: the sessions stopped at a usage limit
 in its dialog (desktop/limit.py, the terminal's words: limitwords), and what becomes of the ticked ones through the
-window's own Engine (Engine.choose, one copy): now opens a closed one with the continue prompt; the window types
-into no tab till Sinan says it may (front.TYPES_INTO_TABS), so an open one's prompt is handed to you, on the
-clipboard with its tab in front; the handover hands each over from its transcript, as h does. Continuing when the
-limit lifts is the acting dashboard's: never offered here, and refused were it asked. Tell's message for a member
-goes through the same one place (WindowFront.types_in). Offscreen over the made-up sessions of `tabmancer --demo`.
+window's own Engine (Engine.choose, one copy): now opens a closed one with the continue prompt and types it into an
+open one's tab, as the terminal does (front.TYPES_INTO_TABS, Sinan's call); turned off, an open one's prompt is
+handed to you, on the clipboard with its tab in front. The handover hands each over from its transcript, as h does.
+Continuing when the limit lifts is the acting dashboard's: never offered here, and refused were it asked. Tell's
+and Join's message for a member goes through the same one place (WindowFront.types_in). Offscreen over the made-up
+sessions of `tabmancer --demo`.
 Skipped without the desktop extra (pip install "tabmancer[desktop]")."""
 
 import importlib
@@ -27,13 +28,13 @@ from PySide6.QtWidgets import QApplication, QPushButton
 from test_desktop_front import busy_one, read, taking
 from test_desktop_handover import until
 
-from tabmancer import actions, claudeupdate, demo, launch, limitwords, shutdowns, store, typein
+from tabmancer import actions, claudeupdate, demo, launch, limitwords, shutdowns, store, teams, typein
 from tabmancer import viewmodel as VM
 from tabmancer.desktop import frame, front, main
 from tabmancer.desktop.limit import LimitDialog
 from tabmancer.launch import Mode
 from tabmancer.sessions import Exit, Status
-from tabmancer.teamforms import TellTeam
+from tabmancer.teamforms import JoinTeam, TellTeam
 
 SHOP = "shop"  # the demo's team: lead, api, ui, tests, every one open, all Claude Code (no team bus)
 PROMPT = launch.continue_prompt(Status.LIMIT)
@@ -122,7 +123,13 @@ def test_c_shows_the_stopped_with_only_now_and_the_handover_where_the_window_nev
     assert set(asked.ticked) == names  # every one ticked
     assert sorted(way for way, _ in asked.ways) == ["handover", "now"]  # no "lift", no "off"
     assert asked.not_here.isVisibleTo(asked)  # why continuing when the limit lifts is not here
+    assert limitwords.NOW_OPEN_TYPED in now_words(asked)  # an open one's prompt typed into its tab, as it is
     asked.reject()
+
+
+def now_words(asked: LimitDialog) -> str:
+    """What the dialog says continuing now does."""
+    return "".join(words for words, _style in dict(asked.ways)["now"])
 
 
 def test_c_with_nothing_at_a_limit_says_so_and_asks_nothing(qapp, window):
@@ -133,11 +140,15 @@ def test_c_with_nothing_at_a_limit_says_so_and_asks_nothing(qapp, window):
     assert said(shown) == actions.NONE_STOPPED.words and not shown.findChildren(LimitDialog)
 
 
-def test_now_opens_a_closed_one_with_the_prompt_and_hands_you_an_open_ones(qapp, window, world):
+def test_with_typing_off_now_opens_a_closed_one_with_the_prompt_and_hands_you_an_open_ones(qapp, window, world,
+                                                                                        monkeypatch):
+    monkeypatch.setattr(front, "TYPES_INTO_TABS", False)
     shown = window()
     closed = stopped(shown)
     still = open_at_limit(shown)
-    choose(qapp, asked_by_c(qapp, shown), "now")
+    asked = asked_by_c(qapp, shown)
+    assert limitwords.NOW_OPEN_CLIPBOARD in now_words(asked)  # the dialog says it as it is
+    choose(qapp, asked, "now")
     assert sorted(t.session_id for t in world.tabs) == sorted(s.session_id for s in closed)  # each in a new tab
     assert {(t.mode, t.prompt) for t in world.tabs} == {(Mode.AUTO, PROMPT)}
     assert world.typed == []  # the window types into no tab
@@ -146,8 +157,8 @@ def test_now_opens_a_closed_one_with_the_prompt_and_hands_you_an_open_ones(qapp,
     assert shown.engine.state.armed == {} and store.read_armed() == {}  # nothing set to go on by itself
 
 
-def test_once_the_window_may_type_in_an_open_ones_prompt_is_typed_on_a_thread(qapp, window, world, monkeypatch):
-    monkeypatch.setattr(front, "TYPES_INTO_TABS", True)  # Sinan's yes: the one line
+def test_an_open_ones_prompt_is_typed_into_its_tab_on_a_thread(qapp, window, world):
+    assert front.TYPES_INTO_TABS  # Sinan's call (2026-11-26): the window types into tabs, as the terminal does
     shown = window()
     still = open_at_limit(shown)
     QApplication.clipboard().setText("left alone")
@@ -208,7 +219,8 @@ def test_the_drawers_continue_on_a_stopped_card_asks_as_c_does(qapp, window):
     asked.reject()
 
 
-def test_tell_goes_through_the_same_place_handed_to_you_till_the_window_may_type(qapp, window, world, monkeypatch):
+def test_tell_goes_through_the_same_place_handed_to_you_with_typing_off(qapp, window, world, monkeypatch):
+    monkeypatch.setattr(front, "TYPES_INTO_TABS", False)
     shown = window()
     lead = shown.members_now(shown.snap.team_states[SHOP])["lead"]
     taking(shown, replace(lead, live_state="idle"))
@@ -219,20 +231,44 @@ def test_tell_goes_through_the_same_place_handed_to_you_till_the_window_may_type
     assert QApplication.clipboard().text() == "Another made-up one" and world.typed == []
     assert [s.session_id for s in world.went] == [lead.session_id]
     assert said(shown).startswith("The message for shop-lead is on the clipboard and its tab in front")
-    monkeypatch.setattr(front, "TYPES_INTO_TABS", True)  # Sinan's yes: the terminal's Tell (TeamKeys.tell_team)
+    monkeypatch.setattr(front, "TYPES_INTO_TABS", True)  # on, as it is: the terminal's Tell (TeamKeys.tell_team)
     shown.team_made(TellTeam(SHOP, "shop-lead", "A made-up request"))
     shown.front.settle()
     until(qapp, lambda: said(shown) == "Sent to shop-lead.")
     assert world.typed == [(lead.session_id, "A made-up request")] and shown.engine.state.notes == {}
 
 
-def test_a_closed_member_told_opens_with_the_message_once_the_window_may_type(qapp, window, world, monkeypatch):
-    monkeypatch.setattr(front, "TYPES_INTO_TABS", True)
+def test_a_closed_member_told_opens_with_the_message(qapp, window, world):
     shown = window()
     ui = shown.members_now(shown.snap.team_states[SHOP])["ui"]
     taking(shown, replace(ui, exit=Exit.CLEAN))
     shown.team_made(TellTeam(SHOP, "shop-ui", "A made-up request"))
     assert [(t.title, t.prompt) for t in world.tabs] == [("shop: ui", "A made-up request")] and world.typed == []
+
+
+def test_join_has_the_members_join_and_open_and_the_lead_told_as_the_terminals_t_does(qapp, window, world):
+    """A goal that adds to a team at work: the members join the saved team and open, the goal grows by it, the
+    lead is told in its tab, and the team's view comes to the front (teamkeys.TeamKeys.join_team, one copy)."""
+    shown = window()
+    lead = shown.members_now(shown.snap.team_states[SHOP])["lead"]
+    taking(shown, replace(lead, live_state="idle"))
+    shown.team_made(JoinTeam(SHOP, "docs: the made-up docs", "shop-lead", "Docs joins", "the made-up docs"))
+    shop = teams.load()[SHOP]
+    assert [m.name for m in shop.members][-1] == "docs" and "the made-up docs" in shop.goal
+    assert [t.title for t in world.tabs] == ["shop: docs"]
+    shown.front.settle()
+    until(qapp, lambda: bool(world.typed))
+    assert world.typed == [(lead.session_id, "Docs joins")] and shown.engine.state.notes == {}
+    assert shown.team_panel_in_front() and shown.team_panel.team == SHOP  # its view: its tab picked in the panel
+
+
+def test_join_with_typing_off_is_said_and_its_goal_put_on_the_clipboard(qapp, window, world, monkeypatch):
+    monkeypatch.setattr(front, "TYPES_INTO_TABS", False)
+    shown = window()
+    before = teams.load()
+    shown.team_made(JoinTeam(SHOP, "docs: the made-up docs", "shop-lead", "Docs joins", "the made-up docs"))
+    assert QApplication.clipboard().text() == "the made-up docs" and world.tabs == [] and world.typed == []
+    assert said(shown) == main.JOIN_ELSEWHERE.format(team=SHOP) and teams.load() == before
 
 
 def waiting_words(shown) -> list[str]:

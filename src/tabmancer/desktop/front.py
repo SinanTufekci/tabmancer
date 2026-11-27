@@ -17,10 +17,11 @@ look; the only thing it starts is a handover this window queued itself (h on a b
 finishes: one queued in another window is that window's (state.queued is each window's own, and
 actor.first_to lets one of two that queued the same one hand it over).
 
-Nor does it type into a session's tab, even at a key (c's continue prompt in an open one, Tell's message
-for a member), until Sinan says it may (TYPES_INTO_TABS): WindowFront.types_in is the one place either asks,
-and it hands the words to you instead, on the clipboard with the tab in front. A closed one still opens with
-its prompt, and a team on the bus is still sent to (a file written, nothing typed).
+At a key it types into a session's tab as the terminal dashboard does (c's continue prompt in an open one, a
+member's message from Tell or Join once it waits for you), Sinan's call (TYPES_INTO_TABS): WindowFront.types_in
+is the one place each asks. Turned off, it hands the words to you instead, on the clipboard with the tab in
+front. A closed one opens with its prompt either way, and a team on the bus is sent to (a file written, nothing
+typed).
 
 The front reaches its window as its Qt parent, not as an attribute: a window that kept a front that
 kept the window would be a cycle, closed yet alive till Python's cycle collector came by."""
@@ -67,9 +68,9 @@ NOW_SECONDS = 5.0  # how long a handover's thread waits for the window to say ho
 WAITING_BITS = 3  # Bit's words that wait their turn behind something said: the newest few
 FAILED_SECONDS = 15.0  # how long a handover that failed is said
 HANDOVER_THREAD = "tabmancer-handover"  # a handover's thread: never cut short on closing (settle)
-# Sinan's call, pending: whether the window types into a session's tab itself (c's continue prompt, Tell's
-# message), as the terminal dashboard does. Till he says yes it types into none (WindowFront.types_in).
-TYPES_INTO_TABS = False
+# Sinan's call (2026-11-26): the window types into a session's tab itself at a key (c's continue prompt, a
+# member's message), as the terminal dashboard does. False hands the words to you instead (WindowFront.types_in).
+TYPES_INTO_TABS = True
 
 
 class AskHow:
@@ -354,6 +355,11 @@ class WindowFront(QObject):
         """The team as saved now: the sessions and the teams read again (the store reads both)."""
         self.window().poll()
 
+    def show_team(self, team: teams.Team) -> None:
+        """Its own view (members joined it, Join): the Team panel to the front, its tab picked as soon as a
+        reading has it (MainWindow.show_new_team)."""
+        self.window().show_new_team(team.name)
+
     def go_to_tab(self, session: Session) -> None:
         """Its tab to the front, on a thread of its own (Opener.go_to: what actions.go_to_tab says)."""
         self.window().opener.go_to(session)
@@ -424,18 +430,22 @@ class WindowFront(QObject):
         """Never asked: the window is a dashboard's, not a monitor's (monitoring); were it, they open as any."""
         self.window().engine.open(launches, None, True)
 
-    # --- typing into a tab: not yet ------------------------------------------------------------------
+    # --- typing into a tab --------------------------------------------------------------------------
 
     def types_in(self, sessions: list[Session], text: str) -> bool:
         """Whether the window types text into these sessions' tabs itself, as the terminal dashboard does (c's
-        continue prompt, Tell's message): the one place either asks, so Sinan's yes is TYPES_INTO_TABS. Till
-        then it hands them to you: text on the clipboard and the first one's tab in front; False."""
-        if TYPES_INTO_TABS:
+        continue prompt, a member's message): the one place each asks (types). Turned off, it hands them to
+        you: text on the clipboard and the first one's tab in front; False."""
+        if self.types():
             return True
         self.put_on_clipboard(text)
         if sessions:
             self.go_to_tab(sessions[0])
         return False
+
+    def types(self) -> bool:
+        """Whether the window types into tabs (TYPES_INTO_TABS, read now): c's dialog says it as it is."""
+        return TYPES_INTO_TABS
 
     def type_note(self, session: Session, who: str, message: str) -> None:
         """A member's message, once it waits for you: typed into its tab on a thread of its own

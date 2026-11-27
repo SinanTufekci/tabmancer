@@ -28,9 +28,13 @@ MONO_FAMILIES = ("Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono",
                  "Liberation Mono", "Courier New")
 
 
+ACCENT = palette.THEMES[palette.DEFAULT_THEME][1]  # the dashboard's own orange
+
+
 def accent() -> str:
-    """The accent of the theme picked in the dashboard (orange unless another was picked)."""
-    return palette.THEMES[palette.saved_theme()][1]
+    """The window's accent, always the dashboard's default theme's: one look here, no theme read or cycled (t and
+    config.json's theme are the terminal dashboard's)."""
+    return ACCENT
 
 
 def colour_of(style: str, default: str = TEXT) -> tuple[str, bool]:

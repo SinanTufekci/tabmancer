@@ -208,9 +208,11 @@ def test_a_new_team_while_another_tabmancer_changes_the_teams_is_not_made_and_sa
     assert shown.new_team_shown is None
 
 
-def test_a_goal_a_team_at_work_has_or_adds_to_is_said_and_put_on_the_clipboard(qapp, window, world):
-    from tabmancer.desktop import main
+def test_with_typing_off_a_goal_a_team_at_work_has_or_adds_to_is_said_and_put_on_the_clipboard(qapp, window, world,
+                                                                                               monkeypatch):
+    from tabmancer.desktop import front, main
 
+    monkeypatch.setattr(front, "TYPES_INTO_TABS", False)  # on, Tell and Join are the terminal's (test_desktop_continue)
     shown = window()
     before = teams.load()
     shown.team_made(TellTeam("shop", "shop-lead", "A made-up request from the user"))

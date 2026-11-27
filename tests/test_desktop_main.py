@@ -24,7 +24,7 @@ import shiboken6
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import QContextMenuEvent, QTextDocument
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
+from PySide6.QtWidgets import QApplication, QDockWidget, QMenu, QTextBrowser
 
 from tabmancer import (
     accounts,
@@ -37,6 +37,7 @@ from tabmancer import (
     focus,
     launch,
     marks,
+    palette,
     rowwords,
     sessions,
     shutdowns,
@@ -162,10 +163,11 @@ def test_every_dashboard_key_is_in_the_menus(qapp, window):
             made = shown.actions_by_key[key]
             assert key in in_menus
             assert made.isEnabled() is (key in main.HERE)
-            assert made.toolTip() == (words if key in main.HERE else f"{words}. {main.ELSEWHERE}")
+            assert made.toolTip() == (words if key in main.HERE else f"{words}. {main.done_where(key)}")
             assert made.shortcuts()  # its key is named beside it, greyed or not
     assert {key for _group, keys in main.WINDOW_KEYS for key, _a, _w in keys} == set(shown.actions_by_key)
-    assert {key for _group, keys in KEYS for key, _a, _w in keys} | {"g", "d", "H"} == set(shown.actions_by_key)
+    assert ({key for _group, keys in KEYS for key, _a, _w in keys} | {"g", "d", "H"}) - main.LEFT_OUT \
+        == set(shown.actions_by_key)
     assert set(shown.keybar.keys) - {commandbar.KEY} <= set(shown.actions_by_key)  # the dashboard's keys, and the palette
     assert shown.actions_by_key["?"].shortcuts()[0].toString() == "?"
 
@@ -1419,6 +1421,51 @@ def test_question_mark_lists_the_keys_and_q_closes(qapp, window):
     QTest.keyClick(shown, Qt.Key.Key_Q)
     qapp.processEvents()
     assert not shown.isVisible()
+
+
+def keys_list(qapp, shown) -> str:
+    """What ? lists, as plain text (the dialog closed again)."""
+    shown.actions_by_key["?"].trigger()
+    qapp.processEvents()
+    (dialog,) = [w for w in qapp.topLevelWidgets() if isinstance(w, frame.KeysDialog) and w.isVisible()]
+    text = dialog.findChild(QTextBrowser).toPlainText()
+    dialog.close()
+    return text
+
+
+def test_one_look_here_t_in_no_list_and_the_theme_picked_in_the_terminal_never_read(qapp, window):
+    """Sinan's call (2026-11-26): no theme in the window. t is in no menu, nor in ?, nor in the palette, and the
+    accent is the dashboard's own orange whatever config.json's theme (the terminal's t) is."""
+    assert merge_json("config.json", theme="tabmancer-black-green")
+    shown = window()
+    orange = palette.THEMES[palette.DEFAULT_THEME][1]
+    assert palette.saved_theme() == "tabmancer-black-green" and look.accent() == shown.accent == orange
+    in_menus = {action.data() for menu in shown.menus.findChildren(QMenu) for action in menu.actions()}
+    assert "t" not in shown.actions_by_key and "t" not in in_menus
+    assert "colour theme" not in keys_list(qapp, shown)
+    shown.open_commands()
+    assert "t" not in {entry.key for entry in shown.command_bar.entries if entry.kind == "key"}
+    shown.command_bar.hide()
+
+
+def test_v_is_the_terminals_own_said_so_wherever_it_shows_and_j_has_its_place_on_the_key_bar(qapp, window):
+    """V lays the terminal's list and preview out; here the panels drag, split and float (Sinan's call,
+    2026-11-26). Greyed with those words in its menu, in ? and in the palette (never "for now"), and off the key
+    bar, whose place is j's; the keys still to come say "for now" as before."""
+    shown = window()
+    own = main.TERMINALS["V"]
+    made = shown.actions_by_key["V"]
+    assert not made.isEnabled() and made.toolTip().endswith(f". {own}")
+    assert "V" not in dict(main.KEY_BAR) and dict(main.KEY_BAR)["j"] == "needs you" and "j" not in shown.keybar.dim
+    lines = keys_list(qapp, shown).splitlines()
+    (v_line,) = [line for line in lines if line.startswith("V ")]
+    (w_line,) = [line for line in lines if line.startswith("W ")]
+    assert v_line.endswith(f"({own})") and w_line.endswith(f"({main.ELSEWHERE})")
+    shown.open_commands()
+    by_key = {entry.key: entry for entry in shown.command_bar.entries if entry.kind == "key"}
+    assert not by_key["V"].enabled and by_key["V"].why == own
+    assert not by_key["W"].enabled and by_key["W"].why == main.ELSEWHERE
+    shown.command_bar.hide()
 
 
 def test_a_second_open_brings_the_first_forward(qapp, window, monkeypatch):

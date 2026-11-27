@@ -35,6 +35,7 @@ from tabmancer import (
     launch,
     shutdowns,
     summarize,
+    teamkeys,
     toast,
     typein,
 )
@@ -207,14 +208,22 @@ def test_events_say_their_note_else_bits_words_in_bits_tone(qapp, window):
 
 
 def test_the_window_answers_all_the_engine_may_ask_of_its_front_in_its_words():
-    """Every engine.Front method, with its parameters' names: one the engine reached and the window lacked would
-    fail only then (c's now reaches launch_for and continue_open, a sign-in other_accounts_note)."""
-    for name, asked in vars(engine.Front).items():
-        if name.startswith("_") or not callable(asked):
-            continue
-        mine = getattr(front.WindowFront, name, None)
-        assert callable(mine), name
-        assert list(inspect.signature(mine).parameters) == list(inspect.signature(asked).parameters), name
+    """Every engine.Front method, with its parameters' names, and every one the team keys ask of a dashboard
+    (teamkeys.Surface, Dashboard), taking what they pass (more only with a default): one reached that the window
+    lacked would fail only then (c's now reaches launch_for and continue_open, a sign-in other_accounts_note,
+    Join show_team)."""
+    for protocol in (engine.Front, teamkeys.Surface, teamkeys.Dashboard):
+        for name, asked in vars(protocol).items():
+            if name.startswith("_") or not callable(asked):
+                continue
+            mine = getattr(front.WindowFront, name, None)
+            assert callable(mine), name
+            names = list(inspect.signature(asked).parameters)
+            params = list(inspect.signature(mine).parameters.values())
+            if protocol is engine.Front:
+                assert [p.name for p in params] == names, name
+            assert [p.name for p in params[:len(names)]] == names, name
+            assert all(p.default is not p.empty for p in params[len(names):]), name
     assert isinstance(front.WindowFront.default_cap, property)
 
 
