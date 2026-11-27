@@ -792,6 +792,27 @@ def test_pythons_cycle_collector_runs_on_the_gui_thread_only_while_a_window_is_u
     assert gc.isenabled() and not held.timer.isActive()  # the last window gone: as it was
 
 
+def test_the_collector_keeps_gcs_own_schedule_counted_by_itself_on_any_python(qapp, monkeypatch):
+    """Only the youngest generation's count and threshold are read (3.14's incremental collector counts no older
+    one: (2000, 10, 0), its last count 0, so going by them would never collect all while a window is up): every
+    MIDDLE_EVERY-th collection of it takes the middle one too, every FULL_EVERY-th all of it."""
+    owner = QObject()  # never the application's: collector() finds that one
+    held = frame.Collector(owner)
+    collected = []
+    counts = [(5, 0, 0)]
+    monkeypatch.setattr(frame.gc, "collect", lambda generation=2: collected.append(generation) or 0)
+    monkeypatch.setattr(frame.gc, "get_count", lambda: counts[0])
+    monkeypatch.setattr(frame.gc, "get_threshold", lambda: (5, 10, 0))  # 3.14's shape
+    held.check()
+    assert collected == []  # not past the threshold yet
+    counts[0] = (6, 0, 0)
+    for _ in range(frame.FULL_EVERY):
+        held.check()
+    assert collected.count(0) == frame.FULL_EVERY
+    assert collected.count(1) == frame.FULL_EVERY // frame.MIDDLE_EVERY - 1 and collected.count(2) == 1
+    assert collected[:frame.MIDDLE_EVERY + 1] == [0] * frame.MIDDLE_EVERY + [1] and collected[-1] == 2
+
+
 def test_the_readers_threads_hold_the_store_and_the_relay_never_the_window(qapp, window, monkeypatch):
     """A thread holding the window (its bound method) could drop the last reference to it there, off the GUI
     thread; the relay is the window's own, on its thread."""

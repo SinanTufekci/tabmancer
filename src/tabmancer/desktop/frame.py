@@ -36,6 +36,11 @@ LAYOUT_FILE = "desktop.json"
 LAYOUT_VERSION = 1
 DEMO_ENV = ("CLAUDE_CONFIG_DIR", "TABMANCER_CONFIG_DIR", "CODEX_HOME")  # what demo.prepare points elsewhere
 COLLECT_MS = 1000  # how often the GUI thread looks whether Python's cycle collector is due, while a window is up
+# Of the youngest generation's collections, every MIDDLE_EVERY-th takes the middle one too and every FULL_EVERY-th
+# all of it: gc's own default schedule (thresholds 10 and 10), counted here, since 3.14's incremental collector
+# counts no older generation (its get_threshold is (2000, 10, 0) and get_count's last stays 0).
+MIDDLE_EVERY = 10
+FULL_EVERY = 100
 
 
 class Collector(QObject):
@@ -43,14 +48,16 @@ class Collector(QObject):
     thread allocates past its threshold (the store's reader, most often), and a cycle holding a Qt object (a
     window or a dialog gone) is then freed there, off the thread Qt objects belong to: an access violation
     (Windows CI, 2026-11-26). So from the first window to the last automatic collection is off, and a timer
-    here collects a generation at a time as the thresholds say (pyqtgraph's GarbageCollector); the last window
-    gone (closed, or deleted unclosed), all is collected here and it is as it was."""
+    here collects the youngest generation once it is past its threshold (pyqtgraph's GarbageCollector), the
+    older ones as often as gc would (MIDDLE_EVERY, FULL_EVERY); the last window gone (closed, or deleted
+    unclosed), all is collected here and it is as it was."""
 
     def __init__(self, app: QObject) -> None:
         super().__init__(app)
         self.held: set[int] = set()  # the windows up, by the number each was given
         self.made = 0
         self.was_on = True
+        self.young = 0  # the youngest generation's collections here
         self.timer = QTimer(self)
         self.timer.setInterval(COLLECT_MS)
         self.timer.timeout.connect(self.check)
@@ -79,15 +86,17 @@ class Collector(QObject):
                 gc.enable()
 
     def check(self) -> None:
-        """A generation collected where it is past its threshold, the older ones only when they are too."""
-        young, middle, old = gc.get_count()
-        first, second, third = gc.get_threshold()
-        if young > first:
-            gc.collect(0)
-            if middle > second:
-                gc.collect(1)
-                if old > third:
-                    gc.collect(2)
+        """The youngest generation collected once it is past its threshold; with it, every MIDDLE_EVERY-th time
+        the middle one (3.14: an increment of the old one), every FULL_EVERY-th time all. Only the youngest
+        generation's count and threshold are read: they mean the same on every Python, the others do not."""
+        if gc.get_count()[0] <= gc.get_threshold()[0]:
+            return
+        gc.collect(0)
+        self.young += 1
+        if self.young % FULL_EVERY == 0:
+            gc.collect()
+        elif self.young % MIDDLE_EVERY == 0:
+            gc.collect(1)
 
 
 def collector() -> Collector:
