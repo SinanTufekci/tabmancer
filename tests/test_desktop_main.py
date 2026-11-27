@@ -34,6 +34,7 @@ from tabmancer import (
     cli,
     commands,
     demo,
+    diskclean,
     focus,
     launch,
     marks,
@@ -61,6 +62,7 @@ from tabmancer.desktop import (
     teamgraph,
     teampanel,
 )
+from tabmancer.desktop.cleanup import CleanupDialog
 from tabmancer.desktop.table import COLUMN, PARTS
 from tabmancer.desktop.teamkeysdialogs import AddMembersDialog
 from tabmancer.keys import KEYS
@@ -384,6 +386,38 @@ def test_views_says_how_much_moves(qapp, window):
     assert picks["off"].isChecked() and not picks["full"].isChecked() and shown.table.motion == "off"
     picks["full"].trigger()
     assert graph.mode == "full" and shown.table.motion == "full"
+
+
+def test_free_disk_space_in_settings_opens_the_clean_up_and_what_moved_reads_the_sessions_again(
+        qapp, window, monkeypatch):
+    """tabmancer cleanup in the window: a Settings entry, not a key. Nothing reaches the Recycle Bin."""
+    moved = []
+    monkeypatch.setattr(diskclean, "_trash_one", lambda path: moved.append(path))
+    monkeypatch.setattr(diskclean, "collect", list)  # no sessions on this disk
+    shown = window()
+    polled = []
+    monkeypatch.setattr(shown, "poll", lambda: polled.append(True))
+    (entry,) = [a for a in shown.menus_by_group["Settings and the rest"].actions() if a.text() == main.CLEAN_UP]
+    assert entry.isEnabled() and entry.toolTip() == main.CLEAN_UP_TIP and diskclean.BIN in entry.toolTip()
+    assert entry.data() is None  # no key of the dashboard's
+    entry.trigger()
+    (listed,) = [d for d in shown.findChildren(CleanupDialog) if d.isVisible()]
+    assert listed.windowModality() == Qt.WindowModality.WindowModal
+    listed.disk.settle()
+    wait(qapp, lambda: not listed.busy)
+    assert polled == []
+    listed.changed.emit()  # some moved
+    assert polled == [True] and moved == []
+    listed.reject()
+    demo_one = main.MainWindow(start=False, demo=True)
+    try:
+        (entry,) = [a for a in demo_one.menus_by_group["Settings and the rest"].actions()
+                    if a.text() == main.CLEAN_UP]
+        assert not entry.isEnabled() and entry.toolTip() == main.CLEAN_UP_DEMO
+    finally:
+        demo_one.settle()
+        demo_one.close()
+        demo_one.deleteLater()
 
 
 def every_key(keys) -> list[tuple[str, str]]:

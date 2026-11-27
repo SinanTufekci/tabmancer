@@ -90,6 +90,7 @@ from .. import (
     bitart,
     clis,
     commands,
+    diskclean,
     engine,
     handoverwords,
     limitwords,
@@ -114,6 +115,7 @@ from ..teamforms import JoinTeam, TellTeam
 from . import commandbar, frame, limit, look, monitor, newsession, newteam, teamgraph, teamkeysdialogs
 from .backgrounds import OPEN, BackgroundDialog, Jobs
 from .board import Board
+from .cleanup import CleanupDialog
 from .clisettings import CliSettingsDialog
 from .closing import CloseDialog
 from .drawer import BUTTONS, ROOM, Drawer
@@ -174,6 +176,10 @@ HANDOVER_ARMED = ("{names}: set to continue at the reset in the dashboard that a
 ACTS_HERE = "This window acts: it continues sessions at their reset, sends the desktop notes and runs the updates."
 ACTS_THERE = "Another tabmancer dashboard acts: this window watches."
 NONE_ACTS = "No dashboard acts now: this window takes over in a few seconds."
+# Settings ▸ Free disk space: `tabmancer cleanup` in the window (a command of its own, not a dashboard key)
+CLEAN_UP = "Free disk space…"
+CLEAN_UP_TIP = f"Old sessions to the {diskclean.BIN}, biggest first, as tabmancer cleanup does"
+CLEAN_UP_DEMO = "Not in the demo: its sessions are made up"
 NAMELESS_REST = "This window only watches: it could not read its own start time (another tabmancer dashboard can act)."
 # The terminal dashboard's NAMELESS (app.py), the window's words: one that cannot read its own start time never
 # takes the lock (actor.claim), since the others could not tell it still runs.
@@ -638,6 +644,14 @@ class MainWindow(QMainWindow):
         views.addSeparator()
         self.motion = teamgraph.MotionMenu(self, views.addMenu("Reduce motion"))
         self.motion.changed.connect(self.motion_changed)
+        settings = self.menus_by_group["Settings and the rest"]
+        settings.addSeparator()
+        cleaning = QAction(CLEAN_UP, self)
+        cleaning.setToolTip(CLEAN_UP_DEMO if self.demo else CLEAN_UP_TIP)
+        cleaning.setStatusTip(cleaning.toolTip())
+        cleaning.setEnabled(not self.demo)  # it reads and moves what is on the disk
+        cleaning.triggered.connect(self.clean_up)
+        settings.addAction(cleaning)
         panels = bar.addMenu("&Panels")
         for dock in self.docks.values():
             panels.addAction(dock.toggleViewAction())
@@ -1798,6 +1812,13 @@ class MainWindow(QMainWindow):
         asked = CliSettingsDialog(self, self.accent)
         asked.saved.connect(self.settings_saved)
         asked.open()
+
+    def clean_up(self) -> None:
+        """Settings ▸ Free disk space: the sessions on disk, the picked ones moved to the Recycle Bin
+        (CleanupDialog), as `tabmancer cleanup` does; the sessions read again once some moved."""
+        listed = CleanupDialog(self, self.accent)
+        listed.changed.connect(self.poll)
+        listed.open()
 
     def settings_saved(self, saved: clis.Saved) -> None:
         """Saved: other CLIs listed now are said, and the list is read again with them (the terminal
