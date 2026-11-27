@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__, agy, bitart, commands, focus, teams, teamwords
+from .. import __version__, agy, bitart, commands, engine, errorlog, focus, teams, teamwords
 from ..commands import short
 from ..keys import MONITOR_KEYS
 from ..sessions import Exit, Status
@@ -62,6 +62,7 @@ from .widgets import (
 
 POLL_MS = 2000  # as often as the terminal monitor reads its team
 SAID_MS = 7000  # how long Bit says what just happened before it says how the team stands again
+ACTOR_MS = engine.ACTOR_SECONDS * 1000  # whether any dashboard acts, looked at as often as the terminal monitor did
 CARD_WIDTH = 340  # a card's least width: as many columns as fit
 # The monitor's keys that work here (MONITOR_KEYS names them all); the rest are the terminal monitor's.
 HERE = {"← →", "Enter", "j", "Esc", "T", "?", "q"}
@@ -100,6 +101,7 @@ class Relay(QObject):
 
     polled = Signal(object, object, object, str)  # the store asked, its Snapshot (None: no such team), agy's bar, an error
     said = Signal(str, str)  # words, colour
+    alone = Signal(bool)  # a look at the actor lock: no dashboard acts
 
 
 def read_team(store: TeamStore, relay: Relay) -> None:
@@ -112,6 +114,21 @@ def read_team(store: TeamStore, relay: Relay) -> None:
         snap, bar, error = None, {}, f"{type(caught).__name__}: {caught}"
     try:
         relay.polled.emit(store, snap, bar, error)
+    except RuntimeError:
+        pass  # the window has gone meanwhile
+
+
+def look_alone(relay: Relay) -> None:
+    """Whether any dashboard acts, looked at on a thread of its own (engine.look as a monitor: reading another
+    process can take a moment, `ps` on macOS), sent back by the relay; as read_team, it holds the relay, never
+    the window. A look that fails is logged (errors.log) and the next tick looks again."""
+    try:
+        alone = engine.look(True, False).alone
+    except Exception as error:  # noqa: BLE001 - looked at again at the next tick
+        errorlog.log_error("desktop.monitor.look_alone", error)
+        return
+    try:
+        relay.alone.emit(alone)
     except RuntimeError:
         pass  # the window has gone meanwhile
 
@@ -167,6 +184,8 @@ class MonitorWindow(QMainWindow):
         self.needs_turn = -1
         self.waiting = False
         self.reader: threading.Thread | None = None
+        self.looker: threading.Thread | None = None  # a look at the actor lock under way (tick_actor)
+        self.told_alone = False  # said that no dashboard acts, till one does again (Engine.seen's told_alone)
         self.accent = look.accent()
         self.colours: dict[str, str] = {}
         self.cards: dict[str, MemberCard] = {}
@@ -177,6 +196,7 @@ class MonitorWindow(QMainWindow):
         self.relay = Relay(self)  # the window's, on its thread: never freed with a cycle on a reader's
         self.relay.polled.connect(self.take)
         self.relay.said.connect(self.say)
+        self.relay.alone.connect(self.seen_alone)
         self.said_timer = QTimer(self)
         self.said_timer.setSingleShot(True)
         self.said_timer.timeout.connect(self.show_bit)
@@ -194,8 +214,11 @@ class MonitorWindow(QMainWindow):
         self.name_window()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
+        self.actor_timer = QTimer(self)  # as the terminal monitor's tick_actor: the first look after ACTOR_MS
+        self.actor_timer.timeout.connect(self.tick_actor)
         if start:
             self.timer.start(poll_ms)
+            self.actor_timer.start(ACTOR_MS)
             self.poll()
 
     # --- building ---------------------------------------------------------------------------------
@@ -368,9 +391,29 @@ class MonitorWindow(QMainWindow):
         self.reader.start()
 
     def settle(self, seconds: float = 10) -> None:
-        """Wait for a read under way (on closing, and in tests before what it reads goes)."""
-        if self.reader is not None:
-            self.reader.join(seconds)
+        """Wait for a read under way, and a look at the actor lock (on closing, and in tests before what it
+        reads goes)."""
+        for thread in (self.reader, self.looker):
+            if thread is not None:
+                thread.join(seconds)
+
+    def tick_actor(self) -> None:
+        """Every ACTOR_MS: whether any dashboard acts at all, on a thread of its own, one look at a time. A
+        monitor never acts: with no dashboard open, nothing continues sessions or brings desktop notes, and
+        Bit says so (seen_alone)."""
+        if self.looker is not None and self.looker.is_alive():
+            return
+        self.looker = threading.Thread(target=look_alone, args=(self.relay,), daemon=True,
+                                       name="tabmancer-monitor-actor")
+        self.looker.start()
+
+    def seen_alone(self, alone: bool) -> None:
+        """What a look found: said once each time no dashboard is open (engine.ALONE, as Engine.seen says it in
+        a terminal monitor), for as long as the note is meant to stay; again only after one was open."""
+        if alone and not self.told_alone:
+            self.put_bit(engine.ALONE.words, look.AMBER)
+            self.said_timer.start(int((engine.ALONE.seconds or SAID_MS / 1000) * 1000))
+        self.told_alone = alone
 
     def take(self, store: TeamStore, snap: Snapshot | None, bar: dict, error: str) -> None:
         self.waiting = False
@@ -738,6 +781,7 @@ class MonitorWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self.door.close()
         self.timer.stop()
+        self.actor_timer.stop()
         self.said_timer.stop()
         frame.save_layout(self, "monitor")
         super().closeEvent(event)
@@ -794,6 +838,7 @@ def run(team: str, demo: bool = False) -> int:
         finally:
             if window is not None:
                 window.timer.stop()
+                window.actor_timer.stop()
                 window.settle()
                 window.deleteLater()  # gone here, on the GUI thread: never freed by a collection on another one
                 QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
