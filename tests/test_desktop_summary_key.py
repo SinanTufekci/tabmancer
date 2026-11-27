@@ -9,6 +9,7 @@ Skipped without the desktop extra (pip install "tabmancer[desktop]")."""
 import importlib
 import os
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import replace
 from types import SimpleNamespace
@@ -239,6 +240,23 @@ def test_s_with_the_team_panel_beside_the_sessions_summarizes_the_card_picked(qa
     shown.board.pick = None  # nothing picked: the panel's team, as a and g take it
     press_s(qapp, shown)
     assert started == [SHOP]
+
+
+def test_settle_waits_for_the_summaries_together_never_one_timeout_after_another(qapp, window):
+    """Closing waits for summaries still being written, `seconds` in all: three stuck ones, one wait."""
+    shown = window()
+    gate = threading.Event()
+    stuck = [threading.Thread(target=gate.wait, daemon=True) for _ in range(3)]
+    for thread in stuck:
+        thread.start()
+    shown.summarizer.workers.extend(stuck)
+    began = time.monotonic()
+    shown.settle(0.5)
+    took = time.monotonic() - began
+    gate.set()
+    assert 0.45 <= took < 1.0  # one after another: 1.5 s
+    for thread in stuck:
+        thread.join(5)
 
 
 def test_s_with_nothing_picked_says_what_it_does(qapp, window, model):

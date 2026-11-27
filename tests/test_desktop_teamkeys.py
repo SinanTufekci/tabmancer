@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QApplication
 from test_desktop_front import busy_one, read, taking
 from test_desktop_handover import until
 
-from tabmancer import claudeupdate, config, demo, launch, marks, shutdowns, teams
+from tabmancer import claudeupdate, config, demo, launch, marks, shutdowns, teamkeys, teams
 from tabmancer import viewmodel as VM
 from tabmancer.desktop import frame, main
 from tabmancer.desktop.handover import HandoverDialog
@@ -250,16 +250,36 @@ def test_the_team_panel_over_the_sessions_is_at_hand_not_the_card_behind_it(qapp
     assert marks.Marks.load().hidden == {closed.session_id}
 
 
-def test_h_on_a_team_gone_meanwhile_does_nothing_as_before(qapp, window, monkeypatch):
+def test_h_on_a_team_gone_meanwhile_hands_nothing_over_and_says_it_is_gone(qapp, window, monkeypatch):
     shown = window()
     asked = []
     monkeypatch.setattr(shown.engine, "handover", lambda session, how=None: asked.append(session))
     monkeypatch.setattr(shown.engine, "team_handover", lambda team, members: asked.append(team))
     assert shown.board.reveal(VM.TEAM_CARD + SHOP)
     del shown.snap.team_states[SHOP]  # gone meanwhile: its card not yet taken away by the next reading
-    shown.say("left alone", 30)
     press(qapp, shown, "h")
-    assert asked == [] and shown.bit_line.text() == "left alone"  # not "pick one": a card is picked
+    assert asked == [] and said(shown) == "There is no team shop any more."  # not "pick one": a card is picked
+
+
+def test_x_on_a_team_with_none_open_hides_it_from_its_card_never_from_the_team_panel(qapp, window):
+    """The terminal's team view: x closes the open members' tabs, and with none open says so; the team's
+    closed sessions stay in sight. On the team's card (the dashboard's row) x hides them, as the terminal's."""
+    shown = window()
+    shop = shown.snap.team_states[SHOP]
+    closed = {name: replace(s, session_id=f"closed-{name}", exit=Exit.CLEAN)  # none open: closed copies
+              for name, s in shop.sessions.items() if s is not None}
+    shown.snap.team_states[SHOP] = replace(shop, sessions=closed)
+    assert shown.board.reveal(VM.TEAM_CARD + SHOP)  # its card picked behind the panel
+    on_the_team_panel(qapp, shown, None)
+    assert shown.team_panel_over_sessions() and not VM.members_open(shown.team_at_hand(), shown.snap.sessions)
+    press(qapp, shown, "x")
+    press(qapp, shown, "x")
+    assert said(shown) == teamkeys.NOBODY_OPEN and not marks.Marks.load().hidden
+    shown.docks["Sessions"].raise_()  # the sessions in front: x on its card hides its closed members
+    qapp.processEvents()
+    assert not shown.team_panel_over_sessions() and shown.picked_team() == SHOP
+    press(qapp, shown, "x")
+    assert marks.Marks.load().hidden == {s.session_id for s in closed.values()}
 
 
 def test_the_team_panel_beside_the_sessions_leaves_what_is_picked_there_at_hand(qapp, window, monkeypatch):

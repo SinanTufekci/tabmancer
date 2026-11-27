@@ -180,6 +180,7 @@ VIEW_TIPS = {"board": "The sessions as cards, by what they want from you",
              "table": "The sessions as the terminal dashboard lists them, its teams under their rows",
              "live": "Only the open sessions and what each is doing (l)"}
 FILTER_WORDS = "Find by project, title or anything said  ( / )"
+TEAM_GONE = "There is no team {team} any more."  # a team key on a team gone meanwhile (teamkeys' words for Join)
 
 
 def parts_html(parts: list[tuple[str, str]]) -> str:
@@ -587,8 +588,9 @@ class MainWindow(QMainWindow):
         self.signin.settle(seconds)
         self.asker.settle(seconds)
         self.front.settle(seconds)
-        for thread in list(self.summarizer.workers):  # s's summaries: written into the config folder
-            thread.join(seconds)
+        deadline = time.monotonic() + seconds  # s's summaries, written into the config folder: all in seconds
+        for thread in list(self.summarizer.workers):
+            thread.join(max(0.0, deadline - time.monotonic()))
         for shown in self.monitors.values():
             shown.settle(seconds)  # a read of its own (Python's: there after the window is deleted too)
 
@@ -1059,7 +1061,9 @@ class MainWindow(QMainWindow):
 
     def hide(self) -> None:
         """x: the ticked sessions, or the picked one (a closed team's members), out of sight; one hidden
-        already (listed with X), back in sight. With the keys on the rail, its project."""
+        already (listed with X), back in sight. With the keys on the rail, its project. With the Team panel
+        over the sessions, the terminal's team view's x: its open members' tabs closed (x twice), never its
+        sessions hidden (none open: said so)."""
         snap = self.snap
         if snap is None:
             return
@@ -1067,7 +1071,7 @@ class MainWindow(QMainWindow):
             self.hide_project()
             return
         state = self.team_at_hand(panel_else=False) if not self.selected else None
-        if state is not None and VM.members_open(state, snap.sessions):
+        if state is not None and (self.team_panel_over_sessions() or VM.members_open(state, snap.sessions)):
             self.close_team(state)
             return
         if state is not None:
@@ -1502,8 +1506,10 @@ class MainWindow(QMainWindow):
         if state is not None:
             self.engine.team_handover(state.team, self.members_now(state))
             return
-        if self.picked_team() is not None and not self.team_panel_over_sessions():
-            return  # a team gone meanwhile
+        gone = self.picked_team()
+        if gone is not None and not self.team_panel_over_sessions():
+            self.say_note(TEAM_GONE.format(team=gone), 6, "warning")  # its card not yet taken away by a reading
+            return
         session = None if self.team_panel_over_sessions() else snap.sessions.get(self.picked_now())
         if session is None:
             self.say("h hands a session over to a fresh one: pick one.")
