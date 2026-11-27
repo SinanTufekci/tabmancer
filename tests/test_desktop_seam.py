@@ -32,7 +32,7 @@ from tabmancer import viewmodel as VM
 from tabmancer.app import SessionPicker
 from tabmancer.desktop import frame, look, main, monitor
 from tabmancer.desktop.table import PARTS
-from tabmancer.rowwords import COLUMNS, HEADING, STAR
+from tabmancer.rowwords import COLUMNS, HEADING, STAR, title_room
 
 look.fonts_for_offscreen()
 
@@ -40,6 +40,7 @@ TIMES = re.compile(r"\b\d+h\d{2}m\b|\b\d+[dhms]\b")  # "3m" then "4m": the two r
 TURNING = re.compile(f"[{re.escape(STAR)}]")  # a member at work's star, in the frame of the moment it was drawn
 WAIT_SECONDS = 60.0  # the bound on each wait below, reached only when something is wrong: a wait ends as
 # soon as its condition holds, however late the terminal's poll threads land with other suites running beside
+WIDENINGS = 20  # the window resized toward the terminal's cells at most this often (the panels beside take a share)
 
 
 @pytest.fixture(scope="module")
@@ -84,6 +85,22 @@ def side_by_side(qapp, tmp_path, monkeypatch):
 
 def active(shown) -> bool:
     return QTest.qWaitForWindowActive(shown, int(WAIT_SECONDS * 1000))
+
+
+def as_wide_as(qapp, shown, table, cells: int) -> None:
+    """The window's table as many of the terminal's cells wide as its list (the same rowwords.title_room):
+    a runner's monospace font measures its own, so the window is sized by cells, not pixels (a team's
+    members are cut to the room there is: '! tes…  +2' where the terminal names all four)."""
+    want = title_room(cells, False)
+    for _ in range(WIDENINGS):
+        qapp.processEvents()
+        if (table.width_now, table.model_shown) == want:
+            return
+        space = table.cells.metrics.horizontalAdvance(" ")
+        have = int(table.viewport().width() // space)
+        shown.resize(shown.width() + (cells - have) * space, shown.height())
+    raise AssertionError(f"the window's table never had the terminal's room {want}: "
+                         f"{(table.width_now, table.model_shown)}")
 
 
 def read(qapp, shown, seconds: float = WAIT_SECONDS) -> None:
@@ -218,11 +235,12 @@ async def test_the_windows_table_lists_the_terminals_rows_row_for_row(qapp, side
     async with app.run_test(size=(280, 50)) as pilot:  # room for the Model column beside the sidebar and preview
         await wait_until(pilot, lambda: len(app.sessions) >= len(demo.SESSIONS), "the terminal's first rows",
                          WAIT_SECONDS)
-        shown = window(1700)  # its Model column too, whatever a runner's monospace font measures
+        shown = window(1700)
         read(qapp, shown)
         assert shown.selected == app.selected == app.preselected != set()  # open at the made-up shutdown: ticked
         shown.set_view("table")
         table = shown.table
+        as_wide_as(qapp, shown, table, app.table.size.width)  # its Model column too, whatever the font measures
         await rows_agree(pilot, qapp, app, table)
         assert any(key.startswith(HEADING) for key in table.keys) and app.model_shown and table.model_shown
         team = next(iter(shown.snap.team_states))

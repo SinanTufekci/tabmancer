@@ -20,7 +20,7 @@ import threading
 from collections.abc import Callable
 from datetime import datetime
 
-from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
@@ -102,6 +102,20 @@ class Relay(QObject):
     said = Signal(str, str)  # words, colour
 
 
+def read_team(store: TeamStore, relay: Relay) -> None:
+    """A reading of the team on a thread of its own, sent back by the relay. It holds the store and the
+    relay, never the window: a window gone meanwhile is never let go of here, off the GUI thread."""
+    try:
+        snap, error = store.poll(), ""
+        bar = agy_bar() if snap is not None and snap.agy_quota else {}
+    except Exception as caught:  # noqa: BLE001 - said in the window, tried again at the next poll
+        snap, bar, error = None, {}, f"{type(caught).__name__}: {caught}"
+    try:
+        relay.polled.emit(store, snap, bar, error)
+    except RuntimeError:
+        pass  # the window has gone meanwhile
+
+
 class CardsArea(QScrollArea):
     """The members' cards in a panel: says when it is resized, so they fill as many columns as fit."""
 
@@ -144,6 +158,7 @@ class MonitorWindow(QMainWindow):
     def __init__(self, team: str, *, store: Callable[[str], TeamStore] = TeamStore, poll_ms: int = POLL_MS,
                  start: bool = True) -> None:
         super().__init__()
+        self.collected = frame.collector().hold(self)  # Python's cycle collector on this thread while it is up
         self.make_store = store
         self.team = team
         self.store: TeamStore | None = store(team) if team else None
@@ -159,7 +174,7 @@ class MonitorWindow(QMainWindow):
         self.bar: dict = {}
         self.shown_pills: list = []
         self.ring_widgets: list[LimitRing] = []
-        self.relay = Relay()
+        self.relay = Relay(self)  # the window's, on its thread: never freed with a cycle on a reader's
         self.relay.polled.connect(self.take)
         self.relay.said.connect(self.say)
         self.said_timer = QTimer(self)
@@ -348,19 +363,9 @@ class MonitorWindow(QMainWindow):
         if self.waiting or self.store is None:
             return
         self.waiting = True
-        self.reader = threading.Thread(target=self.read, args=(self.store,), daemon=True, name="tabmancer-monitor")
+        self.reader = threading.Thread(target=read_team, args=(self.store, self.relay), daemon=True,
+                                       name="tabmancer-monitor")
         self.reader.start()
-
-    def read(self, store: TeamStore) -> None:
-        try:
-            snap, error = store.poll(), ""
-            bar = agy_bar() if snap is not None and snap.agy_quota else {}
-        except Exception as caught:  # noqa: BLE001 - said in the window, tried again at the next poll
-            snap, bar, error = None, {}, f"{type(caught).__name__}: {caught}"
-        try:
-            self.relay.polled.emit(store, snap, bar, error)
-        except RuntimeError:
-            pass  # the window has gone meanwhile
 
     def settle(self, seconds: float = 10) -> None:
         """Wait for a read under way (on closing, and in tests before what it reads goes)."""
@@ -735,6 +740,7 @@ class MonitorWindow(QMainWindow):
         self.said_timer.stop()
         frame.save_layout(self, "monitor")
         super().closeEvent(event)
+        self.collected()
 
 
 def door(team: str) -> str:
@@ -788,3 +794,5 @@ def run(team: str, demo: bool = False) -> int:
             if window is not None:
                 window.timer.stop()
                 window.settle()
+                window.deleteLater()  # gone here, on the GUI thread: never freed by a collection on another one
+                QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)

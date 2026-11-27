@@ -1,21 +1,32 @@
 """What the desktop windows share: one window a name (a door the same command knocks at instead of
-opening a second), the layout kept in desktop.json, the keys dialog, and the demo's made-up world."""
+opening a second), the layout kept in desktop.json, the keys dialog, the demo's made-up world, and Python's
+cycle collector kept on the GUI thread while a window is up (Collector)."""
 
 from __future__ import annotations
 
 import base64
 import contextlib
+import gc
 import hashlib
 import os
 import shutil
 import sys
 import tempfile
 from collections.abc import Callable, Generator
+from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QObject, Qt, QTimer
 from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QDialog, QDockWidget, QMainWindow, QTextBrowser, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDockWidget,
+    QMainWindow,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..config import config_dir, merge_json, read_json
 from . import look
@@ -24,6 +35,66 @@ KNOCK_MS = 500  # how long a second window waits for the first to answer
 LAYOUT_FILE = "desktop.json"
 LAYOUT_VERSION = 1
 DEMO_ENV = ("CLAUDE_CONFIG_DIR", "TABMANCER_CONFIG_DIR", "CODEX_HOME")  # what demo.prepare points elsewhere
+COLLECT_MS = 1000  # how often the GUI thread looks whether Python's cycle collector is due, while a window is up
+
+
+class Collector(QObject):
+    """Python's cycle collector, on the GUI thread only while a window is up. Left automatic, it runs on whichever
+    thread allocates past its threshold (the store's reader, most often), and a cycle holding a Qt object (a
+    window or a dialog gone) is then freed there, off the thread Qt objects belong to: an access violation
+    (Windows CI, 2026-11-26). So from the first window to the last automatic collection is off, and a timer
+    here collects a generation at a time as the thresholds say (pyqtgraph's GarbageCollector); the last window
+    gone (closed, or deleted unclosed), all is collected here and it is as it was."""
+
+    def __init__(self, app: QObject) -> None:
+        super().__init__(app)
+        self.held: set[int] = set()  # the windows up, by the number each was given
+        self.made = 0
+        self.was_on = True
+        self.timer = QTimer(self)
+        self.timer.setInterval(COLLECT_MS)
+        self.timer.timeout.connect(self.check)
+
+    def hold(self, window: QObject) -> Callable[[], None]:
+        """A window up: automatic collection off till the last one goes. What lets go of it, which its closing
+        calls; deleted unclosed, it lets go by itself."""
+        self.made += 1
+        if not self.held:
+            self.was_on = gc.isenabled()
+            gc.disable()
+            self.timer.start()
+        self.held.add(self.made)
+        done = partial(self.let_go, self.made)
+        window.destroyed.connect(done)
+        return done
+
+    def let_go(self, key: int, *_destroyed: object) -> None:
+        if key not in self.held:
+            return
+        self.held.discard(key)
+        if not self.held:
+            self.timer.stop()
+            gc.collect()
+            if self.was_on:
+                gc.enable()
+
+    def check(self) -> None:
+        """A generation collected where it is past its threshold, the older ones only when they are too."""
+        young, middle, old = gc.get_count()
+        first, second, third = gc.get_threshold()
+        if young > first:
+            gc.collect(0)
+            if middle > second:
+                gc.collect(1)
+                if old > third:
+                    gc.collect(2)
+
+
+def collector() -> Collector:
+    """The application's Collector, made the first time a window asks."""
+    app = QApplication.instance()
+    found = app.findChild(Collector)
+    return found if found is not None else Collector(app)
 
 
 def door(kind: str, name: str = "") -> str:

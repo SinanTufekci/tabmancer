@@ -20,7 +20,8 @@ else:
     pytest.importorskip("PySide6", reason="the desktop extra is not installed")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+import shiboken6
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import QContextMenuEvent, QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDockWidget, QMenu
@@ -758,12 +759,58 @@ def test_a_closed_window_goes_with_its_last_name(qapp, world):
         shown.show()
         read(qapp, shown)
         shown.close()
+        assert not gc.isenabled()  # off before it came: left off (frame.Collector)
         shown.settle()
         gone = weakref.ref(shown)
         del shown
         assert gone() is None
     finally:
         gc.enable()
+
+
+def test_pythons_cycle_collector_runs_on_the_gui_thread_only_while_a_window_is_up(qapp, window):
+    """Left automatic, the collector runs on whichever thread allocates past its threshold (the store's
+    reader), and a cycle holding a Qt object freed there is an access violation (Windows CI). While a window
+    is up it is off, and collects on the GUI thread (frame.Collector); the last window closed, it is on again."""
+    shown = window()
+    held = frame.collector()
+    assert not gc.isenabled() and held.timer.isActive()
+    freed = []
+
+    class Cycle:
+        def __del__(self):
+            freed.append(threading.current_thread() is threading.main_thread())
+
+    one = Cycle()
+    one.me = one
+    del one
+    busy = [[] for _ in range(gc.get_threshold()[0] + 100)]  # past the youngest generation's threshold
+    wait(qapp, lambda: freed, seconds=10)
+    assert freed == [True] and busy
+    shown.settle()
+    shown.close()
+    assert gc.isenabled() and not held.timer.isActive()  # the last window gone: as it was
+
+
+def test_the_readers_threads_hold_the_store_and_the_relay_never_the_window(qapp, window, monkeypatch):
+    """A thread holding the window (its bound method) could drop the last reference to it there, off the GUI
+    thread; the relay is the window's own, on its thread."""
+    shown = window()
+    started = []
+    real = threading.Thread
+
+    def kept(*args, **kwargs):
+        if kwargs.get("name") in {"tabmancer-main", "tabmancer-search"}:  # its readers, not the pools they use
+            started.append((kwargs.get("target"), kwargs.get("args", ())))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(main.threading, "Thread", kept)
+    read(qapp, shown)
+    shown.index_words()
+    wait(qapp, lambda: not shown.indexing)
+    assert [target for target, _ in started] == [main.read_store, main.read_words]
+    assert [one for _, args in started for one in args if isinstance(one, QObject)] == [shown.relay, shown.relay]
+    assert shown.relay.parent() is shown
 
 
 def test_a_broken_layout_file_is_left_alone(qapp, window):
@@ -1368,13 +1415,15 @@ def test_a_second_open_brings_the_first_forward(qapp, window, monkeypatch):
 
 
 def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch):
-    """The seam: `tabmancer desktop` to a window that reads the sessions, then closes."""
-    seen = []
+    """The seam: `tabmancer desktop` to a window that reads the sessions, then closes, and is deleted on the
+    GUI thread (never left for the cycle collector to free on another one)."""
+    seen, shown = [], []
 
     def look_then_quit():
         windows = [w for w in qapp.topLevelWidgets() if isinstance(w, main.MainWindow) and w.isVisible()]
         if windows and windows[0].snap is not None:
             seen.append(len(windows[0].snap.sessions))
+            shown.append(windows[0])
             qapp.quit()
         else:
             QTimer.singleShot(100, look_then_quit)
@@ -1386,6 +1435,7 @@ def test_cli_opens_the_window_till_it_closes(qapp, world, monkeypatch):
     assert out.value.code == 0
     assert seen and seen[0] >= len(demo.SESSIONS)
     assert "main" in read_json(frame.LAYOUT_FILE)  # closed as a window closes
+    assert not shiboken6.isValid(shown[0]) and gc.isenabled()
 
 
 def test_the_demo_puts_the_world_back(qapp, monkeypatch):
@@ -1393,7 +1443,7 @@ def test_the_demo_puts_the_world_back(qapp, monkeypatch):
     and --all given reach the window's store and its info line."""
     before = {name: os.environ.get(name) for name in frame.DEMO_ENV}
     agents = sessions._agents_json
-    seen = []
+    seen, kept = [], []
 
     def look_then_quit():
         windows = [w for w in qapp.topLevelWidgets() if isinstance(w, main.MainWindow) and w.isVisible()]
@@ -1401,6 +1451,7 @@ def test_the_demo_puts_the_world_back(qapp, monkeypatch):
             shown = windows[0]
             seen.append((shown.brand.text(), len(shown.snap.sessions), shown.store.days, shown.store.include_all,
                          shown.info.text()))
+            kept.append(shown)
             qapp.quit()
         else:
             QTimer.singleShot(100, look_then_quit)
@@ -1412,3 +1463,4 @@ def test_the_demo_puts_the_world_back(qapp, monkeypatch):
     assert seen[0][2:4] == (30, True) and "last 30 days" in seen[0][4]
     assert {name: os.environ.get(name) for name in frame.DEMO_ENV} == before
     assert sessions._agents_json is agents
+    assert not shiboken6.isValid(kept[0])  # deleted on the GUI thread as run ends

@@ -56,7 +56,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
@@ -199,6 +199,33 @@ def watching_store(days: float = DAYS, include_all: bool = False) -> DashboardSt
     return DashboardStore(days=days, include_all=include_all, ask_limits=True)
 
 
+def read_store(store: DashboardStore, relay: Relay) -> None:
+    """A reading of the store on a thread of its own, sent back by the relay. It holds the store and the
+    relay, never the window: a window gone meanwhile is never let go of here, off the GUI thread."""
+    try:
+        snap, error = store.poll(), ""
+        first = bool(snap.agy_bar) and clis.main_cli() == "agy"  # agy the main CLI: its chain before the limits
+    except Exception as caught:  # noqa: BLE001 - said in the window, tried again at the next poll
+        snap, first, error = None, False, f"{type(caught).__name__}: {caught}"
+    try:
+        relay.polled.emit(store, snap, first, error)
+    except RuntimeError:
+        pass  # the window has gone meanwhile
+
+
+def read_words(index: search.Index | None, sessions: list[Session], relay: Relay) -> None:
+    """What was said in each session, read on a thread of its own (as read_store: never the window)."""
+    try:
+        index = index if index is not None else search.Index.load()
+        more = index.update(sessions)
+    except Exception:  # noqa: BLE001 - the words are still found in titles and prompts
+        index, more = None, False
+    try:
+        relay.indexed.emit(index, more)
+    except RuntimeError:
+        pass  # the window has gone meanwhile
+
+
 class Relay(QObject):
     """Brings what the worker thread read back to the window's thread."""
 
@@ -233,6 +260,7 @@ class MainWindow(QMainWindow):
     def __init__(self, *, store: Callable[[], DashboardStore] = watching_store, poll_ms: int = POLL_MS,
                  start: bool = True, brand: str = "◆ tabmancer", demo: bool = False) -> None:
         super().__init__()
+        self.collected = frame.collector().hold(self)  # Python's cycle collector on this thread while it is up
         self.store = store()
         self.demo = demo  # over the made-up sessions: nothing opens, and Bit says what would have
         self.snap: DashSnapshot | None = None
@@ -241,7 +269,7 @@ class MainWindow(QMainWindow):
         self.reader: threading.Thread | None = None
         self.accent = look.accent()
         self.brand_words = brand
-        self.relay = Relay()
+        self.relay = Relay(self)  # the window's, on its thread: never freed with a cycle on a reader's
         self.relay.polled.connect(self.take)
         self.relay.indexed.connect(self.take_index)
         self.opener = Opener(self, update=not demo)  # Enter, j and m: what they keep, and their threads
@@ -544,19 +572,9 @@ class MainWindow(QMainWindow):
         if self.waiting:
             return
         self.waiting = True
-        self.reader = threading.Thread(target=self.read, args=(self.store,), daemon=True, name="tabmancer-main")
+        self.reader = threading.Thread(target=read_store, args=(self.store, self.relay), daemon=True,
+                                       name="tabmancer-main")
         self.reader.start()
-
-    def read(self, store: DashboardStore) -> None:
-        try:
-            snap, error = store.poll(), ""
-            first = bool(snap.agy_bar) and clis.main_cli() == "agy"  # agy the main CLI: its chain before the limits
-        except Exception as caught:  # noqa: BLE001 - said in the window, tried again at the next poll
-            snap, first, error = None, False, f"{type(caught).__name__}: {caught}"
-        try:
-            self.relay.polled.emit(store, snap, first, error)
-        except RuntimeError:
-            pass  # the window has gone meanwhile
 
     def settle(self, seconds: float = 10) -> None:
         """Wait for a read under way (on closing, and in tests before what it reads goes)."""
@@ -829,20 +847,9 @@ class MainWindow(QMainWindow):
         if self.indexing or self.snap is None:
             return
         self.indexing = True
-        self.indexer = threading.Thread(target=self.read_index, args=(self.index, list(self.snap.sessions.values())),
-                                        daemon=True, name="tabmancer-search")
+        self.indexer = threading.Thread(target=read_words, args=(self.index, list(self.snap.sessions.values()),
+                                                                 self.relay), daemon=True, name="tabmancer-search")
         self.indexer.start()
-
-    def read_index(self, index: search.Index | None, sessions: list[Session]) -> None:
-        try:
-            index = index if index is not None else search.Index.load()
-            more = index.update(sessions)
-        except Exception:  # noqa: BLE001 - the words are still found in titles and prompts
-            index, more = None, False
-        try:
-            self.relay.indexed.emit(index, more)
-        except RuntimeError:
-            pass  # the window has gone meanwhile
 
     def take_index(self, index: search.Index | None, more: bool) -> None:
         self.indexing = False
@@ -1800,6 +1807,7 @@ class MainWindow(QMainWindow):
             shown.deleteLater()
         frame.save_layout(self, LAYOUT_KEY)
         super().closeEvent(event)
+        self.collected()
 
     def ask_to_close(self) -> None:
         """The handovers queued here, by name: closed anyway (accepted), they are dropped; else nothing changes."""
@@ -1856,7 +1864,7 @@ def run(demo: bool = False, days: float = DAYS, include_all: bool = False) -> in
     `tabmancer --days N --all` (the last days; sessions started by tools too)."""
     look.fonts_for_offscreen()
     app = QApplication.instance() or QApplication(["tabmancer"])
-    told = Told()  # the demo's stand-ins say what would have happened, from any thread
+    told = Told(app)  # the demo's stand-ins say what would have happened, from any thread
     with made_up_world(demo, told.said.emit):
         window = None
         try:
@@ -1876,3 +1884,6 @@ def run(demo: bool = False, days: float = DAYS, include_all: bool = False) -> in
                 window.timer.stop()
                 window.ticker.stop()
                 window.settle()
+                window.deleteLater()  # gone here, on the GUI thread: never freed by a collection on another one
+            told.deleteLater()
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)

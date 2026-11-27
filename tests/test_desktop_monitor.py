@@ -18,6 +18,7 @@ else:
     pytest.importorskip("PySide6", reason="the desktop extra is not installed")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # no window on the screen, on any runner
 
+import shiboken6
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
 from PySide6.QtGui import QContextMenuEvent, QTextDocument
 from PySide6.QtTest import QTest
@@ -512,12 +513,13 @@ def test_the_demo_puts_the_world_back(qapp, monkeypatch, tmp_path):
     """`tabmancer desktop --monitor --demo`: the made-up team, and afterwards nothing of it left."""
     before = {name: os.environ.get(name) for name in monitor.DEMO_ENV}
     agents = sys.modules["tabmancer.sessions"]._agents_json
-    seen = []
+    seen, kept = [], []
 
     def look_then_quit():
         windows = [w for w in qapp.topLevelWidgets() if isinstance(w, monitor.MonitorWindow) and w.isVisible()]
         if windows and windows[0].snap is not None:
-            seen.append((windows[0].team, list(windows[0].cards)))
+            seen.append((windows[0].team, list(windows[0].cards), gc.isenabled()))
+            kept.append(windows[0])
             qapp.quit()
         else:
             QTimer.singleShot(100, look_then_quit)
@@ -525,6 +527,7 @@ def test_the_demo_puts_the_world_back(qapp, monkeypatch, tmp_path):
     QTimer.singleShot(100, look_then_quit)
     QTimer.singleShot(30_000, qapp.quit)
     assert monitor.run("", demo=True) == 0
-    assert seen == [("shop", ["lead", "api", "ui", "tests"])]
+    assert seen == [("shop", ["lead", "api", "ui", "tests"], False)]  # the cycle collector on its thread only
     assert {name: os.environ.get(name) for name in monitor.DEMO_ENV} == before
     assert sys.modules["tabmancer.sessions"]._agents_json is agents
+    assert not shiboken6.isValid(kept[0]) and gc.isenabled()  # deleted on the GUI thread as run ends
