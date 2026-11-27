@@ -65,7 +65,7 @@ def test_where_the_window_does_not_act_it_offers_no_lift_and_no_off():
     assert [w for w, _ in limitwords.ways("at 16:00", True, True, False, acts=False)] == ["now", "handover"]
     assert [w for w, _ in limitwords.ways("at 16:00", False, True, False, acts=False)] == ["now", "handover"]
     assert limitwords.ways("at 16:00", False, True, True) == limitwords.ways("at 16:00", False, True, True, acts=True)
-    assert "terminal dashboard" in limitwords.NOT_HERE
+    assert "dashboard that acts" in limitwords.NOT_HERE and "(tabmancer)" not in limitwords.NOT_HERE
 
 
 def test_the_first_way_and_a_way_with_nothing_ticked():

@@ -23,11 +23,11 @@ BIG_CONTEXT = 300_000  # tokens: going on with this much on another account cost
 
 TICK_FIRST = Note("Tick a session first (Space, after Tab).", seconds=4)
 KEY_PAIRS = [("Space", "tick"), ("Tab", "the sessions or the ways"), ("Enter", "choose"), ("Esc", "cancel")]
-# Where c's dialog does not act (the desktop window for now): why it offers no "when the limit lifts"
-NOT_HERE = ("Continuing when the limit lifts is set in the terminal dashboard (tabmancer): it continues "
-            "them by itself then. This window does not act yet.")
-# What "now" does with an open one: typed into its tab (the terminal dashboard), or, where the window does not
-# type into tabs (the desktop window for now), its prompt put on the clipboard to paste there
+# Where c's dialog does not act (a window while another dashboard acts): why it offers no "when the limit lifts"
+NOT_HERE = ("Continuing when the limit lifts is set in the dashboard that acts: it continues them by itself "
+            "then. This window only watches while another one acts.")
+# What "now" does with an open one: typed into its tab, or, where the window does not type into tabs (the
+# desktop window with front.TYPES_INTO_TABS off), its prompt put on the clipboard to paste there
 NOW_OPEN_TYPED = "  an open one gets the prompt in its tab, a closed one opens in a new tab"
 NOW_OPEN_CLIPBOARD = "  an open one's prompt goes on the clipboard to paste into its tab, a closed one opens in a new tab"
 
@@ -77,9 +77,10 @@ def ways(when: str, room: bool, armed: bool, away: bool, acts: bool = True,
     """(id, its words) for each way, continuing now first with room (another account, or the limit
     lifted), else when the limit lifts; 'off' only for the armed. away: some ran on another
     organisation, so the handover says that only a digest goes. acts: False where the dialog's window
-    never acts (the desktop window for now): no 'lift' or 'off', which only the dashboard that acts
-    carries out (NOT_HERE says so). types: False where the window does not type into tabs (the desktop
-    window for now): an open one's prompt goes on the clipboard (NOW_OPEN_CLIPBOARD)."""
+    does not act (a desktop window while another dashboard acts): no 'lift' or 'off', which only the
+    dashboard that acts carries out (NOT_HERE says so). types: False where the window does not type into
+    tabs (a desktop window with front.TYPES_INTO_TABS off): an open one's prompt goes on the clipboard
+    (NOW_OPEN_CLIPBOARD)."""
     now = ("now", [("Continue the ticked now", f"bold {TEXT}"),
                    ("  you signed in with another account, or the limit has lifted\n", MUTED),
                    (NOW_OPEN_TYPED if types else NOW_OPEN_CLIPBOARD, MUTED)])
